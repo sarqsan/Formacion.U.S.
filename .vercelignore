@@ -1,0 +1,17 @@
+# Ficheros que NO se suben al desplegar con Vercel CLI.
+# El CLI ya respeta .gitignore, pero esto evita que un descuido suba secretos.
+.env
+.env.*
+!.env.example
+*.pem
+serviceAccountKey*.json
+*-firebase-adminsdk-*.json
+backups/
+*.fbak
+node_modules/
+.next/
+coverage/
+*.tsbuildinfo
+firebase-debug.log*
+*-debug.log
+tmp/
