@@ -18,8 +18,18 @@ import {
   type CourseView,
   type DocumentView,
 } from "@/server/portal/learner";
-import { publishCourseVersion, updateDraftVersion, saveDraftVersion } from "@/server/courses/catalog";
-import { createCourse, type CourseEditorDependencies } from "@/server/courses/editor";
+import { publishCourseVersion } from "@/server/courses/catalog";
+import {
+  createCourse,
+  draftEditorView,
+  resolveEditorVersion,
+  saveDraftStructure,
+  startDraft,
+  type CourseEditorDependencies,
+  type DraftEditorView,
+  type DraftStructure,
+} from "@/server/courses/editor";
+import { definitionFromDocuments } from "@/server/courses/definition";
 import type { AttemptRecord, StoredProgress } from "@/server/learning/store";
 import { screensForDocument, type DemoScreen } from "@/demo/content";
 import {
@@ -453,13 +463,46 @@ export async function adminCreateCourse(
   return createCourse({ ...input, actor }, demoCourseEditorDeps());
 }
 
-export async function adminSaveDraft(actor: Actor, definition: CourseVersionDefinition) {
-  return saveDraftVersion({ actor, definition }, demoDeps());
+/** Abre (o reanuda) el borrador del curso: no publica nada. */
+export async function adminStartDraft(actor: Actor, courseId: string) {
+  return startDraft({ actor, courseId }, demoDeps());
 }
 
-export async function adminUpdateDraft(actor: Actor, definition: CourseVersionDefinition) {
-  return updateDraftVersion({ actor, definition }, demoDeps());
+/** Guarda la estructura del borrador (título, descripción y temas). */
+export async function adminSaveDraftStructure(
+  actor: Actor,
+  input: { courseId: string; version: number; expectedRevision: number; structure: DraftStructure },
+) {
+  return saveDraftStructure({ actor, ...input }, demoDeps());
 }
+
+/** Vista del editor de estructura, o `null` si el curso o la versión no existen. */
+export async function adminDraftEditor(
+  courseId: string,
+  version?: number,
+): Promise<DraftEditorView | null> {
+  const deps = demoDeps();
+  const course = await deps.catalog.getCourse(courseId);
+  if (!course) return null;
+
+  const versions = (await deps.catalog.listVersions(courseId)).map((item) => item.version);
+  const target = resolveEditorVersion(course, versions, version);
+  if (target === null) return null;
+
+  const document = await deps.catalog.getVersion(courseId, target);
+  if (!document) return null;
+
+  const keys = await deps.catalog.getAnswerKeys(courseId, target);
+  return draftEditorView({
+    course,
+    version: document,
+    definition: definitionFromDocuments(document, keys),
+  });
+}
+
+// Los servicios de escritura anteriores (`saveDraftVersion`, `updateDraftVersion`)
+// siguen existiendo para pruebas de contrato, pero la administración usa el
+// editor de estructura: una sola puerta, con revisión y puntero de borrador.
 
 export async function adminPublish(actor: Actor, courseId: string, version: number) {
   return publishCourseVersion({ actor, courseId, version }, demoDeps());

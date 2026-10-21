@@ -43,7 +43,9 @@ export interface DemoCourseRecord {
   summary: CourseSummary;
   versions: Map<
     number,
-    { version: CourseVersionDocument; keys: AnswerKeysDocument }
+    // `keys` puede ser null: un borrador creado vacío todavía no tiene
+    // cuestionarios y, por tanto, no hay claves que guardar.
+    { version: CourseVersionDocument; keys: AnswerKeysDocument | null }
   >;
 }
 
@@ -241,7 +243,8 @@ export function definitionOf(
     })),
     quiz: topic.quiz.map((question) => ({
       ...question,
-      correctOptionIds: keys.quizByTopic[topic.id]?.find((key) => key.id === question.id)?.correctOptionIds ?? [],
+      correctOptionIds:
+        keys?.quizByTopic[topic.id]?.find((key) => key.id === question.id)?.correctOptionIds ?? [],
     })),
   }));
 
@@ -253,7 +256,8 @@ export function definitionOf(
     topics,
     finalExam: publicVersion.finalExam.map((question) => ({
       ...question,
-      correctOptionIds: keys.finalExam.find((key) => key.id === question.id)?.correctOptionIds ?? [],
+      correctOptionIds:
+        keys?.finalExam.find((key) => key.id === question.id)?.correctOptionIds ?? [],
     })),
   };
 }
@@ -281,8 +285,15 @@ export function listVersionsOf(courseId: string): Array<CourseVersionSummary & {
 // ---------------------------------------------------------------------------
 
 export class DemoCatalogStore implements CourseCatalogStore {
+  /**
+   * Se devuelve una COPIA: el estado del demo es memoria compartida entre
+   * peticiones y quien lee no debe poder cambiarlo por referencia. Un puntero
+   * de borrador mutado «por accidente» desde una lectura sería un fallo
+   * invisible en producción.
+   */
   async getCourse(courseId: string): Promise<CourseSummary | null> {
-    return demoState().courses.get(courseId)?.summary ?? null;
+    const summary = demoState().courses.get(courseId)?.summary;
+    return summary ? { ...summary } : null;
   }
 
   async listVersions(courseId: string): Promise<CourseVersionSummary[]> {
@@ -290,11 +301,13 @@ export class DemoCatalogStore implements CourseCatalogStore {
   }
 
   async getVersion(courseId: string, version: number): Promise<CourseVersionDocument | null> {
-    return demoState().courses.get(courseId)?.versions.get(version)?.version ?? null;
+    const document = demoState().courses.get(courseId)?.versions.get(version)?.version;
+    return document ? structuredClone(document) : null;
   }
 
   async getAnswerKeys(courseId: string, version: number): Promise<AnswerKeysDocument | null> {
-    return demoState().courses.get(courseId)?.versions.get(version)?.keys ?? null;
+    const keys = demoState().courses.get(courseId)?.versions.get(version)?.keys;
+    return keys ? structuredClone(keys) : null;
   }
 
   async saveVersion(input: {
@@ -323,8 +336,8 @@ export class DemoCatalogStore implements CourseCatalogStore {
       lastDraftVersion: Math.max(record.summary.lastDraftVersion ?? 0, input.version.version),
     };
     record.versions.set(input.version.version, {
-      version: input.version,
-      keys: input.answerKeys,
+      version: structuredClone(input.version),
+      keys: structuredClone(input.answerKeys),
     });
     state.courses.set(record.summary.courseId, record);
   }
@@ -347,8 +360,8 @@ export class DemoCatalogStore implements CourseCatalogStore {
     }
 
     record.versions.set(input.version.version, {
-      version: { ...input.version, createdAt: current.version.createdAt },
-      keys: input.answerKeys,
+      version: { ...structuredClone(input.version), createdAt: current.version.createdAt },
+      keys: structuredClone(input.answerKeys),
     });
   }
 
@@ -390,6 +403,106 @@ export class DemoCatalogStore implements CourseCatalogStore {
     const document = await this.getVersion(courseId, version);
     return document?.topics.find((topic) => topic.id === topicId)?.documents ?? [];
   }
+
+  /**
+   * Creación del borrador en memoria.
+   *
+   * Aquí no hay transacciones ni concurrencia real (un solo proceso, estado
+   * síncrono), pero se respetan las MISMAS comprobaciones que la versión de
+   * Firestore: estado esperado de la ficha, adopción de un borrador existente y
+   * puntero actualizado junto con la versión.
+   */
+  async createDraftVersion(input: {
+    courseId: string;
+    versionDoc: CourseVersionDocument;
+    answerKeys: AnswerKeysDocument | null;
+    expected: { publishedVersion: number | null; lastDraftVersion: number | null };
+  }): Promise<{ adopted: boolean }> {
+    const state = demoState();
+    const record = state.courses.get(input.courseId);
+    if (!record) {
+      throw new DomainError("COURSE_NOT_FOUND", "El curso no existe.", 404);
+    }
+
+    if (
+      record.summary.publishedVersion !== input.expected.publishedVersion ||
+      record.summary.lastDraftVersion !== input.expected.lastDraftVersion
+    ) {
+      throw new DomainError("DRAFT_CONFLICT", "El curso cambió mientras se preparaba el borrador.", 409);
+    }
+
+    const existing = record.versions.get(input.versionDoc.version);
+    if (existing) {
+      if (existing.version.status !== "draft") {
+        throw new DomainError(
+          "VERSION_ALREADY_EXISTS",
+          "Esa versión ya existe y no es un borrador.",
+          409,
+        );
+      }
+      state.courses.set(input.courseId, {
+        ...record,
+        summary: { ...record.summary, lastDraftVersion: input.versionDoc.version },
+      });
+      return { adopted: true };
+    }
+
+    state.courses.set(input.courseId, {
+      summary: { ...record.summary, lastDraftVersion: input.versionDoc.version },
+      versions: new Map(record.versions).set(input.versionDoc.version, {
+        version: {
+          ...structuredClone(input.versionDoc),
+          revision: input.versionDoc.revision ?? 1,
+        },
+        keys: input.answerKeys ? structuredClone(input.answerKeys) : null,
+      }),
+    });
+    return { adopted: false };
+  }
+
+  /** Guardado de estructura con la misma comprobación de revisión. */
+  async replaceDraftContent(input: {
+    versionDoc: CourseVersionDocument;
+    expectedRevision: number;
+  }): Promise<void> {
+    const record = demoState().courses.get(input.versionDoc.courseId);
+    const current = record?.versions.get(input.versionDoc.version);
+    if (!record || !current) {
+      throw new DomainError("VERSION_NOT_FOUND", "El borrador no existe.", 404);
+    }
+    if (current.version.status !== "draft") {
+      throw new DomainError(
+        "VERSION_NOT_EDITABLE",
+        "Solo se puede editar un borrador. Una versión publicada no se modifica.",
+        409,
+      );
+    }
+
+    const revision = current.version.revision ?? 0;
+    if (revision !== input.expectedRevision) {
+      throw new DomainError(
+        "DRAFT_STALE",
+        "El borrador se ha modificado desde que abriste el editor. Recarga la página antes de guardar.",
+        409,
+      );
+    }
+
+    demoState().courses.set(input.versionDoc.courseId, {
+      summary: record.summary,
+      versions: new Map(record.versions).set(input.versionDoc.version, {
+        // Se conservan fecha y autoría originales; las claves no se tocan.
+        version: {
+          ...structuredClone(input.versionDoc),
+          revision: revision + 1,
+          createdAt: current.version.createdAt,
+          createdBy: current.version.createdBy,
+          publishedAt: null,
+          publishedBy: null,
+        },
+        keys: current.keys ? structuredClone(current.keys) : null,
+      }),
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -406,7 +519,8 @@ export class DemoCatalogStore implements CourseCatalogStore {
  */
 export class DemoCourseEditorStore implements CourseEditorStore {
   async getCourse(courseId: string): Promise<CourseSummary | null> {
-    return demoState().courses.get(courseId)?.summary ?? null;
+    const summary = demoState().courses.get(courseId)?.summary;
+    return summary ? { ...summary } : null;
   }
 
   async createCourse(
@@ -421,6 +535,8 @@ export class DemoCourseEditorStore implements CourseEditorStore {
       );
     }
 
+    // Nace sin versiones: `publishedVersion` y `lastDraftVersion` son nulos
+    // hasta que alguien abra el primer borrador.
     state.courses.set(summary.courseId, {
       summary: {
         courseId: summary.courseId,

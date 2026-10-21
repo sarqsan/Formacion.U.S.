@@ -35,13 +35,16 @@ export interface EmptyCourseDefinitionInput {
   courseId: string;
   title: string;
   description?: string;
+  /** Número de versión que tendrá el borrador; por defecto, la 1. */
+  version?: number;
 }
 
 /**
  * Definición inicial de un curso sin contenido.
  *
- * `version` vale 1 porque la primera versión que se guarde será la 1, pero
- * **no se persiste aquí**: crear el curso no crea ninguna versión.
+ * `version` vale 1 salvo que se indique otra (un curso que ya tuvo versiones
+ * empieza su borrador en la siguiente). **No se persiste aquí**: crear el curso
+ * no crea ninguna versión; guardar el borrador es otra operación.
  */
 export function emptyCourseDefinition(input: EmptyCourseDefinitionInput): CourseVersionDefinition {
   const courseId = input.courseId.trim();
@@ -59,10 +62,18 @@ export function emptyCourseDefinition(input: EmptyCourseDefinitionInput): Course
   }
 
   const description = input.description?.trim();
+  const version = input.version ?? 1;
+  if (!Number.isInteger(version) || version < 1) {
+    throw new DomainError(
+      "VERSION_INVALID",
+      "La versión debe ser un entero mayor o igual que 1.",
+      400,
+    );
+  }
 
   return {
     courseId,
-    version: 1,
+    version,
     title,
     ...(description ? { description } : {}),
     topics: [],

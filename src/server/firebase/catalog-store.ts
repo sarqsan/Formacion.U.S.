@@ -265,6 +265,161 @@ export class FirestoreCourseCatalogStore implements CourseCatalogStore {
     });
   }
 
+  /**
+   * Crea el borrador y fija el puntero del curso en la MISMA transacción.
+   *
+   * Transacción y no lote: hay que **leer** el estado de la ficha y decidir con
+   * él (¿cambió?, ¿existe ya la versión?). Un lote escribiría sin mirar y una
+   * carrera dejaría dos borradores o un puntero perdido.
+   *
+   * Coste: 2 lecturas y 2–3 escrituras de documentos pequeños (≤ 800 KiB el de
+   * contenido, ~KB el de claves), muy por debajo de los límites de Firestore
+   * (10 MiB por transacción; el tope de 500 escrituras ya no existe).
+   */
+  async createDraftVersion(input: {
+    courseId: string;
+    versionDoc: CourseVersionDocument;
+    answerKeys: AnswerKeysDocument | null;
+    expected: { publishedVersion: number | null; lastDraftVersion: number | null };
+  }): Promise<{ adopted: boolean }> {
+    throwIfLeaking(input.versionDoc);
+
+    return guard(async () => {
+      const db = getAdminDb();
+      const courseRef = db.collection(COLLECTIONS.courses).doc(input.courseId);
+      const versionRef = courseRef
+        .collection(COLLECTIONS.versions)
+        .doc(String(input.versionDoc.version));
+      const keysRef = db
+        .collection(COLLECTIONS.answerKeys)
+        .doc(answerKeysDocId(input.courseId, input.versionDoc.version, "final"));
+
+      return db.runTransaction(async (transaction) => {
+        const [courseDoc, versionDoc] = await Promise.all([
+          transaction.get(courseRef),
+          transaction.get(versionRef),
+        ]);
+
+        if (!courseDoc.exists) {
+          throw new DomainError("COURSE_NOT_FOUND", "El curso no existe.", 404);
+        }
+
+        const data = courseDoc.data() as {
+          publishedVersion?: number | null;
+          lastDraftVersion?: number | null;
+        };
+        const published = data.publishedVersion ?? null;
+        const draft = data.lastDraftVersion ?? null;
+
+        if (
+          published !== input.expected.publishedVersion ||
+          draft !== input.expected.lastDraftVersion
+        ) {
+          // Otra operación creó un borrador o publicó. No se escribe NADA: la
+          // persona que llama releerá y decidirá (reanudar o reintentar).
+          throw new DomainError(
+            "DRAFT_CONFLICT",
+            "El curso cambió mientras se preparaba el borrador.",
+            409,
+          );
+        }
+
+        if (versionDoc.exists) {
+          const status = (versionDoc.data() as { status?: string } | undefined)?.status;
+          if (status !== "draft") {
+            throw new DomainError(
+              "VERSION_ALREADY_EXISTS",
+              "Esa versión ya existe y no es un borrador.",
+              409,
+            );
+          }
+
+          // Adopción: la versión ya era un borrador (datos anteriores al
+          // puntero). Solo se fija el puntero; no se toca su contenido.
+          transaction.update(courseRef, {
+            lastDraftVersion: input.versionDoc.version,
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+          return { adopted: true };
+        }
+
+        transaction.set(versionRef, {
+          ...input.versionDoc,
+          revision: input.versionDoc.revision ?? 1,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+        if (input.answerKeys) {
+          transaction.set(keysRef, input.answerKeys);
+        }
+        transaction.update(courseRef, {
+          lastDraftVersion: input.versionDoc.version,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+
+        return { adopted: false };
+      });
+    });
+  }
+
+  /**
+   * Guarda la estructura del borrador sin tocar las claves de corrección.
+   *
+   * La comprobación de revisión es lo que impide que dos pestañas se pisen: si
+   * alguien guardó entre la lectura y esta escritura, la transacción falla con
+   * `DRAFT_STALE` y no se escribe nada.
+   */
+  async replaceDraftContent(input: {
+    versionDoc: CourseVersionDocument;
+    expectedRevision: number;
+  }): Promise<void> {
+    throwIfLeaking(input.versionDoc);
+
+    await guard(async () => {
+      const db = getAdminDb();
+      const versionRef = db
+        .collection(COLLECTIONS.courses)
+        .doc(input.versionDoc.courseId)
+        .collection(COLLECTIONS.versions)
+        .doc(String(input.versionDoc.version));
+
+      await db.runTransaction(async (transaction) => {
+        const current = await transaction.get(versionRef);
+        if (!current.exists) {
+          throw new DomainError("VERSION_NOT_FOUND", "El borrador no existe.", 404);
+        }
+
+        const data = current.data() as Partial<CourseVersionDocument>;
+        if (data.status !== "draft") {
+          throw new DomainError(
+            "VERSION_NOT_EDITABLE",
+            "Solo se puede editar un borrador. Una versión publicada no se modifica.",
+            409,
+          );
+        }
+
+        const revision = Number(data.revision ?? 0);
+        if (revision !== input.expectedRevision) {
+          throw new DomainError(
+            "DRAFT_STALE",
+            "El borrador se ha modificado desde que abriste el editor. Recarga la página antes de guardar.",
+            409,
+          );
+        }
+
+        transaction.set(versionRef, {
+          ...input.versionDoc,
+          revision: revision + 1,
+          // Editar no cambia ni la fecha ni la autoría de la versión.
+          createdAt: data.createdAt ?? input.versionDoc.createdAt,
+          createdBy: data.createdBy ?? input.versionDoc.createdBy,
+          publishedAt: null,
+          publishedBy: null,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      });
+    });
+  }
+
   async listDocuments(
     courseId: string,
     version: number,

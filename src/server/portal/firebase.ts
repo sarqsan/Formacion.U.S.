@@ -8,11 +8,7 @@ import type { AccountRole, AccountStatus, PersonRol } from "@/domain/roles";
 import { COLLECTIONS } from "@/server/db/schema.constants";
 import { mandatoryTopicsOf } from "@/server/courses/catalog";
 import { definitionFromDocuments } from "@/server/courses/definition";
-import {
-  publishCourseVersion,
-  saveDraftVersion,
-  updateDraftVersion,
-} from "@/server/courses/catalog";
+import { publishCourseVersion } from "@/server/courses/catalog";
 import { enrollStudent, revokeEnrollment } from "@/server/enrollments/service";
 import { submitAssessment } from "@/server/assessments/service";
 import { parsePeopleWorkbook } from "@/server/import/excel";
@@ -21,7 +17,16 @@ import { courseEditorDependencies, documentDependencies, importDependencies } fr
 import { readDocumentPages, uploadPdfDocument } from "@/server/documents/service";
 import { getAdminDb } from "@/server/firebase/admin";
 import { FirestoreCourseCatalogStore } from "@/server/firebase/catalog-store";
-import { createCourse } from "@/server/courses/editor";
+import {
+  createCourse,
+  draftEditorView,
+  resolveEditorVersion,
+  saveDraftStructure,
+  startDraft,
+  type DraftEditorView,
+  type DraftStructure,
+} from "@/server/courses/editor";
+import { definitionFromDocuments as definitionFromDocs } from "@/server/courses/definition";
 import { FirestoreEnrollmentStore } from "@/server/firebase/enrollment-store";
 import { FirestoreLearningStore } from "@/server/firebase/learning-store";
 import { guard } from "@/server/firebase/repositories";
@@ -399,7 +404,9 @@ export async function adminCourseDetail(
     selected: {
       version: selected.version,
       status: selected.status,
-      definition: keys ? definitionFromDocuments(selected, keys) : null,
+      // Definición siempre reconstruible: un borrador sin cuestionarios no
+      // tiene documento de claves y aun así debe poder abrirse y validarse.
+      definition: definitionFromDocuments(selected, keys),
       topics: selected.topics.map((topic) => ({
         id: topic.id,
         title: topic.title,
@@ -426,7 +433,6 @@ export async function definitionOf(
   const document = await deps.catalog.getVersion(courseId, version);
   if (!document) return null;
   const keys = await deps.catalog.getAnswerKeys(courseId, version);
-  if (!keys) return null;
   return definitionFromDocuments(document, keys);
 }
 
@@ -579,34 +585,52 @@ export async function adminCreateCourse(
   return createCourse({ ...input, actor }, courseEditorDependencies());
 }
 
-export async function adminSaveDraft(actor: Actor, definition: CourseVersionDefinition) {
-  return saveDraftVersion(
-    { definition, actor },
-    { store: firestoreDeps().catalog },
-  );
+/** Abre (o reanuda) el borrador del curso: escribe versión y puntero a la vez. */
+export async function adminStartDraft(actor: Actor, courseId: string) {
+  assertAdmin(actor);
+  return startDraft({ actor, courseId }, { store: firestoreDeps().catalog });
 }
 
-export async function adminUpdateDraft(actor: Actor, definition: CourseVersionDefinition) {
-  return updateDraftVersion(
-    { definition, actor },
-    { store: firestoreDeps().catalog },
-  );
+/** Guarda la estructura del borrador; exige la revisión abierta en el editor. */
+export async function adminSaveDraftStructure(
+  actor: Actor,
+  input: { courseId: string; version: number; expectedRevision: number; structure: DraftStructure },
+) {
+  assertAdmin(actor);
+  return saveDraftStructure({ actor, ...input }, { store: firestoreDeps().catalog });
 }
+
+/** Vista del editor de estructura, o `null` si el curso o la versión no existen. */
+export async function adminDraftEditor(
+  actor: Actor,
+  courseId: string,
+  version?: number,
+): Promise<DraftEditorView | null> {
+  assertAdmin(actor);
+  const deps = firestoreDeps();
+  const course = await deps.catalog.getCourse(courseId);
+  if (!course) return null;
+
+  const versions = (await deps.catalog.listVersions(courseId)).map((item) => item.version);
+  const target = resolveEditorVersion(course, versions, version);
+  if (target === null) return null;
+
+  const document = await deps.catalog.getVersion(courseId, target);
+  if (!document) return null;
+
+  const keys = await deps.catalog.getAnswerKeys(courseId, target);
+  return draftEditorView({
+    course,
+    version: document,
+    definition: definitionFromDocs(document, keys),
+  });
+}
+
+// `saveDraftVersion`/`updateDraftVersion` quedan como contrato interno; la
+// administración pasa por `startDraft`/`saveDraftStructure`.
 
 export async function adminPublish(actor: Actor, courseId: string, version: number) {
   return publishCourseVersion({ actor, courseId, version }, { store: firestoreDeps().catalog });
-}
-
-/** Crea la versión siguiente a partir de una ya existente. */
-export async function adminNewDraft(actor: Actor, courseId: string, fromVersion: number) {
-  const base = await definitionOf(actor, courseId, fromVersion);
-  if (!base) {
-    throw new DomainError("VERSION_NOT_FOUND", "No se encontró la versión base.", 404);
-  }
-
-  const versions = await firestoreDeps().catalog.listVersions(courseId);
-  const nextVersion = Math.max(...versions.map((item) => item.version), 0) + 1;
-  return adminSaveDraft(actor, { ...base, version: nextVersion });
 }
 
 // ---------------------------------------------------------------------------

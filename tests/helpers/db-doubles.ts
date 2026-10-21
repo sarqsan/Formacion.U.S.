@@ -97,7 +97,8 @@ export function fullyReadDocuments(topicId: string): StoredProgress["documents"]
 export class InMemoryCatalogStore implements CourseCatalogStore {
   courses = new Map<string, CourseSummary>();
   versions = new Map<string, CourseVersionDocument>();
-  keys = new Map<string, AnswerKeysDocument>();
+  // Las claves pueden faltar: un borrador vacío todavía no tiene cuestionarios.
+  keys = new Map<string, AnswerKeysDocument | null>();
   documents: PublicDocument[] = [];
   saveVersionCalls = 0;
   publishVersionCalls = 0;
@@ -123,6 +124,13 @@ export class InMemoryCatalogStore implements CourseCatalogStore {
   async getAnswerKeys(courseId: string, version: number): Promise<AnswerKeysDocument | null> {
     return this.keys.get(this.versionKey(courseId, version)) ?? null;
   }
+
+  /**
+   * Gancho de prueba: se ejecuta UNA vez justo antes de comprobar el estado de
+   * la ficha al crear un borrador. Permite simular que otra operación escribió
+   * entre la lectura y la escritura (carrera real en Firestore).
+   */
+  beforeCreateDraft?: () => void;
 
   async saveVersion(input: {
     course: CourseSummary;
@@ -189,6 +197,92 @@ export class InMemoryCatalogStore implements CourseCatalogStore {
     const course = this.courses.get(input.courseId);
     if (!course) throw new Error("CURSO INEXISTENTE");
     this.courses.set(input.courseId, { ...course, publishedVersion: input.version });
+  }
+
+  async createDraftVersion(input: {
+    courseId: string;
+    versionDoc: CourseVersionDocument;
+    answerKeys: AnswerKeysDocument | null;
+    expected: { publishedVersion: number | null; lastDraftVersion: number | null };
+  }): Promise<{ adopted: boolean }> {
+    if (this.beforeCreateDraft) {
+      const hook = this.beforeCreateDraft;
+      this.beforeCreateDraft = undefined;
+      hook();
+    }
+
+    const course = this.courses.get(input.courseId);
+    if (!course) throw new DomainError("COURSE_NOT_FOUND", "El curso no existe.", 404);
+
+    if (
+      course.publishedVersion !== input.expected.publishedVersion ||
+      course.lastDraftVersion !== input.expected.lastDraftVersion
+    ) {
+      throw new DomainError("DRAFT_CONFLICT", "El curso cambió mientras se preparaba el borrador.", 409);
+    }
+
+    const key = this.versionKey(input.courseId, input.versionDoc.version);
+    const existing = this.versions.get(key);
+    if (existing) {
+      if (existing.status !== "draft") {
+        throw new DomainError(
+          "VERSION_ALREADY_EXISTS",
+          "Esa versión ya existe y no es un borrador.",
+          409,
+        );
+      }
+      this.courses.set(input.courseId, {
+        ...course,
+        lastDraftVersion: input.versionDoc.version,
+      });
+      return { adopted: true };
+    }
+
+    this.versions.set(key, {
+      ...structuredClone(input.versionDoc),
+      revision: input.versionDoc.revision ?? 1,
+    });
+    this.keys.set(key, input.answerKeys ? structuredClone(input.answerKeys) : null);
+    this.courses.set(input.courseId, {
+      ...course,
+      lastDraftVersion: input.versionDoc.version,
+    });
+    return { adopted: false };
+  }
+
+  async replaceDraftContent(input: {
+    versionDoc: CourseVersionDocument;
+    expectedRevision: number;
+  }): Promise<void> {
+    const key = this.versionKey(input.versionDoc.courseId, input.versionDoc.version);
+    const current = this.versions.get(key);
+    if (!current) throw new DomainError("VERSION_NOT_FOUND", "El borrador no existe.", 404);
+    if (current.status !== "draft") {
+      throw new DomainError(
+        "VERSION_NOT_EDITABLE",
+        "Solo se puede editar un borrador.",
+        409,
+      );
+    }
+
+    const revision = current.revision ?? 0;
+    if (revision !== input.expectedRevision) {
+      throw new DomainError(
+        "DRAFT_STALE",
+        "El borrador se ha modificado desde que abriste el editor.",
+        409,
+      );
+    }
+
+    this.versions.set(key, {
+      ...structuredClone(input.versionDoc),
+      revision: revision + 1,
+      createdAt: current.createdAt,
+      createdBy: current.createdBy,
+      publishedAt: null,
+      publishedBy: null,
+    });
+    // Las claves NO se tocan: este doble reproduce el mismo contrato.
   }
 
   async listDocuments(): Promise<PublicDocument[]> {

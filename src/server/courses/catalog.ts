@@ -62,6 +62,12 @@ export interface CourseVersionDocument {
   courseId: string;
   version: number;
   status: CourseVersionStatus;
+  /**
+   * Revisión del borrador (concurrencia optimista). Se incrementa en cada
+   * guardado y el editor exige la que tenía al abrirlo: dos pestañas no pueden
+   * pisarse en silencio. Las versiones publicadas no la usan.
+   */
+  revision?: number;
   title: string;
   description: string | null;
   topics: PublicTopic[];
@@ -120,6 +126,40 @@ export interface CourseCatalogStore {
   replaceDraftVersion(input: {
     version: CourseVersionDocument;
     answerKeys: AnswerKeysDocument;
+  }): Promise<void>;
+
+  /**
+   * Crea la versión de borrador y fija `lastDraftVersion` **en la misma
+   * operación**, o falla si la ficha cambió desde que se leyó.
+   *
+   * Contrato que debe cumplir cualquier implementación:
+   *   - si `publishedVersion` o `lastDraftVersion` ya no son los esperados →
+   *     `DRAFT_CONFLICT` (otra operación creó un borrador o publicó), sin
+   *     escribir nada;
+   *   - si la versión ya existe y es un borrador → se **adopta** (solo se fija
+   *     el puntero), sin tocar su contenido ni sus claves; devuelve
+   *     `{ adopted: true }`;
+   *   - si la versión ya existe y no es un borrador → `VERSION_ALREADY_EXISTS`;
+   *   - nunca queda una versión sin que el curso apunte a ella, ni al revés.
+   */
+  createDraftVersion(input: {
+    courseId: string;
+    versionDoc: CourseVersionDocument;
+    answerKeys: AnswerKeysDocument | null;
+    expected: { publishedVersion: number | null; lastDraftVersion: number | null };
+  }): Promise<{ adopted: boolean }>;
+
+  /**
+   * Guarda la estructura de un borrador existente **sin tocar las claves de
+   * corrección** (este bloque no edita cuestionarios).
+   *
+   *   - la versión debe existir, estar en borrador y tener la revisión
+   *     esperada; si no, `VERSION_NOT_EDITABLE` o `DRAFT_STALE`, sin escribir;
+   *   - la revisión guardada es `expectedRevision + 1`.
+   */
+  replaceDraftContent(input: {
+    versionDoc: CourseVersionDocument;
+    expectedRevision: number;
   }): Promise<void>;
 
   /** Transacción: la versión pasa a `published` y el curso apunta a ella. */

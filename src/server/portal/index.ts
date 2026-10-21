@@ -8,7 +8,7 @@ import { parsePeopleWorkbook } from "@/server/import/excel";
 import { buildImportPreview } from "@/server/import/service";
 import { isDemoMode } from "@/demo/session";
 import * as demo from "@/demo/service";
-import { definitionOf as demoDefinitionOf, demoState, listVersionsOf } from "@/demo/store";
+import { definitionOf as demoDefinitionOf, demoState } from "@/demo/store";
 import * as firebase from "@/server/portal/firebase";
 
 /**
@@ -239,38 +239,42 @@ export async function adminRevokeEnrollment(actor: Actor, uid: string, courseId:
     : firebase.adminRevokeEnrollment(actor, uid, courseId);
 }
 
-export async function adminSaveDraft(actor: Actor, definition: CourseVersionDefinition) {
+/** Abre (o reanuda) el borrador del curso. No publica nada. */
+export async function adminStartDraft(actor: Actor, courseId: string) {
+  assertAdmin(actor);
   return portalMode() === "demo"
-    ? demo.adminSaveDraft(actor, definition)
-    : firebase.adminSaveDraft(actor, definition);
+    ? demo.adminStartDraft(actor, courseId)
+    : firebase.adminStartDraft(actor, courseId);
 }
 
-export async function adminUpdateDraft(actor: Actor, definition: CourseVersionDefinition) {
+/** Guarda la estructura del borrador (título, descripción y temas). */
+export async function adminSaveDraftStructure(
+  actor: Actor,
+  input: {
+    courseId: string;
+    version: number;
+    expectedRevision: number;
+    structure: import("@/server/courses/editor").DraftStructure;
+  },
+) {
+  assertAdmin(actor);
   return portalMode() === "demo"
-    ? demo.adminUpdateDraft(actor, definition)
-    : firebase.adminUpdateDraft(actor, definition);
+    ? demo.adminSaveDraftStructure(actor, input)
+    : firebase.adminSaveDraftStructure(actor, input);
+}
+
+/** Datos del editor de estructura. Solo lectura; nunca publica. */
+export async function adminDraftEditor(actor: Actor, courseId: string, version?: number) {
+  assertAdmin(actor);
+  return portalMode() === "demo"
+    ? demo.adminDraftEditor(courseId, version)
+    : firebase.adminDraftEditor(actor, courseId, version);
 }
 
 export async function adminPublish(actor: Actor, courseId: string, version: number) {
   return portalMode() === "demo"
     ? demo.adminPublish(actor, courseId, version)
     : firebase.adminPublish(actor, courseId, version);
-}
-
-/** Crea el borrador siguiente a partir de una versión existente. */
-export async function adminNewDraft(actor: Actor, courseId: string, fromVersion: number) {
-  assertAdmin(actor);
-
-  if (portalMode() === "firebase") {
-    return firebase.adminNewDraft(actor, courseId, fromVersion);
-  }
-
-  const base = demoDefinitionOf(courseId, fromVersion);
-  if (!base) {
-    throw new DomainError("VERSION_NOT_FOUND", "No se encontró la versión base.", 404);
-  }
-  const nextVersion = Math.max(...listVersionsOf(courseId).map((item) => item.version), 0) + 1;
-  return demo.adminSaveDraft(actor, { ...base, version: nextVersion });
 }
 
 // ---------------------------------------------------------------------------

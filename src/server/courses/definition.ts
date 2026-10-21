@@ -12,9 +12,28 @@ import type { AnswerKeysDocument, CourseVersionDocument } from "@/server/courses
  * Esta función es pura y la comparten el almacén de demostración y el de
  * Firestore, para que un borrador se reconstruya igual en los dos.
  */
+/**
+ * Claves vacías: un borrador recién creado todavía no tiene cuestionarios, así
+ * que no hay ninguna clave que guardar. No se escribe documento de claves
+ * (generarlas es trabajo del editor de cuestionarios).
+ */
+export function emptyAnswerKeys(
+  courseId: string,
+  version: number,
+  createdAt: string,
+): AnswerKeysDocument {
+  return { courseId, version, quizByTopic: {}, finalExam: [], createdAt };
+}
+
+/**
+ * Reconstruye la definición editable.
+ *
+ * `keys` puede ser `null`: un borrador sin cuestionarios no tiene documento de
+ * claves y aun así debe poder abrirse y editarse su estructura.
+ */
 export function definitionFromDocuments(
   version: CourseVersionDocument,
-  keys: AnswerKeysDocument,
+  keys: AnswerKeysDocument | null,
 ): CourseVersionDefinition {
   const topics: TopicDefinition[] = version.topics.map((topic) => ({
     id: topic.id,
@@ -29,7 +48,8 @@ export function definitionFromDocuments(
     quiz: topic.quiz.map((question) => ({
       ...question,
       correctOptionIds:
-        keys.quizByTopic[topic.id]?.find((key) => key.id === question.id)?.correctOptionIds ?? [],
+        keys?.quizByTopic[topic.id]?.find((key) => key.id === question.id)?.correctOptionIds ??
+          [],
     })),
   }));
 
@@ -42,7 +62,7 @@ export function definitionFromDocuments(
     finalExam: version.finalExam.map((question) => ({
       ...question,
       correctOptionIds:
-        keys.finalExam.find((key) => key.id === question.id)?.correctOptionIds ?? [],
+        keys?.finalExam.find((key) => key.id === question.id)?.correctOptionIds ?? [],
     })),
   };
 }

@@ -4,18 +4,18 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { DomainError } from "@/domain/text";
-import type { CourseVersionDefinition, TopicDefinition } from "@/domain/courses/content";
+import { parseDraftStructureForm } from "@/server/courses/draft-form";
 import type { ImportPreview } from "@/domain/people/import-rows";
 import { DEMO_COOKIE, getUiSession } from "@/demo/session";
 import { demoAccountByUid, resetDemoState } from "@/demo/store";
 import {
   adminCreateCourse,
+  adminDraftEditor,
   adminEnroll,
-  adminNewDraft,
   adminPublish,
   adminRevokeEnrollment,
-  adminUpdateDraft,
-  definitionOf,
+  adminSaveDraftStructure,
+  adminStartDraft,
   previewImport,
   readPage,
   submitQuiz,
@@ -54,7 +54,16 @@ async function actorOrNull(): Promise<Actor | null> {
 }
 
 function errorMessage(error: unknown): string {
-  if (error instanceof DomainError) return error.message;
+  if (error instanceof DomainError) {
+    // Varios problemas a la vez (estructura del borrador, publicación): se
+    // muestran todos, no solo el primero.
+    const details = error.details as { issues?: Array<{ message?: string }> } | undefined;
+    const messages = (details?.issues ?? [])
+      .map((issue) => issue.message)
+      .filter((message): message is string => Boolean(message));
+    if (messages.length > 1) return messages.join(" · ");
+    return error.message;
+  }
   return "No se ha podido completar la operación. Inténtalo de nuevo.";
 }
 
@@ -311,101 +320,90 @@ export async function publishAction(formData: FormData): Promise<void> {
   redirect(`/admin/cursos/${courseId}?v=${version}&ok=publicada`);
 }
 
-/** Crea la siguiente versión (borrador) copiando la publicada. */
-export async function newDraftAction(formData: FormData): Promise<void> {
-  const actor = await actorOrNull();
-  if (!actor) redirect("/login");
-
-  const courseId = String(formData.get("courseId") ?? "");
-  const fromVersion = Number(formData.get("fromVersion") ?? "0");
-
-  if (fromVersion <= 0) {
-    redirect(`/admin/cursos/${courseId}?error=${encodeURIComponent("No se encontró la versión base.")}`);
-  }
-
-  let failure: string | null = null;
-  let created: { courseId: string; version: number } | null = null;
-  try {
-    created = await adminNewDraft(actor, courseId, fromVersion);
-  } catch (error) {
-    failure = errorMessage(error);
-  }
-
-  if (failure || !created) {
-    redirect(
-      `/admin/cursos/${courseId}?error=${encodeURIComponent(failure ?? "No se pudo crear el borrador.")}`,
-    );
-  }
-
-  redirect(`/admin/cursos/${courseId}?v=${created.version}&ok=borrador`);
-}
-
 /**
- * Guarda los cambios del editor de borrador.
+ * Abre el borrador del curso (lo crea si no existe) y lleva al editor.
  *
- * Solo se modifican los campos que gestiona la interfaz (título, descripción,
- * títulos y orden de temas, títulos y páginas de pantallas). Las preguntas se
- * conservan tal cual: cambiarlas cambia la clave de corrección y necesita una
- * revisión propia (ver hoja de ruta).
+ * No publica, no exige contenido y no toca la versión publicada: si el curso ya
+ * estaba publicado, el borrador es una copia profunda de esa versión.
  */
-export async function saveDraftAction(formData: FormData): Promise<void> {
+export async function startDraftAction(formData: FormData): Promise<void> {
   const actor = await actorOrNull();
   if (!actor) redirect("/login");
 
-  const courseId = String(formData.get("courseId") ?? "");
-  const version = Number(formData.get("version") ?? "0");
-  const current = await definitionOf(actor, courseId, version);
-
-  if (!current) {
-    redirect(`/admin/cursos/${courseId}?error=${encodeURIComponent("La versión no existe.")}`);
-  }
-
-  const title = String(formData.get("title") ?? "").trim();
-  const description = String(formData.get("description") ?? "").trim();
-
-  const topics: TopicDefinition[] = current.topics.map((topic) => {
-    const order = Number(formData.get(`topic:${topic.id}:order`) ?? topic.order);
-    return {
-      ...topic,
-      title: String(formData.get(`topic:${topic.id}:title`) ?? topic.title).trim(),
-      order: Number.isFinite(order) ? order : topic.order,
-      documents: topic.documents.map((document) => {
-        const pageCount = Number(formData.get(`doc:${document.id}:pages`) ?? document.pageCount);
-        return {
-          ...document,
-          title: String(formData.get(`doc:${document.id}:title`) ?? document.title).trim(),
-          pageCount: Number.isFinite(pageCount) ? pageCount : document.pageCount,
-        };
-      }),
-    };
-  });
-
-  const updated: CourseVersionDefinition = {
-    ...current,
-    title,
-    description: description || undefined,
-    topics,
-  };
+  const courseId = String(formData.get("courseId") ?? "").trim();
+  const coursePath = `/admin/cursos/${encodeURIComponent(courseId)}`;
 
   let failure: string | null = null;
+  let opened: Awaited<ReturnType<typeof adminStartDraft>> | null = null;
   try {
-    await adminUpdateDraft(actor, updated);
+    opened = await adminStartDraft(actor, courseId);
   } catch (error) {
     failure = errorMessage(error);
   }
 
   revalidatePath("/admin/cursos");
-  if (failure) {
-    redirect(`/admin/cursos/${courseId}?v=${version}&error=${encodeURIComponent(failure)}`);
+  revalidatePath(coursePath);
+
+  if (failure || !opened) {
+    redirect(`${coursePath}?error=${encodeURIComponent(failure ?? "No se pudo abrir el borrador.")}`);
   }
-  redirect(`/admin/cursos/${courseId}?v=${version}&ok=guardado`);
+
+  redirect(
+    `${coursePath}/editar?v=${opened.version}&ok=${opened.created ? "borrador" : "reanudado"}`,
+  );
 }
 
-/** Comprueba el contenido de una versión y devuelve los problemas juntos. */
-export async function validateDraftAction(formData: FormData): Promise<void> {
-  const courseId = String(formData.get("courseId") ?? "");
+/**
+ * Guarda la estructura del borrador: título, descripción y temas.
+ *
+ * Acepta borradores incompletos (sin temas, sin cuestionarios, sin examen):
+ * solo rechaza lo que rompe la estructura. La revisión viaja en el formulario y
+ * el servicio la exige, de modo que dos pestañas no se pisan en silencio.
+ *
+ * Si el servidor rechaza el guardado, la persona vuelve al editor con el error:
+ * nunca con un mensaje de éxito.
+ */
+export async function saveDraftAction(formData: FormData): Promise<void> {
+  const actor = await actorOrNull();
+  if (!actor) redirect("/login");
+
+  const courseId = String(formData.get("courseId") ?? "").trim();
   const version = Number(formData.get("version") ?? "0");
-  redirect(`/admin/cursos/${courseId}?v=${version}&revisar=1`);
+  const expectedRevision = Number(formData.get("expectedRevision") ?? "0");
+  const coursePath = `/admin/cursos/${encodeURIComponent(courseId)}`;
+  const editorPath = `${coursePath}/editar?v=${version}`;
+
+  if (!Number.isInteger(version) || version < 1) {
+    redirect(`${coursePath}?error=${encodeURIComponent("No se indicó qué borrador guardar.")}`);
+  }
+
+  let failure: string | null = null;
+  try {
+    const view = await adminDraftEditor(actor, courseId, version);
+    if (!view) {
+      throw new DomainError("VERSION_NOT_FOUND", "El borrador no existe.", 404);
+    }
+
+    const { structure } = parseDraftStructureForm(formData, view.topics);
+    await adminSaveDraftStructure(actor, {
+      courseId,
+      version,
+      expectedRevision: Number.isFinite(expectedRevision) ? expectedRevision : 0,
+      structure,
+    });
+  } catch (error) {
+    failure = errorMessage(error);
+  }
+
+  revalidatePath(editorPath);
+  revalidatePath(coursePath);
+  revalidatePath("/admin/cursos");
+
+  if (failure) {
+    redirect(`${editorPath}&error=${encodeURIComponent(failure)}`);
+  }
+
+  redirect(`${editorPath}&ok=guardado`);
 }
 
 // ---------------------------------------------------------------------------
