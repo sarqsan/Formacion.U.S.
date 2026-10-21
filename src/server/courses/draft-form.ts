@@ -11,7 +11,7 @@ import type { DraftStructure, TopicStructure } from "@/server/courses/editor";
  * Dos reglas deliberadas:
  *   - **los temas que no llegan, se eliminan** del borrador. El editor pinta un
  *     campo por tema existente, así que solo desaparece lo que se ha marcado
- *     para borrar o lo que ya no existía;
+ *     para borrar o lo que el formulario ya no incluye;
  *   - el orden no se confía a la posición de los campos: se lee el número que
  *     ha escrito la persona y el servicio lo normaliza a 1..n. Un número
  *     repetido no rompe nada, se reajusta de forma determinista.
@@ -48,7 +48,12 @@ export function parseDraftStructureForm(
 
   const topics: TopicStructure[] = [];
   currentTopics.forEach((topic, index) => {
+    // Marcado para borrar: fuera del borrador (la versión publicada no se toca).
     if (checked(formData, `delete:${topic.id}`)) return;
+    // Sin campos en el formulario: tampoco está. Así, quitar un bloque de tema
+    // del formulario (o no pintarlo) elimina el tema, en vez de guardarlo con
+    // el título vacío y fallar con un error que no se entiende.
+    if (!formData.has(`topic:${topic.id}:title`)) return;
 
     const rawOrder = Number(formData.get(`topic:${topic.id}:order`));
     topics.push({
@@ -93,4 +98,46 @@ export function parseDraftStructureForm(
     structure: { title, description, topics },
     addedTopicId,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Destinos de las acciones (puros, para poder probarlos)
+// ---------------------------------------------------------------------------
+
+/**
+ * Ruta del editor de estructura de una versión.
+ *
+ * Se construye aquí y no en el componente para que el curso y la versión
+ * viajen siempre codificados y con la misma forma.
+ */
+export function draftEditorPath(courseId: string, version: number): string {
+  return `/admin/cursos/${encodeURIComponent(courseId)}/editar?v=${version}`;
+}
+
+/** Destino tras abrir el borrador: al editor, con aviso de creado o reanudado. */
+export function draftStartedRedirect(input: {
+  courseId: string;
+  version: number;
+  created: boolean;
+}): string {
+  return `${draftEditorPath(input.courseId, input.version)}&ok=${input.created ? "borrador" : "reanudado"}`;
+}
+
+/**
+ * Destino tras guardar.
+ *
+ * Con `failure` se vuelve al editor con el mensaje de error y **sin** `ok`:
+ * el aviso de éxito solo existe cuando el servicio confirmó el guardado. Es la
+ * regla que impide que una pantalla diga «guardado» sobre una escritura que no
+ * ocurrió.
+ */
+export function draftSavedRedirect(input: {
+  courseId: string;
+  version: number;
+  failure?: string | null;
+}): string {
+  const path = draftEditorPath(input.courseId, input.version);
+  return input.failure
+    ? `${path}&error=${encodeURIComponent(input.failure)}`
+    : `${path}&ok=guardado`;
 }

@@ -9,9 +9,7 @@ export const dynamic = "force-dynamic";
 
 const MESSAGES: Record<string, string> = {
   creado: "Curso creado. Todavía no tiene versiones: no está publicado ni visible para el alumnado.",
-  guardado: "Borrador guardado. El contenido publicado no ha cambiado.",
   publicada: "Versión publicada. Quien tenía el curso empezado lo repetirá desde el principio.",
-  borrador: "Versión nueva creada en borrador a partir de la publicada.",
 };
 
 const STATUS_LABEL: Record<string, string> = {
@@ -76,7 +74,7 @@ export default async function AdminCoursePage({
               Ver estructura
             </Link>
           ) : null}
-          {detail.publishedVersion !== null ? (
+          {detail.drafts > 0 || detail.publishedVersion !== null ? (
             <form action={startDraftAction}>
               <input type="hidden" name="courseId" value={detail.courseId} />
               <button type="submit" className="btn btn-secondary">

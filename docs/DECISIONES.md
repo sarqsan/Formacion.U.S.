@@ -505,3 +505,58 @@ de publicación si se relaja para permitirlo.
 - Las pruebas fijan las dos propiedades: estado inicial con los dos punteros a
   null, y clonación con independencia en todos los niveles de anidamiento
   (temas, documentos, cuestionarios, opciones y claves).
+
+## ADR-023 · El borrador se guarda con tres niveles de validación y concurrencia optimista
+
+**Contexto.** El bloque 03 dejó los cursos naciendo sin versiones. Faltaba poder
+trabajar el contenido: crear el primer borrador, guardarlo a medias y retomarlo
+días después, sin publicar nada y sin poder estropear lo publicado. Dos
+tentaciones a evitar: (a) reutilizar `validateCourseVersion` para decidir si se
+puede guardar, lo que impediría guardar un borrador vacío; (b) «arreglar» la
+concurrencia con un `set()` optimista, que perdería el trabajo de otra pestaña.
+
+**Decisión.**
+
+1. **Tres niveles, un solo código de publicación.** `checkDraftStructure`
+   (dominio) solo mira la forma —identificadores, longitudes, órdenes— y es lo
+   único que bloquea el guardado. `reviewDraft` presenta como avisos los
+   problemas que detecta `validateCourseVersion`, que **no se toca**: sigue
+   siendo la puerta de publicación, en su bloque. Un borrador vacío o incompleto
+   se guarda, y se ve sin ambigüedad que todavía no es publicable.
+2. **Abrir un borrador es una transacción con estado esperado.** La versión y
+   `courses.lastDraftVersion` se escriben juntas, comprobando los punteros
+   leídos. Si la ficha cambió, `DRAFT_CONFLICT` sin escribir y el servicio
+   reintenta releyendo: la segunda pasada reanuda el borrador existente en lugar
+   de crear otro. Nunca quedan versiones huérfanas ni punteros a versiones que no
+   existen. Si la versión ya existía como borrador, se **adopta** fijando solo
+   el puntero.
+3. **Guardar exige la revisión abierta.** `revision` empieza en 1 y se
+   incrementa en cada guardado; el almacén compara y rechaza con `DRAFT_STALE`
+   sin escribir. Dos pestañas, dos administradores o un doble clic no se pisan en
+   silencio: la segunda operación recibe un error con mensaje y la persona
+   recarga. Es concurrencia optimista, no bloqueos.
+4. **La versión publicada es intocable.** Solo se aceptan escrituras sobre
+   `status: "draft"` (`VERSION_NOT_EDITABLE` en cualquier otro caso) y el
+   borrador nace de una clonación profunda de la publicada, sin referencias
+   compartidas. Publicar **consume** el borrador: `lastDraftVersion` vuelve a
+   `null` en la misma transacción.
+5. **El editor no edita todo.** Este bloque gestiona título, descripción y
+   temas (crear, renombrar, reordenar, marcar obligatorio, eliminar). Los
+   documentos y los cuestionarios se **conservan por identificador**; las claves
+   de corrección no se tocan. Editar preguntas y subir PDF es otro bloque, y no
+   se finge que está hecho.
+
+**Consecuencias.**
+
+- Eliminar un tema es seguro: solo puede ocurrir en un borrador, y la versión
+  publicada y el histórico no se modifican (hay prueba explícita de que el
+  documento publicado queda idéntico campo a campo).
+- Un borrador sin cuestionarios no tiene documento de `answerKeys`: se trata
+  como `null` en lugar de como error, y `ANSWER_KEYS_MISSING` solo aparece si se
+  intenta clonar una versión **publicada** que debería tenerlas y no las tiene.
+- Los errores llevan código (`DRAFT_STALE`, `DRAFT_CONFLICT`,
+  `COURSE_STRUCTURE_INVALID`, `DEFINITION_TOO_LARGE`) y la interfaz muestra el
+  mensaje real; nunca hay un «guardado» sin confirmación del servicio.
+- El límite de 800 KiB por definición se comprueba en el servicio con el tamaño
+  UTF-8 real, antes de acercarse al 1 MiB por documento de Firestore; no se
+  duplica la regla en la interfaz.

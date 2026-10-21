@@ -109,7 +109,11 @@ function seedState(): DemoState {
       version,
       keys: toAnswerKeys(definition, { createdAt }),
     });
-    record.summary.lastDraftVersion = definition.version;
+    // `lastDraftVersion` apunta SOLO a un borrador: una versión publicada no
+    // deja el puntero apuntando a algo que ya no es editable.
+    if (!published) {
+      record.summary.lastDraftVersion = definition.version;
+    }
   }
 
   for (const enrollment of DEMO_ENROLLMENTS) {
@@ -264,7 +268,8 @@ export function definitionOf(
 
 export function listCourseSummaries(): CourseSummary[] {
   return [...demoState().courses.values()]
-    .map((record) => record.summary)
+    // Copia: quien lee no puede cambiar el estado compartido por referencia.
+    .map((record) => ({ ...record.summary }))
     .sort((a, b) => a.title.localeCompare(b.title, "es"));
 }
 
@@ -397,6 +402,9 @@ export class DemoCatalogStore implements CourseCatalogStore {
     });
     record.summary.publishedVersion = input.version;
     record.summary.title = target.version.title;
+    // Publicar consume el borrador: el puntero no puede seguir apuntando a una
+    // versión que ya es inmutable.
+    record.summary.lastDraftVersion = null;
   }
 
   async listDocuments(courseId: string, version: number, topicId: string): Promise<PublicDocument[]> {

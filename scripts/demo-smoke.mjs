@@ -137,7 +137,163 @@ if (enrollForm) {
 }
 
 // ---------------------------------------------------------------------------
-// 3. Publicación de un borrador
+// 3. Editor de estructura del borrador (bloque 04)
+// ---------------------------------------------------------------------------
+
+const EDIT_COURSE = "curso-prevencion-riesgos";
+const DRAFT_TITLE = "Borrador no publicado de prevención";
+
+const editDetail = await get(`/admin/cursos/${EDIT_COURSE}`, admin);
+const startDraftForm = forms(editDetail.html).find((form) =>
+  form.inner.includes("Nueva versión en borrador"),
+);
+assert(Boolean(startDraftForm), "encuentra el botón para preparar un borrador");
+
+let editorPath = null;
+if (startDraftForm) {
+  const created = await postForm(`/admin/cursos/${EDIT_COURSE}`, admin, startDraftForm.fields);
+  assert(created.status === 303, `crea el borrador (HTTP ${created.status})`);
+  editorPath = created.location;
+  assert(
+    Boolean(editorPath?.includes("/editar?v=2") && editorPath?.includes("ok=borrador")),
+    `el borrador nuevo abre el editor de la versión 2 (${editorPath})`,
+  );
+}
+
+if (editorPath) {
+  const editor = await get(editorPath, admin);
+  assert(editor.status === 200, "el editor de estructura carga");
+  assert(editor.html.includes("Guardar borrador"), "el editor tiene el formulario de guardado");
+
+  const saveForm = forms(editor.html).find((form) => form.inner.includes("Guardar borrador"));
+  assert(Boolean(saveForm), "encuentra los campos del borrador");
+
+  if (saveForm) {
+    const staleRevision = saveForm.fields.expectedRevision;
+    const saved = await postForm(editorPath, admin, {
+      ...saveForm.fields,
+      title: DRAFT_TITLE,
+      description: "Descripción que no debe ver el alumnado",
+      newTopicId: "tema-borrador",
+      newTopicTitle: "Tema del borrador",
+      newTopicMandatory: "on",
+    });
+    assert(saved.status === 303, `guarda el borrador (HTTP ${saved.status})`);
+    assert(
+      Boolean(saved.location?.includes("ok=guardado")),
+      `el guardado confirmado se anuncia como tal (${saved.location})`,
+    );
+
+    const reloaded = await get(saved.location ?? editorPath, admin);
+    assert(reloaded.html.includes(DRAFT_TITLE), "el borrador guardado se recupera al reabrir");
+    assert(reloaded.html.includes("Tema del borrador"), "el tema nuevo persiste");
+    assert(
+      !reloaded.html.includes(`expectedRevision" value="${staleRevision}"`) ||
+        reloaded.html.includes(`expectedRevision" value="${Number(staleRevision) + 1}"`),
+      "la revisión del editor avanza tras guardar",
+    );
+
+    // Guardar con la revisión vieja (otra pestaña) no debe decir «guardado».
+    const stale = await postForm(saved.location ?? editorPath, admin, {
+      ...saveForm.fields,
+      title: "Escritura de una pestaña antigua",
+    });
+    assert(stale.status === 303, `rechaza un guardado obsoleto (HTTP ${stale.status})`);
+    assert(
+      Boolean(stale.location?.includes("error=")),
+      `el guardado obsoleto devuelve error (${stale.location})`,
+    );
+    assert(
+      !stale.location?.includes("ok=guardado"),
+      "el guardado obsoleto no se anuncia como guardado",
+    );
+
+    const afterStale = await get(stale.location ?? editorPath, admin);
+    assert(afterStale.html.includes(DRAFT_TITLE), "el contenido bueno no se ha pisado");
+    assert(
+      !afterStale.html.includes("Escritura de una pestaña antigua"),
+      "la escritura obsoleta no llega al almacén",
+    );
+  }
+
+  // La versión publicada y el alumnado no cambian.
+  const published = await get(`/admin/cursos/${EDIT_COURSE}?v=1`, admin);
+  assert(published.html.includes("Publicada"), "la versión 1 sigue publicada");
+  assert(!published.html.includes(DRAFT_TITLE), "la publicada no lleva el título del borrador");
+
+  const learnerPanel = await get("/panel", learner);
+  assert(
+    !learnerPanel.html.includes(DRAFT_TITLE) &&
+      !learnerPanel.html.includes("Descripción que no debe ver el alumnado"),
+    "el alumnado no ve el borrador en su panel",
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 3 bis. Curso nuevo: primer borrador vacío
+// ---------------------------------------------------------------------------
+
+const NEW_COURSE = "curso-smoke-b04";
+const newPage = await get("/admin/cursos/nuevo", admin);
+const createForm = forms(newPage.html).find((form) => form.fields.courseId !== undefined);
+assert(Boolean(createForm), "encuentra el formulario de alta de curso");
+
+if (createForm) {
+  const created = await postForm("/admin/cursos/nuevo", admin, {
+    ...createForm.fields,
+    courseId: NEW_COURSE,
+    title: "Curso del recorrido automático",
+    description: "",
+  });
+  assert(created.status === 303, `crea el curso vacío (HTTP ${created.status})`);
+
+  const emptyDetail = await get(`/admin/cursos/${NEW_COURSE}`, admin);
+  assert(
+    emptyDetail.html.includes("Este curso no tiene versiones"),
+    "el curso nuevo no tiene versiones",
+  );
+
+  const firstDraft = forms(emptyDetail.html).find((form) =>
+    form.inner.includes("Preparar el primer borrador"),
+  );
+  assert(Boolean(firstDraft), "ofrece preparar el primer borrador");
+
+  if (firstDraft) {
+    const opened = await postForm(`/admin/cursos/${NEW_COURSE}`, admin, firstDraft.fields);
+    assert(
+      Boolean(opened.location?.includes("/editar?v=1") && opened.location?.includes("ok=borrador")),
+      `el primer borrador es la versión 1 (${opened.location})`,
+    );
+
+    const emptyEditor = await get(opened.location ?? `/admin/cursos/${NEW_COURSE}`, admin);
+    assert(emptyEditor.html.includes("Todavía no hay ninguno"), "el borrador nace sin temas");
+
+    const emptySaveForm = forms(emptyEditor.html).find((form) =>
+      form.inner.includes("Guardar borrador"),
+    );
+    if (emptySaveForm) {
+      const saved = await postForm(opened.location, admin, {
+        ...emptySaveForm.fields,
+        title: "Curso del recorrido automático",
+        description: "",
+      });
+      assert(
+        Boolean(saved.location?.includes("ok=guardado")),
+        `un borrador vacío se guarda (${saved.location})`,
+      );
+    }
+
+    const learnerPanel = await get("/panel", learner);
+    assert(
+      !learnerPanel.html.includes(NEW_COURSE) &&
+        !learnerPanel.html.includes("Curso del recorrido automático"),
+      "un curso con solo borrador no aparece al alumnado",
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 4. Publicación de un borrador
 // ---------------------------------------------------------------------------
 
 const detail = await get("/admin/cursos/curso-proteccion-datos?v=2", admin);
@@ -161,7 +317,7 @@ if (publishForm) {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Acceso de administración y cierre
+// 5. Acceso de administración y cierre
 // ---------------------------------------------------------------------------
 
 const adminPanel = await get("/admin", admin);

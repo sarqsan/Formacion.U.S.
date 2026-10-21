@@ -592,3 +592,54 @@ Lo que estas pruebas **no** demuestran: que Firestore escriba la ficha (los
 dobles son en memoria), que `create()` traduzca ALREADY_EXISTS en el servicio
 real, ni que las reglas se comporten así al desplegarlas. Eso sigue pendiente de
 un entorno con JDK y credenciales.
+
+## 16. Bloque 04 — editor de estructura y borradores (21/10/2026)
+
+Alcance ejecutado: apertura del primer borrador (creado o reanudado), guardado y
+recuperación de la estructura (título, descripción, temas), validación en tres
+niveles, concurrencia optimista y errores reales en la interfaz. **Nada de este
+bloque publica, sube PDF ni edita cuestionarios.**
+
+| Comprobación | Comando | Resultado |
+| --- | --- | --- |
+| Cadena completa | `npm run verify` | **exit 0**: tipado 0 errores, lint 0 avisos, **638 pruebas en verde**, build con `/admin/cursos/[courseId]/editar` |
+| Pruebas totales | `npm test` | **638 pasan**, 4 omitidas (integración con emulador), 40 ficheros + 1 omitido |
+| Recorrido de la demostración | `DEMO_MODE=1 npx next start -p 3000` + `npm run check:demo` | **PASSED**, **46 comprobaciones** (antes 19) |
+| Reglas de Firestore | `npm run test:rules` | **BLOQUEADO**: sin JVM el emulador no arranca. 0 ejecutadas |
+| Integración con emulador | `npm run test:firestore` | **BLOQUEADO** por el mismo motivo |
+| Conexión real | `npm run check:firebase` | **BLOQUEADO**: TLS hacia Google se corta desde el sandbox. Sin credenciales usadas |
+
+Pruebas nuevas (45):
+
+| Fichero | Pruebas | Qué fijan |
+| --- | ---: | --- |
+| `tests/domain/courses-draft.test.ts` | 17 | El borrador vacío **no** genera errores de estructura; límites de título/descripción/temas; ids únicos y válidos; órdenes enteros sin repetir; `mandatory` booleano; avisos sin bloquear; orden normalizado y determinista; tamaño UTF-8 real |
+| `tests/server/draft-editor.test.ts` | 29 | Primer borrador v1 de un curso sin versiones; reanudar sin duplicar; guardar vacío e incompleto y recuperarlo; crear/editar/reordenar conservando ids, documentos y cuestionarios; obligatorio/opcional en ambos sentidos; la publicada queda idéntica campo a campo; `DRAFT_STALE`, `DRAFT_CONFLICT` y `VERSION_CONFLICT`; carrera de dos aperturas; fallo de persistencia sin escritura ni éxito falso; paridad demo ↔ dobles; el alumnado sigue viendo la versión publicada |
+| `tests/server/draft-form.test.ts` | 13 | Lectura del `FormData` real: reordenar por número, eliminar por casilla o por ausencia, añadir tema, rechazar duplicados, recortar espacios; de formulario a almacén y vuelta; rutas de las acciones con `error` frente a `ok` |
+
+Recorrido HTTP añadido a `scripts/demo-smoke.mjs` (27 comprobaciones nuevas,
+todas en verde):
+
+- el botón «Nueva versión en borrador» crea la v2 y lleva al editor;
+- el editor carga, guarda y **al reabrir aparece lo guardado** (título y tema nuevo);
+- guardar con la revisión vieja devuelve **error** y no toca el contenido bueno;
+- la versión publicada sigue publicada y no lleva el título del borrador;
+- el alumnado no ve el borrador ni en su panel ni en el catálogo;
+- un curso recién creado ofrece «Preparar el primer borrador», la v1 nace sin
+  temas, se guarda vacía y el curso no aparece al alumnado.
+
+Lo que estas pruebas **no** demuestran (y por eso no se afirma):
+
+- que la transacción de Firestore (`createDraftVersion`, `replaceDraftContent`)
+  se comporte así contra un proyecto real: los dobles y la demo son memoria y el
+  emulador no arranca sin JVM;
+- que las reglas permitan o denieguen nada: no se han ejecutado ni desplegado;
+- que el editor funcione con Firebase real (TLS cortado desde este entorno).
+
+Cómo cerrarlo cuando haya entorno:
+
+```bash
+npm run test:rules        # requiere JDK
+npm run test:firestore    # requiere JDK
+npm run check:firebase    # requiere red hacia Google y credenciales
+```

@@ -43,6 +43,8 @@ usan APIs de Node (gRPC, streams) que no deben empaquetarse con el cliente.
 │                 · session.ts (cookie + claims + BD)           │
 │                 · db/schema.ts (esquema y validación)         │
 │                 · courses/catalog.ts (publicar versiones)     │
+│                 · courses/editor.ts (borradores)              │
+│                 · courses/draft-form.ts (formulario)          │
 │                 · assessments/service.ts (corrección)         │
 │                 · learning/store.ts (puertos de progreso)     │
 │                 · import/service.ts (puertos, no Firebase)    │
@@ -160,7 +162,45 @@ adaptador de Firestore. Las claves de corrección viven en una colección aparte
 (`answerKeys`, cerrada al cliente) y la respuesta del servicio contiene solo el
 resultado.
 
-### 4.6 Persistencia de contenido y progreso
+### 4.6 Borradores: abrir, editar y guardar sin publicar
+
+```
+/admin/cursos/{id}            ficha: versiones, validación y acciones
+/admin/cursos/{id}/editar?v=n editor de estructura del borrador
+```
+
+```
+Abrir borrador ──POST startDraftAction──► startDraft
+     lee ficha ─► ¿ya hay borrador? ─sí─► reanuda (no crea otra versión)
+                                    └no─► clona la publicada o crea vacía
+     escribe versión + lastDraftVersion en UNA transacción (estado esperado)
+
+Guardar ──POST saveDraftAction──► parseDraftStructureForm ─► saveDraftStructure
+     estructura (checkDraftStructure) ─► revisión esperada ─► transacción
+     avisos (reviewDraft) se muestran; NO bloquean el guardado
+```
+
+Tres responsabilidades separadas, y cada una en su sitio:
+
+| Nivel | Dónde | Qué hace |
+| --- | --- | --- |
+| Estructura | `domain/courses/draft.ts` → `checkDraftStructure` | Bloquea el guardado solo por forma: identificadores, longitudes, órdenes |
+| Avisos | `reviewDraft` (reutiliza `validateCourseVersion`) | Lo que falta para publicar y lo que conviene mirar; no impide guardar |
+| Publicación | `validateCourseVersion` (sin cambios) | Puerta dura; guardar nunca la relaja |
+
+El **orden de temas se normaliza a 1..n** antes de escribir (desempate por
+identificador, resultado determinista) y el editor **no edita cuestionarios ni
+examen final**: `saveDraftStructure` los conserva por identificador, así que
+guardar la estructura no pierde preguntas ni claves.
+
+Concurrencia y errores: cada guardado lleva la `revision` abierta y la exige en
+el almacén (`DRAFT_STALE` si otra pestaña guardó); abrir un borrador comprueba
+el estado esperado de la ficha (`DRAFT_CONFLICT`) y reintenta leyendo de nuevo,
+de modo que un reintento reanuda en vez de duplicar. La pantalla solo muestra
+«guardado» cuando el servicio ha confirmado; si falla, vuelve al editor con el
+mensaje real.
+
+### 4.7 Persistencia de contenido y progreso
 
 ```
 courses/{courseId}                     título + publishedVersion + lastDraftVersion

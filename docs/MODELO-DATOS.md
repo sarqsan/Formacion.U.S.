@@ -48,7 +48,9 @@ Los dos punteros se leen juntos y significan cosas distintas:
 - `publishedVersion`: la versión visible para el alumnado. `null` ⇒ el curso no
   aparece en el catálogo y nadie puede matricularse en él.
 - `lastDraftVersion`: la última versión guardada como borrador (aunque nunca se
-  publique). Sirve para reanudar la edición.
+  publique). Sirve para reanudar la edición. Al publicar se pone a `null`:
+  publicar **consume** el borrador, y el puntero nunca apunta a una versión que
+  ya no es editable.
 
 **Un curso recién creado tiene los dos a `null`**: existe la ficha y no existe
 ninguna versión. Es un estado válido y deliberado: crear no exige contenido ni
@@ -63,33 +65,62 @@ La segunda petición con el mismo identificador recibe `COURSE_ALREADY_EXISTS`
 
 ```
 {
-  version: number,
+  courseId, version: number,
   status: "draft" | "published" | "archived",
-  title, description,
+  revision?: number,                 // solo la usan los borradores
+  title, description: string | null,
   topics: [
     { id, title, order, mandatory,
-      documents: [{ id, title, pageCount, storagePath, bytes, sha256 }],
-      quizPublic: [{ id, type, optionIds, prompt }]   // SIN respuestas
+      documents: [{ id, title, pageCount }],
+      quiz: [{ id, type, optionIds, prompt }]   // SIN respuestas
     }
   ],
-  finalExamPublic: [{ id, type, optionIds, prompt }],
-  publishedAt, publishedBy
+  finalExam: [{ id, type, optionIds, prompt }],
+  createdAt, createdBy, publishedAt: string | null, publishedBy: string | null
 }
 ```
 
 **Invariante:** una versión publicada no se edita. Cambiar contenido = nueva
 versión (y repetir curso).
 
+`revision` es la **concurrencia optimista del borrador**: empieza en 1, se
+incrementa en cada guardado y el editor exige la que tenía abierta. Guardar con
+una revisión vieja devuelve `DRAFT_STALE` (409) en lugar de pisar el trabajo de
+otra pestaña. Una versión publicada o archivada no se puede modificar de ninguna
+forma (`VERSION_NOT_EDITABLE`, 409), y su `revision` deja de tener sentido.
+
+`topics[].documents` solo guarda la **referencia** (identificador, título y
+páginas): el PDF vive en `documents/{documentId}`, fuera de la versión.
+
+**Coherencia con la ficha (transacción).** `courses.lastDraftVersion` y la
+propia versión se escriben en la **misma** transacción al abrir un borrador:
+
+- si la ficha cambió desde que se leyó ⇒ `DRAFT_CONFLICT` (409) y no se escribe
+  nada, de modo que dos administradores no crean dos borradores;
+- si la versión ya existía y es un borrador ⇒ se **adopta** fijando solo el
+  puntero (datos anteriores al campo `lastDraftVersion`);
+- si existía y no es un borrador ⇒ `VERSION_ALREADY_EXISTS` (409).
+
+Nunca queda una versión huérfana ni un puntero a una versión inexistente, y un
+reintento tras un fallo de red no duplica nada: la segunda pasada ve la ficha ya
+actualizada y **reanuda** el borrador.
+
 ### `answerKeys/{courseId}_{version}_{assessmentId}` — claves de corrección
 
 ```
-{ courseId, version,
+{ courseId, version, createdAt,
   quizByTopic: { [topicId]: [{ id, correctOptionIds }] },
   finalExam: [{ id, correctOptionIds }] }
 ```
 
 Reglas: `allow read, write: if false`. Ni siquiera el administrador las lee
 desde el cliente: las usa el servidor para corregir.
+
+Un borrador puede **no tener** documento de claves: el editor de estructura no
+crea cuestionarios, así que una versión nueva sin preguntas no tiene nada que
+corregir. El servidor lo trata como «sin claves» (`null`), no como error, y la
+definición se reconstruye igual; publicar seguirá exigiendo las claves que
+correspondan al contenido.
 
 ### `progress/{uid}_{courseId}` — progreso por curso
 

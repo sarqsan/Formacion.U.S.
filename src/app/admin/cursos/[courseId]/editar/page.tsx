@@ -141,12 +141,13 @@ export default async function DraftEditorPage({
                 <label className="label" htmlFor="description">
                   Descripción (opcional)
                 </label>
-                <input
+                <textarea
                   id="description"
                   name="description"
                   className="input"
                   defaultValue={view.description ?? ""}
                   maxLength={500}
+                  rows={2}
                 />
               </div>
             </div>
@@ -270,6 +271,22 @@ export default async function DraftEditorPage({
               </span>
             </div>
           </form>
+
+          {view.errors.length > 0 ? (
+            <section className="card p-5">
+              <h2 className="text-sm font-semibold">Este borrador no se puede guardar todavía</h2>
+              <p className="muted mt-1 text-xs">
+                Problemas de estructura en lo que ya hay guardado: corrígelos y vuelve a guardar.
+              </p>
+              <ul className="mt-3 space-y-1">
+                {view.errors.map((issue) => (
+                  <li key={`${issue.code}-${issue.path}`} className="alert alert-error">
+                    <span className="mono text-xs">{issue.path}</span> · {issue.message}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
 
           <section className="card p-5">
             <h2 className="text-sm font-semibold">Qué falta para poder publicar</h2>

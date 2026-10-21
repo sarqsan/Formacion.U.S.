@@ -196,7 +196,12 @@ export class InMemoryCatalogStore implements CourseCatalogStore {
 
     const course = this.courses.get(input.courseId);
     if (!course) throw new Error("CURSO INEXISTENTE");
-    this.courses.set(input.courseId, { ...course, publishedVersion: input.version });
+    // Publicar consume el borrador: el puntero vuelve a null.
+    this.courses.set(input.courseId, {
+      ...course,
+      publishedVersion: input.version,
+      lastDraftVersion: null,
+    });
   }
 
   async createDraftVersion(input: {
@@ -299,7 +304,8 @@ export class InMemoryCatalogStore implements CourseCatalogStore {
       courseId: definition.courseId,
       title: definition.title,
       publishedVersion: definition.version,
-      lastDraftVersion: definition.version,
+      // Publicar no deja borrador: el puntero apunta solo a versiones editables.
+      lastDraftVersion: null,
     });
     this.versions.set(
       key,

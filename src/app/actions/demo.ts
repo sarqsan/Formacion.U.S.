@@ -4,7 +4,11 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { DomainError } from "@/domain/text";
-import { parseDraftStructureForm } from "@/server/courses/draft-form";
+import {
+  draftSavedRedirect,
+  draftStartedRedirect,
+  parseDraftStructureForm,
+} from "@/server/courses/draft-form";
 import type { ImportPreview } from "@/domain/people/import-rows";
 import { DEMO_COOKIE, getUiSession } from "@/demo/session";
 import { demoAccountByUid, resetDemoState } from "@/demo/store";
@@ -349,7 +353,7 @@ export async function startDraftAction(formData: FormData): Promise<void> {
   }
 
   redirect(
-    `${coursePath}/editar?v=${opened.version}&ok=${opened.created ? "borrador" : "reanudado"}`,
+    draftStartedRedirect({ courseId, version: opened.version, created: opened.created }),
   );
 }
 
@@ -371,7 +375,6 @@ export async function saveDraftAction(formData: FormData): Promise<void> {
   const version = Number(formData.get("version") ?? "0");
   const expectedRevision = Number(formData.get("expectedRevision") ?? "0");
   const coursePath = `/admin/cursos/${encodeURIComponent(courseId)}`;
-  const editorPath = `${coursePath}/editar?v=${version}`;
 
   if (!Number.isInteger(version) || version < 1) {
     redirect(`${coursePath}?error=${encodeURIComponent("No se indicó qué borrador guardar.")}`);
@@ -395,15 +398,12 @@ export async function saveDraftAction(formData: FormData): Promise<void> {
     failure = errorMessage(error);
   }
 
-  revalidatePath(editorPath);
+  revalidatePath(`/admin/cursos/${encodeURIComponent(courseId)}/editar`);
   revalidatePath(coursePath);
   revalidatePath("/admin/cursos");
 
-  if (failure) {
-    redirect(`${editorPath}&error=${encodeURIComponent(failure)}`);
-  }
-
-  redirect(`${editorPath}&ok=guardado`);
+  // Un único punto de salida: sin confirmación del servicio, nunca hay «ok».
+  redirect(draftSavedRedirect({ courseId, version, failure }));
 }
 
 // ---------------------------------------------------------------------------

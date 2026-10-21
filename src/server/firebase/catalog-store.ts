@@ -259,6 +259,9 @@ export class FirestoreCourseCatalogStore implements CourseCatalogStore {
         });
         transaction.update(courseRef, {
           publishedVersion: input.version,
+          // Publicar consume el borrador: el puntero no puede quedar apuntando a
+          // una versión que ya es inmutable (el editor dejaría de reanudar).
+          lastDraftVersion: null,
           updatedAt: FieldValue.serverTimestamp(),
         });
       });

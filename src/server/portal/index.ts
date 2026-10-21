@@ -3,6 +3,7 @@ import { assertAdmin, type Actor } from "@/domain/auth/authorization";
 import type { CourseVersionDefinition } from "@/domain/courses/content";
 import type { ImportPreview } from "@/domain/people/import-rows";
 import type { ImportDependencies } from "@/server/import/service";
+import type { DraftStructure } from "@/server/courses/editor";
 import { submitAssessment } from "@/server/assessments/service";
 import { parsePeopleWorkbook } from "@/server/import/excel";
 import { buildImportPreview } from "@/server/import/service";
@@ -254,7 +255,7 @@ export async function adminSaveDraftStructure(
     courseId: string;
     version: number;
     expectedRevision: number;
-    structure: import("@/server/courses/editor").DraftStructure;
+    structure: DraftStructure;
   },
 ) {
   assertAdmin(actor);
