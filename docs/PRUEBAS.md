@@ -609,7 +609,7 @@ bloque publica, sube PDF ni edita cuestionarios.**
 | Integración con emulador | `npm run test:firestore` | **BLOQUEADO** por el mismo motivo |
 | Conexión real | `npm run check:firebase` | **BLOQUEADO**: TLS hacia Google se corta desde el sandbox. Sin credenciales usadas |
 
-Pruebas nuevas (45):
+Pruebas nuevas (59):
 
 | Fichero | Pruebas | Qué fijan |
 | --- | ---: | --- |
