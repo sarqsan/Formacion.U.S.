@@ -164,12 +164,14 @@ service cloud.firestore {
     // ni identificadores de Storage: el binario se pide al servidor por
     // ventana de bytes y nunca se puede enlazar directamente.
     //
-    // Fase 6: solo se leen los metadatos de documentos de un curso en el que
-    // el usuario tiene matrícula activa. El binario, en cualquier caso, no se
-    // puede leer desde el cliente (ver `pdfChunks`).
+    // Metadatos de documentos PDF: SOLO SERVIDOR desde el esquema v2.
+    // Antes se leían con matrícula activa en el curso del documento; eso
+    // alcanzaba también a los documentos de borradores (ADR-021).
+    // Contienen título, páginas y tamaño, y también existen para documentos de
+    // versiones en borrador: un alumno no debe poder verlos aunque conozca el
+    // identificador. El servidor los lee con el Admin SDK para servir páginas.
     match /documents/{documentId} {
-      allow read: if isAdmin() || isEnrolled(resource.data.courseId);
-      allow write: if false;
+      allow read, write: if false;
     }
 
     // Fragmentos binarios de los PDF (Firestore, no Storage): solo servidor.

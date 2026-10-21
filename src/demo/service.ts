@@ -19,10 +19,12 @@ import {
   type DocumentView,
 } from "@/server/portal/learner";
 import { publishCourseVersion, updateDraftVersion, saveDraftVersion } from "@/server/courses/catalog";
+import { createCourse, type CourseEditorDependencies } from "@/server/courses/editor";
 import type { AttemptRecord, StoredProgress } from "@/server/learning/store";
 import { screensForDocument, type DemoScreen } from "@/demo/content";
 import {
   DemoCatalogStore,
+  DemoCourseEditorStore,
   DemoEnrollmentStore,
   DemoLearningStore,
   definitionOf,
@@ -58,6 +60,10 @@ export function demoDeps() {
 /** Instancias sin estado: el estado vive en `demoState()`. */
 function catalogStore(): DemoCatalogStore {
   return new DemoCatalogStore();
+}
+
+function demoCourseEditorDeps(): CourseEditorDependencies {
+  return { store: new DemoCourseEditorStore() };
 }
 
 export function accountLabel(uid: string): string {
@@ -249,6 +255,8 @@ export interface AdminCourseRow {
   courseId: string;
   title: string;
   publishedVersion: number | null;
+  /** Última versión guardada como borrador; null si el curso no tiene ninguna. */
+  lastDraftVersion: number | null;
   versions: Array<{ version: number; status: string; title: string }>;
   drafts: number;
 }
@@ -260,6 +268,7 @@ export function adminCourses(): AdminCourseRow[] {
       courseId: summary.courseId,
       title: summary.title,
       publishedVersion: summary.publishedVersion,
+      lastDraftVersion: summary.lastDraftVersion,
       versions,
       drafts: versions.filter((version) => version.status === "draft").length,
     };
@@ -434,6 +443,14 @@ export async function adminEnroll(actor: Actor, uid: string, courseId: string) {
 
 export async function adminRevokeEnrollment(actor: Actor, uid: string, courseId: string) {
   return revokeEnrollment({ actor, uid, courseId }, demoDeps());
+}
+
+/** Crea un curso vacío (sin versiones) a partir de la plantilla vacía. */
+export async function adminCreateCourse(
+  actor: Actor,
+  input: { courseId: string; title: string; description?: string },
+) {
+  return createCourse({ ...input, actor }, demoCourseEditorDeps());
 }
 
 export async function adminSaveDraft(actor: Actor, definition: CourseVersionDefinition) {

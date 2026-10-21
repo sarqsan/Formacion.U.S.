@@ -9,6 +9,7 @@ import type { ImportPreview } from "@/domain/people/import-rows";
 import { DEMO_COOKIE, getUiSession } from "@/demo/session";
 import { demoAccountByUid, resetDemoState } from "@/demo/store";
 import {
+  adminCreateCourse,
   adminEnroll,
   adminNewDraft,
   adminPublish,
@@ -205,6 +206,46 @@ export async function submitQuizAction(
 // ---------------------------------------------------------------------------
 // Administración
 // ---------------------------------------------------------------------------
+
+/**
+ * Crea un curso vacío (sin versiones).
+ *
+ * No crea ningún borrador ni publica: el curso existe y nada más. Si el
+ * servidor rechaza la operación (identificador repetido o no válido), se
+ * vuelve al formulario con el mensaje del servicio; no se informa de un alta
+ * que no ha ocurrido.
+ */
+export async function createCourseAction(formData: FormData): Promise<void> {
+  const actor = await actorOrNull();
+  if (!actor) redirect("/login");
+
+  const courseId = String(formData.get("courseId") ?? "").trim();
+  const title = String(formData.get("title") ?? "").trim();
+  const description = String(formData.get("description") ?? "").trim();
+
+  let failure: string | null = null;
+  let created: { courseId: string } | null = null;
+  try {
+    created = await adminCreateCourse(actor, {
+      courseId,
+      title,
+      ...(description ? { description } : {}),
+    });
+  } catch (error) {
+    failure = errorMessage(error);
+  }
+
+  revalidatePath("/admin/cursos");
+  revalidatePath("/admin");
+
+  if (failure || !created) {
+    redirect(
+      `/admin/cursos/nuevo?error=${encodeURIComponent(failure ?? "No se pudo crear el curso.")}`,
+    );
+  }
+
+  redirect(`/admin/cursos/${encodeURIComponent(created.courseId)}?ok=creado`);
+}
 
 export async function enrollAction(formData: FormData): Promise<void> {
   const actor = await actorOrNull();

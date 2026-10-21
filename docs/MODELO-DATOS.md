@@ -41,7 +41,23 @@ es su hash.
 
 ### `courses/{courseId}` — curso
 
-`{ title, description, publishedVersion: number | null, createdAt, updatedAt }`
+`{ courseId, title, description?, publishedVersion: number | null, lastDraftVersion: number | null, createdAt, createdBy, updatedAt }`
+
+Los dos punteros se leen juntos y significan cosas distintas:
+
+- `publishedVersion`: la versión visible para el alumnado. `null` ⇒ el curso no
+  aparece en el catálogo y nadie puede matricularse en él.
+- `lastDraftVersion`: la última versión guardada como borrador (aunque nunca se
+  publique). Sirve para reanudar la edición.
+
+**Un curso recién creado tiene los dos a `null`**: existe la ficha y no existe
+ninguna versión. Es un estado válido y deliberado: crear no exige contenido ni
+publicación, y no se inventa una versión vacía para «poder empezar».
+
+Crear es **una sola escritura** (`create()`, no `set()`): atómica por sí misma y
+sin posibilidad de sobrescribir un curso existente, que perdería su historial.
+La segunda petición con el mismo identificador recibe `COURSE_ALREADY_EXISTS`
+(409).
 
 ### `courses/{courseId}/versions/{n}` — versión inmutable
 
@@ -125,13 +141,25 @@ contenido**. Reglas:
 - Índice compuesto `uid`, `courseId`: permite listar las matrículas de un
   alumno y los alumnos de un curso sin recorrer la colección.
 
-### `documents/{documentId}` — metadatos de PDF (sin binario)
+### `documents/{documentId}` — metadatos de PDF (sin binario, solo servidor)
 
-`{ courseId, version, topicId, title, pageCount, bytes, sha256, chunkLengths, uploadedBy, uploadedAt, archived }`
+`{ courseId, version, originVersion, topicId, title, pageCount, bytes, sha256, chunkLengths, uploadedBy, uploadedAt, archived }`
 
-No hay ruta de Storage ni URL: **el binario no tiene ubicación pública**. Los
-metadatos son lo único legible desde el cliente, solo para cursos con matrícula
-activa, y solo contienen título, páginas y tamaño.
+No hay ruta de Storage ni URL: **el binario no tiene ubicación pública**.
+
+**Desde el esquema v2 esta colección es solo-servidor** (`allow read, write: if
+false`). Antes la leía cualquier cuenta con matrícula activa en el curso, y eso
+incluía los metadatos de documentos de **borradores**: un alumno que conociera
+un identificador podía leer títulos y números de páginas no publicados. Los
+metadatos los necesita el servidor, no el navegador: la API de documentos los
+lee con el Admin SDK y comprueba sesión, matrícula y publicación.
+
+`originVersion` es la versión en la que se subió el documento. Se escribe junto
+a `version` (que se conserva para que una versión anterior del código siga
+leyendo lo mismo) y en lectura se usa `originVersion ?? version`: **los
+documentos antiguos no se migran**, se interpretan igual. La autorización de
+lectura no depende de la versión grabada en el documento (ver ADR de la
+estrategia de PDF, pendiente de implementación en un bloque posterior).
 
 ### `pdfChunks/{documentId}_{n}` — fragmentos del PDF (solo servidor)
 
@@ -202,6 +230,7 @@ código usa de verdad (Firestore crea los de un campo automáticamente):
 | `attempts` | `courseId`, `version`, `at desc` | revisión por curso |
 | `documents` | `courseId`, `version`, `topicId` | documentos de un tema |
 | `enrollments` | `uid`, `courseId` | matrículas de un alumno / alumnos de un curso |
+| `enrollments` | `courseId`, `status` | matrículas **activas** de un curso (recuento de impacto al publicar) |
 
 Mantener los índices al día es un problema de deriva: `tests/server/schema-drift.test.ts`
 falla si un índice apunta a una colección que no existe en
@@ -223,13 +252,27 @@ real contra la base de datos para detectar el índice que falte.
 | `progressHistory` | propia, o todas si admin | ✗ |
 | `attempts` | admin | ✗ |
 | `meta` | ✗ | ✗ |
-| `documents` | matriculado en el curso del documento (solo metadatos) | ✗ |
+| `documents` | ✗ (solo servidor desde el esquema v2) | ✗ |
 | `pdfChunks` | ✗ | ✗ |
 | cualquier otra ruta (incl. `versions`) | vía `courses` publicada | ✗ |
 
 Consecuencia: aunque alguien ejecute JavaScript propio en el navegador, no
 puede marcar un intento como aprobado, ni escribir progreso, ni cambiar su rol,
 ni leer las respuestas correctas.
+
+## 3 bis. Versión del esquema
+
+`meta/schema.schemaVersion` = **2**. Los cambios de la v2 son aditivos y no
+exigen migración:
+
+| Cambio | Compatibilidad |
+| --- | --- |
+| `documents` deja de ser legible por el cliente | no rompe nada: la aplicación nunca leyó Firestore desde el navegador |
+| `documents.originVersion` | los documentos v1 no lo tienen; se lee `originVersion ?? version` |
+| `courses.lastDraftVersion` | ausente en cursos v1; se interpreta `null` |
+
+`db:init` se niega a degradar un esquema más nuevo, y `db:check` avisa si la
+base sigue en una versión anterior.
 
 ## 4. Versionado: semántica exacta
 

@@ -88,7 +88,13 @@ export interface AnswerKeysDocument {
 export interface CourseSummary {
   courseId: string;
   title: string;
+  /** Versión visible para el alumnado; `null` mientras el curso no se publica. */
   publishedVersion: number | null;
+  /**
+   * Última versión guardada como borrador (aunque nunca se publique); `null`
+   * en un curso recién creado, que por tanto no tiene ninguna versión.
+   */
+  lastDraftVersion: number | null;
 }
 
 /** Puerto de persistencia del catálogo (implementación Firestore aparte). */
@@ -97,7 +103,14 @@ export interface CourseCatalogStore {
   listVersions(courseId: string): Promise<CourseVersionSummary[]>;
   getVersion(courseId: string, version: number): Promise<CourseVersionDocument | null>;
   getAnswerKeys(courseId: string, version: number): Promise<AnswerKeysDocument | null>;
-  /** Escribe versión en borrador y sus claves en una sola operación. */
+  /**
+   * Escribe versión en borrador y sus claves en una sola operación.
+   *
+   * `course` es la ficha que el llamador quiere persistir (título y última
+   * versión de borrador). La implementación **nunca** cambia
+   * `publishedVersion` aquí: publicar es otra operación, con su propio
+   * invariante.
+   */
   saveVersion(input: {
     course: CourseSummary;
     version: CourseVersionDocument;
@@ -248,6 +261,7 @@ export async function saveDraftVersion(
       courseId: input.definition.courseId,
       title: publicVersion.title,
       publishedVersion: null,
+      lastDraftVersion: publicVersion.version,
     },
     version: publicVersion,
     answerKeys,

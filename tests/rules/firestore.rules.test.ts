@@ -497,11 +497,14 @@ describe("9. intentos y documentos", () => {
     await assertFails(setDoc(doc(adminDb(), "attempts", "falso"), { passed: true }));
   });
 
-  it("el alumno lee metadatos de documentos de un curso matriculado", async () => {
-    await assertSucceeds(getDoc(doc(learnerDb(), "documents", "doc-1")));
-    // Inactivo aunque esté matriculado: no.
+  it("nadie lee metadatos de documentos desde el cliente (esquema v2)", async () => {
+    // Los metadatos incluyen también los de documentos en borrador: si el
+    // cliente pudiera leerlos, conocer un id expondría títulos y páginas no
+    // publicados. El servidor los lee con el Admin SDK (que no pasa por reglas).
+    await assertFails(getDoc(doc(learnerDb(), "documents", "doc-1")));
+    await assertFails(getDocs(collection(learnerDb(), "documents")));
+    await assertFails(getDoc(doc(adminDb(), "documents", "doc-1")));
     await assertFails(getDoc(doc(disabledDb(), "documents", "doc-1")));
-    // Matrícula revocada: no.
     await assertFails(getDoc(doc(otherDb(), "documents", "doc-1")));
   });
 

@@ -208,6 +208,25 @@ export async function definitionOf(
 // Administración (escritura)
 // ---------------------------------------------------------------------------
 
+/**
+ * Crea un curso vacío a partir de la plantilla vacía.
+ *
+ * Es la primera pieza del ciclo de vida: nace sin versiones
+ * (`publishedVersion` y `lastDraftVersion` a null). No hay conmutación
+ * silenciosa: en modo real escribe en Firestore, en demostración en memoria, y
+ * un fallo de Firestore se muestra como error (503), nunca se sustituye por el
+ * almacén de la demostración.
+ */
+export async function adminCreateCourse(
+  actor: Actor,
+  input: { courseId: string; title: string; description?: string },
+) {
+  assertAdmin(actor);
+  return portalMode() === "demo"
+    ? demo.adminCreateCourse(actor, input)
+    : firebase.adminCreateCourse(actor, input);
+}
+
 export async function adminEnroll(actor: Actor, uid: string, courseId: string) {
   return portalMode() === "demo"
     ? demo.adminEnroll(actor, uid, courseId)

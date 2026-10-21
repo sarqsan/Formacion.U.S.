@@ -554,3 +554,41 @@ Sigue **sin ejecutarse** contra el proyecto `formacionus-63555`: no hay credenci
 este entorno y no se escribe en el proyecto real sin autorización. El ID del
 proyecto está confirmado por el usuario; `apiKey` y `appId` no, porque dependen
 de la app web registrada.
+
+## 15. Bloque 03 — cimientos del ciclo de vida de los cursos (21/10/2026)
+
+Alcance ejecutado: esquema v2 (retirada de `documents` de las colecciones
+legibles por el cliente), índice compuesto de matrículas, módulo de plantillas,
+servicio de creación de cursos y página `/admin/cursos/nuevo`.
+
+| Comprobación | Comando | Resultado |
+| --- | --- | --- |
+| Cadena completa | `npm run verify` | **exit 0**: tipado 0 errores, lint 0 avisos, **579 pruebas en verde**, build con `/admin/cursos/nuevo` entre las rutas |
+| Pruebas totales | `npm test` | **579 pasan**, 4 omitidas (integración con emulador), 38 ficheros |
+| Recorrido de la demostración | `DEMO_MODE=1 npx next start -p 3100` + `node scripts/demo-smoke.mjs http://127.0.0.1:3100` | **PASSED** (19 comprobaciones), igual que antes del bloque |
+| Alta de curso por HTTP | guion propio contra el servidor anterior: formulario real, acciones de servidor sin JavaScript | **18 comprobaciones, PASSED** (detalle abajo) |
+| Reglas de Firestore | `npm run test:rules` | **BLOQUEADO**: sin JVM el emulador no arranca. 41 pruebas escritas, **0 ejecutadas** |
+| Integración con emulador | `npm run test:firestore` | **BLOQUEADO** por el mismo motivo (4 pruebas omitidas) |
+| Conexión real | `npm run check:firebase` | **BLOQUEADO**: TLS hacia Google se corta desde el sandbox. Sin credenciales usadas |
+
+Pruebas nuevas:
+
+| Fichero | Pruebas | Qué fijan |
+| --- | ---: | --- |
+| `tests/domain/course-template.test.ts` | 15 | La definición vacía no es publicable (y se guarda igual); clonación profunda con independencia en los dos sentidos; metadatos nuevos sin publicación |
+| `tests/server/course-editor.test.ts` | 12 | Curso nuevo con `publishedVersion` y `lastDraftVersion` a null; no sobrescribe; permisos; paridad demo/real |
+| `tests/server/schema.test.ts` (ampliado) | +5 | `documents` ya no es legible por el cliente; validación de la ficha del curso |
+| `tests/server/schema-drift.test.ts` (ampliado) | +2 | Reglas cierran `documents`; el índice `enrollments(courseId,status)` está declarado y no falta ninguno previo |
+
+Comprobaciones por HTTP de la página nueva (18, todas en verde): el alumno es
+redirigido a `/panel` y sin sesión a `/login`; el administrador ve el formulario;
+crear devuelve 303 a `/admin/cursos/{id}?ok=creado`; la ficha confirma el alta y
+dice «Este curso no tiene versiones»; el curso aparece en el listado marcado
+como sin versiones; no aparece en el panel del alumno; un identificador repetido
+se rechaza **sin sobrescribir** el curso existente; un identificador inválido se
+rechaza en el servidor aunque el navegador no lo hubiera validado.
+
+Lo que estas pruebas **no** demuestran: que Firestore escriba la ficha (los
+dobles son en memoria), que `create()` traduzca ALREADY_EXISTS en el servicio
+real, ni que las reglas se comporten así al desplegarlas. Eso sigue pendiente de
+un entorno con JDK y credenciales.

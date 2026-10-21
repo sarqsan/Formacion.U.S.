@@ -58,6 +58,15 @@
       ]
     },
     {
+      "$comment": "Panel de publicación: matrículas activas de un curso (recuento de impacto)",
+      "collectionGroup": "enrollments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "courseId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
       "$comment": "Documentos de un tema",
       "collectionGroup": "documents",
       "queryScope": "COLLECTION",

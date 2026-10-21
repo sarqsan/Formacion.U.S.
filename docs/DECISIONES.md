@@ -443,3 +443,65 @@ se copian de la consola cuando el usuario los facilite.
   existe en el servidor.
 - Añadir una función nueva supone implementarla una vez en la interfaz y dos en
   la capa de datos; el compilador avisa si falta una de las dos.
+
+## ADR-021 · Los metadatos de documentos son solo-servidor
+
+**Contexto.** Hasta el esquema v1, `firestore.rules` permitía leer
+`documents/{documentId}` a cualquier cuenta activa matriculada en el curso del
+documento. El razonamiento era que solo contenía metadatos (título, páginas,
+tamaño). Con el ciclo de vida de cursos aparece un caso que ese razonamiento no
+cubría: los metadatos de un documento de una versión **en borrador**. Un alumno
+matriculado que conociera un identificador podía leer el título y el número de
+páginas de material que todavía no se ha publicado. La aplicación nunca ha
+leído Firestore desde el navegador (todo pasa por el servidor con el Admin
+SDK), así que la regla no aportaba ninguna funcionalidad: solo superficie.
+
+**Decisión.** `documents` pasa a `allow read, write: if false` y sale de
+`CLIENT_READABLE_COLLECTIONS`, que ahora enumera exactamente las colecciones
+que las reglas abren al cliente. Los metadatos se sirven únicamente desde el
+servidor, en las rutas que ya comprueban sesión, matrícula y publicación.
+
+**Consecuencias.**
+
+- Un identificador conocido no revela nada: ni el documento ni sus metadatos.
+- Las pruebas de deriva obligan a que la lista de colecciones legibles y las
+  reglas sigan coincidiendo; `tests/rules` fija la expectativa de que **ni el
+  administrador** lee `documents` desde el cliente.
+- El cambio no exige migrar datos ni desplegar reglas para que la aplicación
+  siga funcionando (el servidor no pasa por reglas). Sí hay que desplegarlas
+  para que la barrera exista: **no se ha hecho desde este entorno**.
+
+## ADR-022 · Un curso nace sin versiones; las plantillas clonan sin compartir estado
+
+**Contexto.** El alta de cursos no existía. La tentación, para reutilizar el
+editor que ya había, era crear una «versión 1 vacía» al crear el curso y exigir
+que estuviera completa para poder guardarla. Eso tiene dos efectos malos:
+obliga a inventar contenido para que exista el curso, y debilita la validación
+de publicación si se relaja para permitirlo.
+
+**Decisión.**
+
+1. Crear un curso escribe **una sola ficha** con `publishedVersion: null` y
+   `lastDraftVersion: null`. No se crea ninguna versión y no se exige contenido
+   ni publicación. El borrador incompleto es un estado legítimo y se guardará
+   en el bloque siguiente; la puerta de publicación (`validateCourseVersion`)
+   no se relaja.
+2. El alta usa `create()` y no `set()`: crear nunca sobrescribe un curso
+   existente. Al ser una sola escritura atómica, no hace falta transacción; se
+   usará cuando el curso y su primera versión se creen a la vez.
+3. Las plantillas viven en `src/domain/courses/template.ts`. La definición
+   vacía no valida para publicar (a propósito) y la clonación de una versión
+   para un borrador es una **reconstrucción campo a campo**, no un clon
+   genérico: el compilador obliga a revisar el clon cuando se añada un campo
+   nuevo, que es justo la situación en la que dos versiones acabarían
+   compartiendo un array. Los metadatos (fecha y autoría) nunca se copian: la
+   versión nueva se creó ahora y por quien está operando ahora.
+
+**Consecuencias.**
+
+- «Sin versiones» es un estado visible y explicable en el panel, no un error.
+- Un curso sin versión publicada no aparece en el catálogo y no admite
+  matrículas.
+- Las pruebas fijan las dos propiedades: estado inicial con los dos punteros a
+  null, y clonación con independencia en todos los niveles de anidamiento
+  (temas, documentos, cuestionarios, opciones y claves).

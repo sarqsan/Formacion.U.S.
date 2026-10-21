@@ -14,6 +14,17 @@ import {
 
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
+/**
+ * Forma válida de un identificador de curso, tema o documento.
+ *
+ * Se exporta para que la creación de cursos y las plantillas usen **la misma**
+ * regla que la validación de contenido: si divergieran, se podría crear un
+ * curso que después ninguna versión podría guardar.
+ */
+export function isSlug(value: string): boolean {
+  return typeof value === "string" && SLUG_PATTERN.test(value);
+}
+
 export interface TopicDocumentDefinition {
   id: string;
   title: string;

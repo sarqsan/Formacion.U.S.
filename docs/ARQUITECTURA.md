@@ -163,10 +163,10 @@ resultado.
 ### 4.6 Persistencia de contenido y progreso
 
 ```
-courses/{courseId}                     título + publishedVersion
+courses/{courseId}                     título + publishedVersion + lastDraftVersion
 courses/{courseId}/versions/{n}        contenido público (nunca respuestas)
 answerKeys/{courseId}_v{n}_{eval}      claves de corrección (solo servidor)
-documents/{documentId}                metadatos de PDF (sin binario ni rutas)
+documents/{documentId}                metadatos de PDF (sin binario ni rutas, solo servidor)
 pdfChunks/{documentId}_{n}            fragmentos del PDF (Bytes, solo servidor)
 progress/{uid}_{courseId}              estado de la versión en curso
 progressHistory/{uid}_{courseId}_v{n}  progreso archivado al cambiar de versión

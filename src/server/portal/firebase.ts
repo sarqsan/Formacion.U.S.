@@ -17,11 +17,11 @@ import { enrollStudent, revokeEnrollment } from "@/server/enrollments/service";
 import { submitAssessment } from "@/server/assessments/service";
 import { parsePeopleWorkbook } from "@/server/import/excel";
 import { buildImportPreview } from "@/server/import/service";
-import { importDependencies } from "@/server/deps";
-import { documentDependencies } from "@/server/deps";
+import { courseEditorDependencies, documentDependencies, importDependencies } from "@/server/deps";
 import { readDocumentPages, uploadPdfDocument } from "@/server/documents/service";
 import { getAdminDb } from "@/server/firebase/admin";
 import { FirestoreCourseCatalogStore } from "@/server/firebase/catalog-store";
+import { createCourse } from "@/server/courses/editor";
 import { FirestoreEnrollmentStore } from "@/server/firebase/enrollment-store";
 import { FirestoreLearningStore } from "@/server/firebase/learning-store";
 import { guard } from "@/server/firebase/repositories";
@@ -313,6 +313,8 @@ export interface AdminCourseRow {
   courseId: string;
   title: string;
   publishedVersion: number | null;
+  /** Última versión guardada como borrador; null si el curso no tiene ninguna. */
+  lastDraftVersion: number | null;
   versions: Array<{ version: number; status: string; title: string }>;
   drafts: number;
 }
@@ -325,7 +327,11 @@ export async function adminCourses(actor: Actor): Promise<AdminCourseRow[]> {
     const rows: AdminCourseRow[] = [];
 
     for (const doc of snapshot.docs) {
-      const data = doc.data() as { title?: string; publishedVersion?: number | null };
+      const data = doc.data() as {
+        title?: string;
+        publishedVersion?: number | null;
+        lastDraftVersion?: number | null;
+      };
       const versions = await deps.catalog.listVersions(doc.id);
       const detailed: Array<{ version: number; status: string; title: string }> = [];
       for (const version of versions) {
@@ -341,6 +347,7 @@ export async function adminCourses(actor: Actor): Promise<AdminCourseRow[]> {
         courseId: doc.id,
         title: data.title ?? doc.id,
         publishedVersion: data.publishedVersion ?? null,
+        lastDraftVersion: data.lastDraftVersion ?? null,
         versions: detailed,
         drafts: detailed.filter((version) => version.status === "draft").length,
       });
@@ -555,6 +562,21 @@ export async function adminEnroll(actor: Actor, uid: string, courseId: string) {
 
 export async function adminRevokeEnrollment(actor: Actor, uid: string, courseId: string) {
   return guard(() => revokeEnrollment({ actor, uid, courseId }, firestoreDeps()));
+}
+
+/**
+ * Crea un curso vacío (sin versiones) a partir de la plantilla vacía.
+ *
+ * Escribe una sola ficha y no crea ninguna versión: el curso queda con
+ * `publishedVersion` y `lastDraftVersion` a null para que el editor del bloque
+ * siguiente guarde su primer borrador.
+ */
+export async function adminCreateCourse(
+  actor: Actor,
+  input: { courseId: string; title: string; description?: string },
+) {
+  assertAdmin(actor);
+  return createCourse({ ...input, actor }, courseEditorDependencies());
 }
 
 export async function adminSaveDraft(actor: Actor, definition: CourseVersionDefinition) {

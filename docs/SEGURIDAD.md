@@ -161,12 +161,18 @@ reglas), así que un fallo en las reglas no rompe la app ni abre el acceso vía
 servidor; pero sí podría dejar datos expuestos a un cliente manipulado.
 Primera acción pendiente: `npm run test:rules` en un entorno con JDK 11+.
 
-### 5.7c Metadatos de documentos visibles para cualquier cuenta activa
-La regla de `documents` deja leer metadatos a cualquier cuenta activa, sin
-comprobar pertenencia al curso (no existe aún modelo de matriculación). No
-expone el PDF —los fragmentos están en `pdfChunks`, cerrados a todo cliente y
-sin identificador adivinable útil— solo títulos, número de páginas y tamaño.
-Se cerrará cuando se defina la matriculación.
+### 5.7c (cerrado en el bloque 03) Metadatos de documentos visibles para el cliente
+La regla de `documents` permitía leer metadatos a cualquier cuenta activa
+matriculada en el curso. Con el ciclo de vida de cursos eso alcanzaba también a
+los documentos de **borradores**: quien conociera un identificador veía título y
+páginas de material no publicado.
+
+Cerrado por diseño, no por filtro: `documents` pasa a solo-servidor
+(`allow read, write: if false`) y sale de `CLIENT_READABLE_COLLECTIONS`. La
+aplicación nunca leyó Firestore desde el navegador, así que la regla no daba
+ninguna funcionalidad; solo superficie. Queda pendiente **desplegar** las reglas
+y ejecutar `npm run test:rules` en un entorno con JDK: desde aquí no se han
+publicado ni verificado (ver 5.6).
 
 ### 5.8 Cuota de almacenamiento (nuevo en fase 4)
 Los PDF comparten la cuota de 1 GiB de Firestore con el resto de la base de

@@ -9,8 +9,8 @@ import type { PdfDocumentMeta, PdfDocumentStore, StoredChunk } from "@/server/do
  * PDF EN FIRESTORE (adaptador)
  * ===========================
  *
- *   documents/{documentId}       metadatos. Legible por cuentas activas: solo
- *                                título, páginas y tamaños. Sin binario.
+ *   documents/{documentId}       metadatos. SOLO SERVIDOR desde el esquema v2:
+ *                                el cliente no los lee ni conociendo el id.
  *   pdfChunks/{documentId}_{n}   `data` como Bytes. Solo servidor.
  *   meta/storage                 contador `usedBytes` de la cuota de PDF.
  *
@@ -46,14 +46,17 @@ export class FirestorePdfDocumentStore implements PdfDocumentStore {
       const snapshot = await getAdminDb().collection(COLLECTIONS.documents).doc(documentId).get();
       if (!snapshot.exists) return null;
       const data = snapshot.data() as
-        | (Partial<PdfDocumentMeta> & { archived?: boolean })
+        | (Partial<PdfDocumentMeta> & { archived?: boolean; originVersion?: number })
         | undefined;
       if (!data || data.archived === true) return null;
 
       return {
         documentId,
         courseId: String(data.courseId ?? ""),
-        version: Number(data.version ?? 0),
+        // Compatibilidad v1 → v2: los documentos nuevos guardan `originVersion`
+        // (la versión en la que se subieron) y los antiguos solo `version`. Se
+        // lee el primero y se cae al segundo, sin migrar ningún dato.
+        version: Number(data.originVersion ?? data.version ?? 0),
         topicId: String(data.topicId ?? ""),
         title: String(data.title ?? ""),
         pageCount: Number(data.pageCount ?? 0),
@@ -120,7 +123,10 @@ export class FirestorePdfDocumentStore implements PdfDocumentStore {
         transaction.set(metaRef, {
           documentId: input.meta.documentId,
           courseId: input.meta.courseId,
+          // Se escribe el campo nuevo y se conserva el antiguo para que una
+          // versión anterior del código siga leyendo lo mismo.
           version: input.meta.version,
+          originVersion: input.meta.version,
           topicId: input.meta.topicId,
           title: input.meta.title,
           pageCount: input.meta.pageCount,

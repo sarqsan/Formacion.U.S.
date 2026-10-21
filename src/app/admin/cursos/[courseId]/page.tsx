@@ -12,6 +12,7 @@ import {
 export const dynamic = "force-dynamic";
 
 const MESSAGES: Record<string, string> = {
+  creado: "Curso creado. Todavía no tiene versiones: no está publicado ni visible para el alumnado.",
   guardado: "Borrador guardado. El contenido publicado no ha cambiado.",
   publicada: "Versión publicada. Quien tenía el curso empezado lo repetirá desde el principio.",
   borrador: "Versión nueva creada en borrador a partir de la publicada.",
@@ -71,9 +72,14 @@ export default async function AdminCoursePage({
           <p className="muted mono mt-1 text-xs">{detail.courseId}</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Link href={`/admin/cursos/${detail.courseId}?v=${detail.publishedVersion ?? 1}`} className="btn btn-secondary">
-            Ver estructura
-          </Link>
+          {detail.versions.length > 0 ? (
+            <Link
+              href={`/admin/cursos/${detail.courseId}?v=${detail.publishedVersion ?? detail.versions[0].version}`}
+              className="btn btn-secondary"
+            >
+              Ver estructura
+            </Link>
+          ) : null}
           {detail.publishedVersion !== null ? (
             <form action={newDraftAction}>
               <input type="hidden" name="courseId" value={detail.courseId} />
@@ -102,7 +108,13 @@ export default async function AdminCoursePage({
       </div>
 
       {!selected ? (
-        <div className="card p-5 muted text-sm">Este curso no tiene versiones.</div>
+        <div className="card p-5 muted text-sm">
+          <p className="font-semibold text-[var(--foreground)]">Este curso no tiene versiones.</p>
+          <p className="mt-1">
+            Se creó vacío a propósito: no está publicado, no aparece en el catálogo del alumnado y
+            no se puede matricular a nadie en él.
+          </p>
+        </div>
       ) : (
         <>
           <section className="card p-5">

@@ -12,6 +12,7 @@ import {
   type PublicDocument,
 } from "@/server/courses/catalog";
 import type { CourseVersionStatus, CourseVersionSummary } from "@/domain/courses/versioning";
+import type { CourseEditorStore } from "@/server/courses/editor";
 import type { EnrollmentStore } from "@/server/enrollments/store";
 import type { AttemptRecord, LearningStore, StoredProgress } from "@/server/learning/store";
 import {
@@ -77,7 +78,12 @@ function seedState(): DemoState {
     let record = state.courses.get(definition.courseId);
     if (!record) {
       record = {
-        summary: { courseId: definition.courseId, title: definition.title, publishedVersion: null },
+        summary: {
+          courseId: definition.courseId,
+          title: definition.title,
+          publishedVersion: null,
+          lastDraftVersion: null,
+        },
         versions: new Map(),
       };
       state.courses.set(definition.courseId, record);
@@ -101,6 +107,7 @@ function seedState(): DemoState {
       version,
       keys: toAnswerKeys(definition, { createdAt }),
     });
+    record.summary.lastDraftVersion = definition.version;
   }
 
   for (const enrollment of DEMO_ENROLLMENTS) {
@@ -297,7 +304,7 @@ export class DemoCatalogStore implements CourseCatalogStore {
   }): Promise<void> {
     const state = demoState();
     const record = state.courses.get(input.course.courseId) ?? {
-      summary: { ...input.course, publishedVersion: null },
+      summary: { ...input.course, publishedVersion: null, lastDraftVersion: null },
       versions: new Map(),
     };
 
@@ -313,6 +320,7 @@ export class DemoCatalogStore implements CourseCatalogStore {
       ...record.summary,
       title: input.version.title,
       publishedVersion: record.summary.publishedVersion ?? null,
+      lastDraftVersion: Math.max(record.summary.lastDraftVersion ?? 0, input.version.version),
     };
     record.versions.set(input.version.version, {
       version: input.version,
@@ -381,6 +389,47 @@ export class DemoCatalogStore implements CourseCatalogStore {
   async listDocuments(courseId: string, version: number, topicId: string): Promise<PublicDocument[]> {
     const document = await this.getVersion(courseId, version);
     return document?.topics.find((topic) => topic.id === topicId)?.documents ?? [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Editor de cursos (creación)
+// ---------------------------------------------------------------------------
+
+/**
+ * Creación de cursos en memoria.
+ *
+ * Reproduce la invariante que importa del adaptador real: crear **no**
+ * sobrescribe un curso existente y deja `publishedVersion` y
+ * `lastDraftVersion` a null (curso sin versiones). No reproduce transacciones
+ * de Firestore porque aquí no las hay: el estado es de un solo proceso.
+ */
+export class DemoCourseEditorStore implements CourseEditorStore {
+  async getCourse(courseId: string): Promise<CourseSummary | null> {
+    return demoState().courses.get(courseId)?.summary ?? null;
+  }
+
+  async createCourse(
+    summary: CourseSummary & { createdAt: string; createdBy: string },
+  ): Promise<void> {
+    const state = demoState();
+    if (state.courses.has(summary.courseId)) {
+      throw new DomainError(
+        "COURSE_ALREADY_EXISTS",
+        "Ya existe un curso con ese identificador. Elige otro.",
+        409,
+      );
+    }
+
+    state.courses.set(summary.courseId, {
+      summary: {
+        courseId: summary.courseId,
+        title: summary.title,
+        publishedVersion: null,
+        lastDraftVersion: null,
+      },
+      versions: new Map(),
+    });
   }
 }
 

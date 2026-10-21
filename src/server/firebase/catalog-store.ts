@@ -52,11 +52,16 @@ export class FirestoreCourseCatalogStore implements CourseCatalogStore {
     return guard(async () => {
       const doc = await getAdminDb().collection(COLLECTIONS.courses).doc(courseId).get();
       if (!doc.exists) return null;
-      const data = doc.data() as { title?: string; publishedVersion?: number | null };
+      const data = doc.data() as {
+        title?: string;
+        publishedVersion?: number | null;
+        lastDraftVersion?: number | null;
+      };
       return {
         courseId,
         title: data.title ?? courseId,
         publishedVersion: data.publishedVersion ?? null,
+        lastDraftVersion: data.lastDraftVersion ?? null,
       };
     });
   }
@@ -149,15 +154,22 @@ export class FirestoreCourseCatalogStore implements CourseCatalogStore {
 
         const courseDoc = await transaction.get(courseRef);
         if (courseDoc.exists) {
+          // `publishedVersion` NO se toca aquí: publicar es otra operación. Solo
+          // se actualiza la ficha de autoría y el puntero del último borrador.
           transaction.update(courseRef, {
             title: input.course.title,
+            lastDraftVersion: input.course.lastDraftVersion,
             updatedAt: FieldValue.serverTimestamp(),
           });
         } else {
+          // Alta implícita (compatibilidad): un curso sin ficha que guarda su
+          // primera versión. La creación explícita vive en el editor de cursos.
           transaction.set(courseRef, {
             courseId: input.course.courseId,
             title: input.course.title,
             publishedVersion: null,
+            lastDraftVersion: input.course.lastDraftVersion,
+            createdBy: input.version.createdBy,
             createdAt: FieldValue.serverTimestamp(),
             updatedAt: FieldValue.serverTimestamp(),
           });

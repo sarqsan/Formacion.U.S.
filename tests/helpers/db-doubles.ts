@@ -24,6 +24,8 @@ import {
 import type { CourseVersionSummary } from "@/domain/courses/versioning";
 import type { AttemptRecord, LearningStore, StoredProgress } from "@/server/learning/store";
 import type { Actor } from "@/domain/auth/authorization";
+import { DomainError } from "@/domain/text";
+import type { CourseEditorStore } from "@/server/courses/editor";
 import type { CourseVersionDefinition, TopicDefinition } from "@/domain/courses/content";
 import type { QuizQuestionDefinition } from "@/domain/assessments/scoring";
 
@@ -139,6 +141,10 @@ export class InMemoryCatalogStore implements CourseCatalogStore {
       ...input.course,
       publishedVersion: existing?.publishedVersion ?? null,
       title: existing?.title ?? input.course.title,
+      lastDraftVersion: Math.max(
+        existing?.lastDraftVersion ?? 0,
+        input.course.lastDraftVersion ?? 0,
+      ) || null,
     });
   }
 
@@ -199,6 +205,7 @@ export class InMemoryCatalogStore implements CourseCatalogStore {
       courseId: definition.courseId,
       title: definition.title,
       publishedVersion: definition.version,
+      lastDraftVersion: definition.version,
     });
     this.versions.set(
       key,
@@ -206,6 +213,52 @@ export class InMemoryCatalogStore implements CourseCatalogStore {
     );
     this.keys.set(key, toAnswerKeys(definition, { createdAt: now }));
     return definition;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Creación de cursos en memoria
+// ---------------------------------------------------------------------------
+
+/**
+ * Doble del puerto de creación.
+ *
+ * Reproduce las dos invariantes que importan: el curso nace con los dos
+ * punteros a null y **crear no sobrescribe** un curso existente (lanza
+ * `COURSE_ALREADY_EXISTS`, igual que `create()` en Firestore).
+ */
+export class InMemoryCourseEditorStore implements CourseEditorStore {
+  courses = new Map<string, CourseSummary>();
+  createCalls = 0;
+  /** Metadatos de autoría de cada alta, para poder comprobarlos. */
+  created: Array<{ courseId: string; createdAt: string; createdBy: string }> = [];
+
+  async getCourse(courseId: string): Promise<CourseSummary | null> {
+    return this.courses.get(courseId) ?? null;
+  }
+
+  async createCourse(
+    summary: CourseSummary & { createdAt: string; createdBy: string },
+  ): Promise<void> {
+    this.createCalls += 1;
+    if (this.courses.has(summary.courseId)) {
+      throw new DomainError(
+        "COURSE_ALREADY_EXISTS",
+        "Ya existe un curso con ese identificador. Elige otro.",
+        409,
+      );
+    }
+    this.created.push({
+      courseId: summary.courseId,
+      createdAt: summary.createdAt,
+      createdBy: summary.createdBy,
+    });
+    this.courses.set(summary.courseId, {
+      courseId: summary.courseId,
+      title: summary.title,
+      publishedVersion: null,
+      lastDraftVersion: null,
+    });
   }
 }
 

@@ -36,9 +36,14 @@ export default async function AdminCoursesPage() {
             versión nueva.
           </p>
         </div>
-        <Link href="/admin" className="btn btn-secondary">
-          Volver al resumen
-        </Link>
+        <div className="flex flex-wrap gap-2">
+          <Link href="/admin/cursos/nuevo" className="btn btn-primary">
+            Nuevo curso
+          </Link>
+          <Link href="/admin" className="btn btn-secondary">
+            Volver al resumen
+          </Link>
+        </div>
       </div>
 
       <div className="space-y-3">
@@ -53,6 +58,9 @@ export default async function AdminCoursesPage() {
                 <span className="pill pill-info">
                   {course.publishedVersion ? `Publicada v${course.publishedVersion}` : "Sin publicar"}
                 </span>
+                {course.publishedVersion === null && course.lastDraftVersion === null ? (
+                  <span className="pill pill-off">Sin versiones</span>
+                ) : null}
                 {course.drafts > 0 ? (
                   <span className="pill pill-warn">{course.drafts} borrador(es)</span>
                 ) : null}
@@ -83,6 +91,7 @@ export default async function AdminCoursesPage() {
       <div className="card p-4 text-xs muted">
         <p className="font-semibold text-[var(--foreground)]">Reglas del modelo de contenido</p>
         <ul className="mt-2 list-disc space-y-1 pl-5 leading-relaxed">
+          <li>Un curso puede existir sin ninguna versión: se crea vacío y no aparece en el catálogo.</li>
           <li>Una versión publicada es inmutable; se archiva al publicar la siguiente.</li>
           <li>No se pueden saltar versiones: debe publicarse siempre la inmediatamente siguiente.</li>
           <li>Al publicar, el progreso del curso se reinicia para quien lo tenía empezado.</li>

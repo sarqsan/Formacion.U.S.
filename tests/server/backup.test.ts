@@ -7,6 +7,7 @@ import { restoreBackup } from "@/server/backup/restore";
 import { readManifest } from "@/server/backup/archive";
 import { encodeValue, decodeValue, mapTimestamps } from "@/server/backup/codec";
 import { canonicalJson } from "@/server/backup/codec";
+import { SCHEMA_VERSION } from "@/server/db/schema.constants";
 import { InMemoryFirestore } from "../helpers/backup-double";
 import type { BackupSource } from "@/server/backup/store";
 
@@ -140,7 +141,9 @@ describe("exportación", () => {
     expect(manifest.records).toBe(15);
     expect(manifest.collections.find((item) => item.name === "pdfChunks")?.records).toBe(1);
     expect(manifest.createdAt).toBe("2026-10-21T12:00:00.000Z");
-    expect(manifest.schemaVersion).toBe(1);
+    // Se compara con la constante, no con un literal: al subir el esquema el
+    // manifiesto debe seguir a la aplicación sin que la prueba caduque.
+    expect(manifest.schemaVersion).toBe(SCHEMA_VERSION);
   });
 
   it("el archivo en disco no contiene datos legibles ni la contraseña", async () => {

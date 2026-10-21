@@ -1,6 +1,8 @@
 import { getServerConfig } from "@/server/config";
 import { budgetBytesFromMiB } from "@/domain/storage/pdf-chunks";
 import { FirestoreCourseCatalogStore } from "@/server/firebase/catalog-store";
+import { FirestoreCourseEditorStore } from "@/server/firebase/course-editor-store";
+import type { CourseEditorDependencies } from "@/server/courses/editor";
 import { FirestorePdfDocumentStore } from "@/server/firebase/document-store";
 import { FirestoreEnrollmentStore } from "@/server/firebase/enrollment-store";
 import { FirestoreLearningStore } from "@/server/firebase/learning-store";
@@ -54,6 +56,14 @@ export function documentDependencies(): DocumentDependencies {
     // varias instancias habría que compartir el contador.
     limiter: pdfLimiter(),
   };
+}
+
+/**
+ * Creación y edición de cursos. Hoy solo la creación: el editor de contenido
+ * llega en los bloques siguientes y reutilizará este mismo puerto.
+ */
+export function courseEditorDependencies(): CourseEditorDependencies {
+  return { store: new FirestoreCourseEditorStore() };
 }
 
 export function enrollmentDependencies(): EnrollmentDependencies {
