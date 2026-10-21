@@ -1,0 +1,193 @@
+rules_version = '2';
+
+// ============================================================================
+// REGLAS DE FIRESTORE — Formación U.G.–U.S.
+// ============================================================================
+//
+// Principio: DENEGAR POR DEFECTO. El cliente web solo LEE algunos datos.
+// Toda escritura la hace el servidor con el Admin SDK (que no pasa por reglas).
+//
+// Consecuencia buscada: aunque alguien manipule el JavaScript del navegador,
+// no puede escribir progreso, no puede marcar un intento como aprobado, no
+// puede cambiar su rol ni leer las respuestas correctas.
+//
+// ---------------------------------------------------------------------------
+// POR QUÉ SE CONSULTA LA FICHA Y NO SOLO EL TOKEN
+// ---------------------------------------------------------------------------
+// Un token de Firebase es válido hasta que caduca (1 h un ID token, hasta 12 h
+// una cookie de sesión). Si solo se mirasen las Custom Claims, una cuenta
+// deshabilitada —o un administrador degradado— seguiría leyendo datos hasta
+// que su token caducara. Por eso cada comprobación lee `accounts/{uid}` y
+// exige que estado y `claimsVersion` coincidan con los del token.
+//
+// Coste: una lectura extra por petición evaluada (la cachea el propio motor de
+// reglas dentro de la misma petición).
+//
+// IMPORTANTE: si el documento de cuenta no existe, `get()` provoca un error de
+// evaluación y Firestore deniega. Ese es el comportamiento deseado (fallar
+// cerrado): una cuenta de Authentication sin alta en la aplicación no accede.
+// ============================================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // Ficha actual del usuario. Lanza error (⇒ denegar) si no existe.
+    function account() {
+      return get(/databases/$(database)/documents/accounts/$(request.auth.uid)).data;
+    }
+
+    // El token sigue diciendo lo mismo que la base de datos.
+    function claimsMatchAccount() {
+      return request.auth.token.claimsVersion == account().claimsVersion;
+    }
+
+    // Cuenta utilizable AHORA: activa en la ficha, activa en el token y con
+    // claims vigentes. No basta con un token válido.
+    function isActive() {
+      return signedIn()
+        && request.auth.token.status == 'active'
+        && account().status == 'active'
+        && claimsMatchAccount();
+    }
+
+    // Administrador = activo, claim de admin y ficha de admin. Un token antiguo
+    // de alguien ya degradado no sirve.
+    function isAdmin() {
+      return isActive()
+        && request.auth.token.role == 'admin'
+        && account().role == 'admin';
+    }
+
+    function isSelf(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    // ------------------------------------------------------------ matrículas
+    // La relación explícita usuario–curso vive en `enrollments/{uid}_{courseId}`.
+    // `get()` de un documento inexistente provoca un error de evaluación, y un
+    // error deniega: sin matrícula no hay acceso (fallar cerrado).
+    //
+    // Nota: `||` y `&&` cortocircuitan en las reglas, así que el administrador
+    // no llega a evaluar el `get()` de su propia matrícula.
+    function enrollmentDoc(courseId) {
+      return get(/databases/$(database)/documents/enrollments/$(request.auth.uid + '_' + courseId)).data;
+    }
+
+    // Matriculado = cuenta usable AHORA + matrícula activa + la matrícula es
+    // de este usuario (defensa contra un id manipulado).
+    function isEnrolled(courseId) {
+      return isActive()
+        && enrollmentDoc(courseId).status == 'active'
+        && enrollmentDoc(courseId).uid == request.auth.uid;
+    }
+
+    // ---------------------------------------------------------------- cuentas
+    // El usuario ve su ficha; el administrador ve todas. Nadie escribe desde
+    // el cliente: ni su rol, ni su estado, ni su claimsVersion.
+    match /accounts/{uid} {
+      allow read: if isAdmin() || (isActive() && isSelf(uid));
+      allow write: if false;
+    }
+
+    // Reserva de unicidad de nombres de usuario: solo servidor.
+    match /usernames/{username} {
+      allow read, write: if false;
+    }
+
+    // Tokens de activación (aquí solo vive el hash): solo servidor.
+    match /activationTokens/{tokenHash} {
+      allow read, write: if false;
+    }
+
+    // Auditoría: lectura para administradores, escritura solo servidor.
+    match /audits/{auditId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // ---------------------------------------------------------------- matrículas
+    // El alumno ve su matrícula (para saber a qué tiene acceso); el
+    // administrador ve todas. Nadie escribe desde el cliente: matricular y
+    // revocar es cosa del servidor, con token de administrador comprobado.
+    match /enrollments/{enrollmentId} {
+      allow read: if isActive() && (resource.data.uid == request.auth.uid || isAdmin());
+      allow write: if false;
+    }
+
+    // --------------------------------------------------------------- contenido
+    // Un curso solo es visible para el alumno cuando tiene una versión
+    // publicada (`publishedVersion`). Los borradores son cosa del servidor y
+    // del administrador.
+    match /courses/{courseId} {
+      allow read: if isAdmin() || (isActive() && resource.data.publishedVersion != null);
+      allow write: if false;
+
+      // Cada versión es inmutable. El alumno solo ve la versión publicada del
+      // curso en el que está matriculado: estar publicado ya NO da acceso.
+      match /versions/{version} {
+        allow read: if isAdmin() || (isEnrolled(courseId) && resource.data.status == 'published');
+        allow write: if false;
+      }
+    }
+
+    // Claves de corrección: JAMÁS legibles desde el cliente, ni siquiera por
+    // un administrador (el panel usa el servidor, que sí puede leerlas).
+    match /answerKeys/{documentId} {
+      allow read, write: if false;
+    }
+
+    // ---------------------------------------------------------------- progreso
+    // El alumno lee su progreso; solo el servidor lo escribe. Es lo que impide
+    // "marcarse como aprobado" desde el navegador.
+    match /progress/{progressId} {
+      allow read: if isActive() && (resource.data.uid == request.auth.uid || isAdmin());
+      allow write: if false;
+    }
+
+    // Histórico de progreso (versiones anteriores): misma política.
+    match /progressHistory/{progressId} {
+      allow read: if isActive() && (resource.data.uid == request.auth.uid || isAdmin());
+      allow write: if false;
+    }
+
+    // Intentos de evaluación: registro de auditoría de corrección.
+    match /attempts/{attemptId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // Documentos PDF: SOLO metadatos (título, páginas, tamaño). No hay rutas
+    // ni identificadores de Storage: el binario se pide al servidor por
+    // ventana de bytes y nunca se puede enlazar directamente.
+    //
+    // Fase 6: solo se leen los metadatos de documentos de un curso en el que
+    // el usuario tiene matrícula activa. El binario, en cualquier caso, no se
+    // puede leer desde el cliente (ver `pdfChunks`).
+    match /documents/{documentId} {
+      allow read: if isAdmin() || isEnrolled(resource.data.courseId);
+      allow write: if false;
+    }
+
+    // Fragmentos binarios de los PDF (Firestore, no Storage): solo servidor.
+    // El cliente no puede leer un fragmento ni conociendo su identificador.
+    match /pdfChunks/{chunkId} {
+      allow read, write: if false;
+    }
+
+    // Metadatos del esquema (versión, colecciones previstas) y contador de
+    // cuota de PDF: solo servidor.
+    // Los scripts `db:init` y `db:check` los leen con Admin SDK.
+    match /meta/{docId} {
+      allow read, write: if false;
+    }
+
+    // Cualquier otra ruta: cerrada.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

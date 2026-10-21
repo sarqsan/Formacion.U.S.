@@ -1,0 +1,286 @@
+/**
+ * DOBLES EN MEMORIA DE LOS ALMACENES
+ * ==================================
+ *
+ * Implementan los mismos puertos que las versiones Firestore
+ * (`CourseCatalogStore`, `LearningStore`) sin red. Permiten probar los
+ * servicios —corrección en servidor, publicación de versiones, archivado— hoy,
+ * mientras el emulador no se puede ejecutar por falta de JVM.
+ *
+ * No son mocks de conveniencia: reproducen las invariantes que importan
+ * (versión inmutable, claves separadas, transacción de intento+progreso) para
+ * que una prueba que pase aquí diga algo real sobre el comportamiento.
+ */
+
+import {
+  toAnswerKeys,
+  toPublicVersion,
+  type AnswerKeysDocument,
+  CourseCatalogStore,
+  CourseSummary,
+  type CourseVersionDocument,
+  type PublicDocument,
+} from "@/server/courses/catalog";
+import type { CourseVersionSummary } from "@/domain/courses/versioning";
+import type { AttemptRecord, LearningStore, StoredProgress } from "@/server/learning/store";
+import type { Actor } from "@/domain/auth/authorization";
+import type { CourseVersionDefinition, TopicDefinition } from "@/domain/courses/content";
+import type { QuizQuestionDefinition } from "@/domain/assessments/scoring";
+
+export const ADMIN: Actor = { uid: "admin-uid-0001", role: "admin", status: "active" };
+export const LEARNER: Actor = { uid: "learner-uid-0001", role: "learner", status: "active" };
+export const PENDING: Actor = { uid: "pending-uid-0001", role: "learner", status: "pending_activation" };
+
+export const FIXED_NOW = new Date("2026-03-01T10:00:00.000Z");
+
+// ---------------------------------------------------------------------------
+// Contenido de ejemplo
+// ---------------------------------------------------------------------------
+
+function question(
+  id: string,
+  correct: string,
+  options = ["a", "b", "c"],
+): QuizQuestionDefinition {
+  return {
+    id,
+    type: "single_choice",
+    optionIds: options,
+    correctOptionIds: [correct],
+    prompt: `Pregunta ${id}`,
+  };
+}
+
+export function makeTopic(overrides: Partial<TopicDefinition> & { id: string }): TopicDefinition {
+  return {
+    title: `Tema ${overrides.id}`,
+    order: 1,
+    mandatory: true,
+    documents: [{ id: `doc-${overrides.id}`, title: `PDF ${overrides.id}`, pageCount: 3 }],
+    quiz: [question(`q-${overrides.id}`, "a")],
+    ...overrides,
+  };
+}
+
+export function makeDefinition(
+  overrides: Partial<CourseVersionDefinition> = {},
+): CourseVersionDefinition {
+  return {
+    courseId: "curso-a",
+    version: 1,
+    title: "Curso A",
+    description: "Descripción",
+    topics: [makeTopic({ id: "tema-1", order: 1 })],
+    finalExam: [question("q-final", "b")],
+    ...overrides,
+  };
+}
+
+/** Progreso con todos los documentos del tema leídos. */
+export function fullyReadDocuments(topicId: string): StoredProgress["documents"] {
+  return {
+    [`doc-${topicId}`]: {
+      documentId: `doc-${topicId}`,
+      totalPages: 3,
+      lastPageViewed: 3,
+      completedAt: FIXED_NOW.toISOString(),
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Catálogo en memoria
+// ---------------------------------------------------------------------------
+
+export class InMemoryCatalogStore implements CourseCatalogStore {
+  courses = new Map<string, CourseSummary>();
+  versions = new Map<string, CourseVersionDocument>();
+  keys = new Map<string, AnswerKeysDocument>();
+  documents: PublicDocument[] = [];
+  saveVersionCalls = 0;
+  publishVersionCalls = 0;
+
+  private versionKey(courseId: string, version: number) {
+    return `${courseId}@${version}`;
+  }
+
+  async getCourse(courseId: string): Promise<CourseSummary | null> {
+    return this.courses.get(courseId) ?? null;
+  }
+
+  async listVersions(courseId: string): Promise<CourseVersionSummary[]> {
+    return [...this.versions.values()]
+      .filter((version) => version.courseId === courseId)
+      .map((version) => ({ version: version.version, status: version.status }));
+  }
+
+  async getVersion(courseId: string, version: number): Promise<CourseVersionDocument | null> {
+    return this.versions.get(this.versionKey(courseId, version)) ?? null;
+  }
+
+  async getAnswerKeys(courseId: string, version: number): Promise<AnswerKeysDocument | null> {
+    return this.keys.get(this.versionKey(courseId, version)) ?? null;
+  }
+
+  async saveVersion(input: {
+    course: CourseSummary;
+    version: CourseVersionDocument;
+    answerKeys: AnswerKeysDocument;
+  }): Promise<void> {
+    this.saveVersionCalls += 1;
+    const key = this.versionKey(input.version.courseId, input.version.version);
+    if (this.versions.has(key)) throw new Error("VERSIÓN DUPLICADA: el doble debe rechazarla como Firestore");
+
+    this.versions.set(key, structuredClone(input.version));
+    this.keys.set(key, structuredClone(input.answerKeys));
+
+    const existing = this.courses.get(input.course.courseId);
+    this.courses.set(input.course.courseId, {
+      ...input.course,
+      publishedVersion: existing?.publishedVersion ?? null,
+      title: existing?.title ?? input.course.title,
+    });
+  }
+
+  async replaceDraftVersion(input: {
+    version: CourseVersionDocument;
+    answerKeys: AnswerKeysDocument;
+  }): Promise<void> {
+    const key = this.versionKey(input.version.courseId, input.version.version);
+    const current = this.versions.get(key);
+    if (!current) throw new Error("VERSIÓN INEXISTENTE");
+    if (current.status !== "draft") throw new Error("VERSIÓN NO EDITABLE");
+
+    this.versions.set(key, { ...structuredClone(input.version), createdAt: current.createdAt });
+    this.keys.set(key, structuredClone(input.answerKeys));
+  }
+
+  async publishVersion(input: {
+    courseId: string;
+    version: number;
+    publishedAt: string;
+    publishedBy: string;
+  }): Promise<void> {
+    this.publishVersionCalls += 1;
+    const key = this.versionKey(input.courseId, input.version);
+    const version = this.versions.get(key);
+    if (!version) throw new Error("VERSIÓN INEXISTENTE");
+
+    // Igual que la transacción real: las anteriores pasan a `archived`.
+    for (const [otherKey, other] of this.versions) {
+      if (other.courseId === input.courseId && other.status === "published") {
+        this.versions.set(otherKey, { ...other, status: "archived" });
+      }
+    }
+
+    this.versions.set(key, {
+      ...version,
+      status: "published",
+      publishedAt: input.publishedAt,
+      publishedBy: input.publishedBy,
+    });
+
+    const course = this.courses.get(input.courseId);
+    if (!course) throw new Error("CURSO INEXISTENTE");
+    this.courses.set(input.courseId, { ...course, publishedVersion: input.version });
+  }
+
+  async listDocuments(): Promise<PublicDocument[]> {
+    // El contenido público no incluye rutas: el binario se pide al endpoint
+    // de ventanas, que comprueba sesión y publicación.
+    return this.documents;
+  }
+
+  /** Atajo de prueba: deja un curso con una versión publicada y sus claves. */
+  seedPublished(definition = makeDefinition()): CourseVersionDefinition {
+    const now = FIXED_NOW.toISOString();
+    const key = this.versionKey(definition.courseId, definition.version);
+    this.courses.set(definition.courseId, {
+      courseId: definition.courseId,
+      title: definition.title,
+      publishedVersion: definition.version,
+    });
+    this.versions.set(
+      key,
+      toPublicVersion(definition, { createdAt: now, createdBy: ADMIN.uid, status: "published" }),
+    );
+    this.keys.set(key, toAnswerKeys(definition, { createdAt: now }));
+    return definition;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Aprendizaje en memoria
+// ---------------------------------------------------------------------------
+
+export class InMemoryLearningStore implements LearningStore {
+  progress = new Map<string, StoredProgress>();
+  archive = new Map<string, StoredProgress>();
+  attempts: AttemptRecord[] = [];
+  commits = 0;
+
+  private progressKey(uid: string, courseId: string) {
+    return `${uid}@${courseId}`;
+  }
+
+  async getProgress(uid: string, courseId: string): Promise<StoredProgress | null> {
+    const found = this.progress.get(this.progressKey(uid, courseId));
+    return found ? structuredClone(found) : null;
+  }
+
+  async commitAttempt(input: {
+    attempt: AttemptRecord;
+    progress: StoredProgress;
+    archive: StoredProgress | null;
+  }): Promise<void> {
+    this.commits += 1;
+    if (input.archive) {
+      this.archive.set(
+        `${input.archive.uid}@${input.archive.courseId}@v${input.archive.version}`,
+        structuredClone(input.archive),
+      );
+    }
+    this.attempts.push(structuredClone(input.attempt));
+    this.progress.set(
+      this.progressKey(input.progress.uid, input.progress.courseId),
+      structuredClone(input.progress),
+    );
+  }
+
+  async saveProgress(
+    progress: StoredProgress,
+    archive: StoredProgress | null = null,
+  ): Promise<void> {
+    if (archive) {
+      this.archive.set(
+        `${archive.uid}@${archive.courseId}@v${archive.version}`,
+        structuredClone(archive),
+      );
+    }
+    this.progress.set(this.progressKey(progress.uid, progress.courseId), structuredClone(progress));
+  }
+
+  async listProgressByCourse(courseId: string, version: number) {
+    return [...this.progress.values()]
+      .filter((entry) => entry.courseId === courseId && entry.version === version)
+      .map((entry) => ({ uid: entry.uid, completedAt: entry.completedAt, version: entry.version }));
+  }
+
+  async listProgressByUser(uid: string): Promise<StoredProgress[]> {
+    return [...this.progress.values()].filter((entry) => entry.uid === uid);
+  }
+
+  async listAttemptsByUser(uid: string): Promise<AttemptRecord[]> {
+    return this.attempts.filter((attempt) => attempt.uid === uid);
+  }
+
+  async listAttemptsByCourse(courseId: string, version: number): Promise<AttemptRecord[]> {
+    return this.attempts.filter(
+      (attempt) => attempt.courseId === courseId && attempt.version === version,
+    );
+  }
+
+  seedProgress(progress: StoredProgress): void {
+    this.progress.set(this.progressKey(progress.uid, progress.courseId), structuredClone(progress));
+  }
+}

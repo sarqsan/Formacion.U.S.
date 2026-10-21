@@ -1,0 +1,20 @@
+{
+  "$comment": "Configuración de Firebase del proyecto PROPIO de Formación (plan Spark, sin Storage). El proyecto se fija en .firebaserc (formacionus-63555). No se despliega nada desde el repositorio: publicar reglas o índices exige validarlas antes contra el emulador.",
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "emulators": {
+    "auth": {
+      "port": 9099
+    },
+    "firestore": {
+      "port": 8080
+    },
+    "ui": {
+      "enabled": true,
+      "port": 4000
+    },
+    "singleProjectMode": true
+  }
+}

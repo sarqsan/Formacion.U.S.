@@ -1,0 +1,57 @@
+{
+  "name": "formacion-us",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Aplicación independiente de Formación del Personal (U.G.-U.S.)",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "verify": "npm run typecheck && npm run lint && npm run test && npm run build",
+    "test:rules": "node scripts/run-emulator-checks.mjs rules",
+    "emulators": "firebase emulators:start --only firestore --project demo-formacion",
+    "db:init": "tsx scripts/db-init.ts",
+    "db:check": "tsx scripts/db-check.ts",
+    "backup:export": "tsx scripts/backup-export.ts",
+    "backup:restore": "tsx scripts/backup-restore.ts",
+    "firestore:size": "node scripts/firestore-size-check.mjs",
+    "check:demo": "node scripts/demo-smoke.mjs",
+    "test:firestore": "node scripts/run-emulator-checks.mjs firestore",
+    "check:env": "node scripts/check-environment.mjs",
+    "check:firebase": "tsx scripts/firebase-check.ts",
+    "check:web": "tsx scripts/firebase-check.ts --config-only",
+    "test:emulator": "node scripts/run-emulator-checks.mjs all",
+    "seed:synthetic": "tsx scripts/seed-synthetic.ts",
+    "rehearse:backup": "tsx scripts/rehearse-backup.ts"
+  },
+  "dependencies": {
+    "firebase": "13.1.0",
+    "firebase-admin": "14.5.0",
+    "next": "16.4.2",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "read-excel-file": "^9.3.12",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^6.0.0",
+    "@tailwindcss/turbopack": "^4",
+    "@types/node": "^22",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.4.2",
+    "firebase-tools": "^15.34.0",
+    "tailwindcss": "^4",
+    "tsx": "^4.23.15",
+    "typescript": "^5",
+    "vitest": "5.0.5"
+  }
+}
