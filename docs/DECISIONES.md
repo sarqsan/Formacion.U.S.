@@ -1,0 +1,445 @@
+# Decisiones (ADR)
+
+Cada decisión indica su estado: **adoptada**, **provisional** (hay que
+confirmarla) o **pendiente** (bloquea trabajo futuro).
+
+---
+
+## ADR-001 · Aplicación y repositorio independientes
+
+**Estado:** adoptada.
+
+Formación vive en su propio repositorio y usará su propio proyecto Firebase.
+No se importa código, datos, usuarios ni reglas de la aplicación de cuadrantes.
+La integración futura será un botón en aquella aplicación que abra esta URL.
+
+**Consecuencia:** ningún cambio en esta fase puede romper cuadrantes. Si en el
+futuro se toca aquel repositorio (solo el botón), será un cambio aislado y
+revisado aparte.
+
+---
+
+## ADR-002 · Next.js 16 (App Router) + TypeScript estricto
+
+**Estado:** adoptada.
+
+Un solo despliegue para páginas y endpoints; la lógica sensible queda en el
+servidor sin montar un backend aparte. TypeScript estricto reduce errores en
+reglas de autorización.
+
+**Alternativas descartadas:** SPA + API separada (más piezas para el mismo
+equipo), Vite + Node (habría que resolver sesión, SSR y despliegue).
+
+---
+
+## ADR-003 · Dominio puro separado de la infraestructura
+
+**Estado:** adoptada.
+
+`src/domain` no importa Firebase ni Next. Permite probar hoy las reglas
+críticas (corrección, progreso, autorización, importación) sin emuladores.
+
+**Coste:** algunos adaptadores duplican tipos; aceptado a cambio de pruebas
+reales y rápidas.
+
+---
+
+## ADR-004 · Criterio de nombre de usuario
+
+**Estado:** **provisional — requiere confirmación.**
+
+El enunciado pide el criterio "rol y apellido" de la aplicación actual, pero
+esta fase prohíbe inspeccionarla. Se ha implementado una estrategia aislada y
+sustituible:
+
+```
+ROL 1 + García  →  rol1.garcia
+ROL 2 + García  →  rol2.garcia
+colisión        →  rol1.garcia2, rol1.garcia3, …
+```
+
+Garantías independientes del formato final: determinismo, unicidad, caracteres
+seguros `[a-z0-9.-]`, longitud ≤ 60, sin nombres reservados.
+
+**Para cerrar la decisión** necesito saber, de la aplicación existente:
+
+1. ¿El usuario es exactamente `rol` + separador + apellido? ¿Qué separador?
+2. ¿Se usa el apellido completo, el primero o sus iniciales?
+3. ¿Cómo se resuelven las colisiones (sufijo numérico, inicial del nombre, otro)?
+4. ¿Los usuarios antiguos tienen formatos distintos que haya que respetar?
+
+Cambiar el criterio solo afecta a `buildBaseUsername` y a sus pruebas.
+
+---
+
+## ADR-005 · Correo sintético con dominio reservado
+
+**Estado:** adoptada (revisable si se quiere correo real).
+
+Firebase Auth exige un identificador tipo correo y el Excel solo tiene dos
+columnas. Se usa `usuario@formacion.invalid` (`.invalid` es un TLD reservado por
+la RFC 2606: no enrutable). Ventajas: no se inventan datos personales, no se
+puede enviar correo por accidente y no se confunde con una dirección real.
+
+**Limitación:** no es posible "recuperar contraseña" por correo. La recuperación
+se hará con un código de activación nuevo emitido por un administrador (ver
+ADR-006 y bloque 4 del plan).
+
+---
+
+## ADR-006 · Activación con token de un solo uso
+
+**Estado:** adoptada.
+
+Flujo: la importación crea la cuenta con contraseña aleatoria **no entregada** y
+un token de 32 bytes (solo se guarda su SHA-256, 72 h, un uso). El usuario
+introduce usuario + token + contraseña nueva; el servidor valida la política,
+fija la contraseña con Admin SDK, marca `active`, sube `claimsVersion` y revoca
+sesiones.
+
+**Alternativa descartada:** emitir un *custom token* y dejar que el cliente fije
+la contraseña con `updatePassword`. La contraseña no pasaría por el servidor,
+pero no habría forma de demostrar en servidor que se cambió antes de activar la
+cuenta.
+
+**Riesgo aceptado:** la contraseña viaja una vez al servidor por HTTPS. No se
+registra ni se almacena; Firebase la guarda con scrypt.
+
+**Pendiente de decidir:** cómo se entregan los códigos (en mano, lista impresa,
+canal interno). En esta fase no hay envío automático.
+
+---
+
+## ADR-007 · Sesión con cookie httpOnly emitida por el servidor
+
+**Estado:** adoptada.
+
+`signInWithEmailAndPassword` → ID token → `POST /api/auth/session` →
+`createSessionCookie` (httpOnly, Secure, SameSite=Lax, 12 h) → `signOut()` en
+el cliente. El SDK usa `inMemoryPersistence`: no queda nada en localStorage ni
+IndexedDB.
+
+Cada petición verifica la cookie (`checkRevoked`) **y** relee la cuenta:
+`status` y `claimsVersion` de la base de datos mandan sobre el token.
+
+**Prohibido por el enunciado:** simular sesiones con localStorage. Aquí no se
+usa ninguna marca de sesión legible por JavaScript.
+
+**Pendiente:** "recordarme" (sesión de 5 días) si se considera necesario.
+
+---
+
+## ADR-008 · Duplicados: nunca se omiten en silencio
+
+**Estado:** adoptada.
+
+Dos personas del mismo rol pueden compartir apellido y ser reales. Por eso:
+
+- duplicado dentro del fichero → fila marcada, **bloquea la confirmación**
+  hasta que el administrador elija "omitir" o "es otra persona" (crea
+  `rol1.garcia2`);
+- usuario que ya existe en la base de datos → solo se puede omitir;
+- el servidor **recalcula** la vista previa e ignora los usuarios propuestos
+  por el cliente.
+
+---
+
+## ADR-009 · Storage cerrado al cliente, URLs firmadas de 5 minutos
+
+**Estado:** **SUSTITUIDA por ADR-014** (21/10/2026). Se conserva como registro
+histórico: describía el diseño mientras se asumía el plan Blaze. El plan
+gratuito Spark no incluye Storage, así que ya no hay bucket ni URLs firmadas.
+
+Las reglas de Storage deniegan toda lectura/escritura directa, incluso a
+usuarios activos y administradores. La subida y la firma las hace el servidor.
+Motivo: una regla "usuario activo puede leer" permitiría descargar cualquier PDF
+conociendo la ruta.
+
+**Riesgo residual:** una URL firmada es un permiso temporal de portador. Se
+mitiga con TTL de 300 s, `no-store`, y no registrándola. Si se exige más, la
+alternativa es servir bytes desde el servidor (más coste) o PDF cifrado por
+usuario (bloque aparte).
+
+---
+
+## ADR-010 · Curso publicado = versión inmutable
+
+**Estado:** adoptada.
+
+Editar contenido crea una versión nueva; publicar exige `actual + 1`. El
+progreso se guarda con `version`; publicar una versión nueva implica repetir el
+curso (`requiresNewCompletion`). El progreso anterior se archiva, no se borra.
+
+---
+
+## ADR-011 · El cuestionario se abre al terminar la lectura del tema
+
+**Estado:** **provisional — confirmar.**
+
+Interpretación de "cuestionario al terminar cada tema": se exige haber visto
+todas las páginas de todos los documentos del tema (control en servidor). Si se
+prefiere que el cuestionario esté disponible desde el principio, basta con
+desactivar la comprobación en el endpoint del cuestionario (el dominio ya
+separa ambos conceptos).
+
+---
+
+## ADR-012 · Sin curso de ejemplo
+
+**Estado:** adoptada.
+
+Se han implementado validación y reglas de contenido, pero **no** se crea un
+curso ficticio: el contenido real lo publicará administración. Así no se
+confunde material de prueba con formación válida.
+
+---
+
+## ADR-013 · Administradores iniciales por script, no por interfaz
+
+**Estado:** adoptada.
+
+`scripts/bootstrap-admins.mjs` crea varios administradores de una vez, de forma
+idempotente, con token de activación (sin contraseñas compartidas), `--dry-run`
+y `BOOTSTRAP_CONFIRM=yes`. La importación de Excel **nunca** crea admin.
+
+**Pendiente:** interfaz para que un administrador dé de alta a otro (bloque 4),
+con protección del último administrador ya implementada en dominio.
+
+---
+
+## Decisiones pendientes (resumen para el usuario)
+
+| # | Pregunta | Bloquea |
+| --- | --- | --- |
+| 1 | Criterio exacto de nombre de usuario (ADR-004) | Datos reales y, si cambia, migración |
+| 2 | Entrega de códigos de activación | Operación real |
+| 3 | ¿Cuestionario tras leer el tema o libre? (ADR-011) | Experiencia del alumno |
+| 4 | ¿Reintentos de evaluación ilimitados o con espera? | Endpoint de evaluación |
+| 5 | ¿Correo real en el futuro (avisos, recuperación)? | Modelo de identidad |
+| 6 | Límite y origen del nº de páginas de cada PDF | Carga de documentos |
+| 7 | Región de Firebase y residencia de datos | Creación del proyecto |
+| 8 | Plataforma de despliegue | Bloque 6 |
+| 9 | ¿MFA para administradores? | Endurecimiento |
+
+---
+
+## ADR-014 · PDF fragmentados en Firestore, sin Firebase Storage
+
+**Estado:** adoptada (21/10/2026). Sustituye a ADR-009.
+
+**Contexto.** El proyecto debe funcionar en el plan **Spark** (gratuito). Spark
+no incluye Cloud Storage: crear un bucket exige el plan Blaze y una tarjeta. El
+diseño anterior (ADR-009) dependía de un bucket privado y de URLs firmadas.
+
+**Decisión.** Los PDF se guardan en Firestore troceados:
+
+- metadatos en `documents/{documentId}` (sin binario y sin rutas);
+- fragmentos en `pdfChunks/{documentId}_{n}`, campo `data` de tipo `Bytes`;
+- lectura por páginas a través de `/api/documents/{id}/pages` (hasta 20 páginas
+  y 768 KiB por petición), que exige sesión, matrícula activa y versión
+  publicada;
+- cuota controlada por `meta/storage.usedBytes`, escrito en la misma
+  transacción que los fragmentos.
+
+**Por qué fragmentos de 768 KiB.** Firestore limita cada documento a 1 MiB. Con
+`Bytes` (no base64) sobra margen; en base64 un fragmento ocuparía exactamente
+1 MiB y no cabría el envoltorio.
+
+**Corrección de la Fase 6 (ADR-016).** El tope de 20 MiB era incompatible con
+el límite de **10 MiB por petición/transacción** de Firestore: 27 fragmentos son
+20,25 MiB y la subida fallaba siempre. Se baja el tope a **8 MiB** (11
+fragmentos = 8,25 MiB + 512 KiB de margen ≤ 10 MiB).
+
+**Consecuencias.**
+
+- Cero coste: no hay bucket, ni salida de datos de Storage, ni tarjeta.
+- La lectura de un PDF consume lecturas de Firestore (una por fragmento). Ver
+  el cálculo en `docs/INFORME-FASE-4.md`.
+- Si el corpus no cabe en ~512 MiB, hay que archivar, comprimir o cambiar de
+  estrategia; **no** se sube el plan.
+- El contenido público de un curso ya no incluye `storagePath`: no hay nada
+  que enlazar.
+
+**Riesgo residual.** Sigue siendo un control de aplicación, no DRM: un alumno
+activo con acceso al curso puede descargar las ventanas del PDF que está
+viendo. Lo que se elimina es el enlace público y la dependencia de pago.
+
+## ADR-015 · Matrícula explícita; publicar no da acceso
+
+**Estado:** adoptada (21/10/2026).
+
+**Contexto.** Hasta la Fase 5, cualquier cuenta activa leía el contenido de
+cualquier curso publicado. Un alumno de un curso podía abrir los PDF y los
+cuestionarios de otro, y bastaba con publicar para exponer contenido.
+
+**Decisión.** La relación usuario–curso vive en `enrollments/{uid}_{courseId}`:
+
+- `status` es `active` o `revoked`; `isEnrollmentActive` exige exactamente
+  `active` (cualquier otro valor deniega);
+- solo un administrador activo matricula o revoca, y el rol se toma de la
+  sesión, nunca del cuerpo de la petición;
+- `assertCourseAccess(actor, courseId, deps)` es la única puerta de entrada al
+  contenido (documentos y evaluaciones);
+- revocar no borra el progreso: al reactivar, el alumno sigue donde estaba;
+- las reglas de Firestore cierran `enrollments` a escritura y limitan su lectura
+  a la propia matrícula (o al administrador).
+
+**Consecuencias.** Importar personas ya no da acceso a ningún curso: hace falta
+matricular. Un curso publicado sin matrículas no lo ve nadie salvo
+administración. Las reglas nuevas **no se han podido ejecutar** en este entorno
+(sin emulador): están escritas y pendientes de verificación.
+
+## ADR-016 · Tope de PDF 8 MiB y lectura por páginas con límites
+
+**Estado:** adoptada (21/10/2026). Corrige ADR-014.
+
+**Contexto.** Dos defectos reales de la Fase 5: (1) 27 fragmentos de 768 KiB no
+caben en la transacción de 10 MiB, así que la subida de un PDF grande fallaba
+siempre; (2) el endpoint de lectura no tenía autorización por curso ni límite
+de peticiones, y permitía pedir fragmentos en bucle hasta agotar la cuota
+gratuita (50 000 lecturas/día) y apagar la aplicación.
+
+**Decisión.**
+
+- `MAX_PDF_BYTES = 8 MiB`, `MAX_CHUNKS = 11`, con
+  `assertFitsTransaction` calculado sobre `MAX_TRANSACTION_BYTES` (10 MiB) y
+  512 KiB de margen.
+- La lectura pide páginas (`from`, `to`), máximo 20 por petición y 768 KiB; el
+  progreso solo se guarda tras leer con éxito.
+- Limitador de ventana deslizante en memoria: 600 páginas/hora por usuario y
+  6000/hora en total para lectura; 20/120 para subidas.
+- Toda barrera se comprueba en el servidor; el cliente no puede enviar página,
+  progreso ni APTO.
+
+**Consecuencias.** PDF de hasta 8 MiB (antes: ninguno de más de ~9 MiB se podía
+subir). El límite de peticiones es **por proceso**: con varias instancias se
+multiplica por el número de instancias, y hay que moverlo a un almacén
+compartido el día que haya más de una.
+
+## ADR-017 · Copia de seguridad cifrada propia (sin servicios de pago)
+
+**Estado:** adoptada (21/10/2026).
+
+**Contexto.** El plan Spark no incluye exportaciones gestionadas, ni backups
+programados, ni PITR: todo eso exige Blaze. El proyecto necesita poder
+recuperarse sin pagar y sin subir datos personales a un tercero.
+
+**Decisión.** Exportación propia sobre el Admin SDK, en un archivo `.fbak`:
+
+- recorre todas las colecciones, incluidas las subcolecciones de versiones;
+- codifica `Bytes` y `Timestamp` sin pérdida (JSON con etiquetas) y **se detiene**
+  ante un tipo que no sabe representar;
+- cifra con **AES-256-GCM** y clave derivada con **scrypt** de una contraseña
+  (`BACKUP_PASSPHRASE`, mínimo 12 caracteres), nunca guardada;
+- el manifiesto solo lleva metadatos (colecciones, recuentos, tamaños, sal, IVs,
+  etiquetas, SHA-256);
+- la restauración verifica bloque a bloque, exige destino vacío salvo `--force`,
+  escribe en lotes de ≤400 documentos / ≤6 MiB y comprueba el recuento final;
+- `--dry-run` valida sin escribir.
+
+**Consecuencias.**
+
+- La copia incluye claves de corrección y datos personales: se trata como
+  material sensible (cifrada, fuera del repositorio, con la contraseña aparte).
+- **No** incluye Firebase Authentication: tras restaurar hay que recrear las
+  cuentas o re-activar a las personas.
+- No hay instantánea global: la copia puede mezclar dos instantes si se hace con
+  la aplicación en marcha.
+- La restauración no es atómica global (por lotes); un fallo a mitad deja estado
+  parcial y se detecta.
+
+**Pendiente.** Ejecutar exportación y restauración contra el emulador y ensayar
+una recuperación completa cronometrada en un proyecto desechable. Mientras eso
+no ocurra, la restauración **no se declara terminada**.
+
+
+## ADR-018 · Modo demostración con los mismos servicios y almacén en memoria
+
+**Contexto.** Hace falta enseñar la aplicación la semana próxima y el entorno de
+trabajo no tiene Firebase ni emulador. La alternativa barata sería una maqueta
+con pantallas falsas; el problema es que entonces la demostración no diría nada
+sobre el comportamiento real (orden de lectura, corrección en servidor,
+matrícula, publicación de versiones).
+
+**Decisión.** Un modo `DEMO_MODE=1`, explícito y visible, que:
+
+- implementa **los mismos puertos** de persistencia (`CourseCatalogStore`,
+  `EnrollmentStore`, `LearningStore`) con un almacén en memoria;
+- ejecuta los **servicios reales** de evaluación, matrículas, lectura y
+  publicación sin duplicar reglas en la interfaz;
+- usa una cookie con el uid de una cuenta inventada, nunca una sesión de Firebase;
+- muestra una franja permanente de «modo demostración» y una página `/estado`
+  con lo conectado y lo que no;
+- recorre la lectura con pantallas de texto en lugar de PDF, porque el binario
+  necesita Firestore y no hay documentos reales que enseñar (ni se deben usar).
+
+**Consecuencias.**
+
+- Enseñar la aplicación no exige tocar Firebase ni cargar datos personales.
+- El modo está apagado por defecto y **no puede activarse solo**: sin
+  `DEMO_MODE=1` la aplicación pide Firebase y no hay datos de ejemplo.
+- Las pruebas de la demostración verifican reglas de verdad (14 casos), pero **no
+  sustituyen** a las pruebas de reglas ni a las transacciones contra el emulador.
+- Todo lo que se simula está dicho en pantalla; nada se presenta como conectado.
+
+**Pendiente.** Editor de preguntas, creación de temas desde la interfaz y subida
+de PDF real: las tres necesitan persistencia de verdad para probarse.
+
+## ADR-019 · «Desidentificar y preparar temario»: aparcado, con alcance definido
+
+**Contexto.** Se ha pedido una función que quite referencias identificativas de
+los PDF antes de publicarlos (texto, imágenes, metadatos) y que el administrador
+revise y apruebe el resultado. Implicaría OCR, detección de entidades y revisión
+humana; y, si se resuelve con un servicio externo, enviar documentos fuera del
+entorno.
+
+**Decisión.** No implementarla todavía. No es necesaria para la versión
+demostrable, y hacerla a medias daría una falsa sensación de seguridad sobre
+justo lo que más importa: que no se escape un dato identificativo.
+
+**Alcance guardado para cuando se aborde** (detalle en `docs/ENTREGA-DEMO.md` §8):
+subida a un entorno de preparación, extracción de texto e imágenes, detección de
+referencias, transformación con marcadores, comparación original/resultado,
+aprobación explícita auditada y generación del material definitivo solo tras la
+aprobación. Criterio de aceptación: en un conjunto de PDF de muestra no sobrevive
+ninguna referencia identificativa, y el original nunca se publica.
+
+**Coste.** Cero si se resuelve en local (OCR y reglas propias, más trabajo); con
+coste y cesión de documentos si se usa un servicio externo. Cualquier opción
+requiere autorización explícita.
+
+## ADR-020 · Una sola capa de datos: el portal elige demo o Firestore
+
+**Contexto.** La demostración y la aplicación real compartían la interfaz, pero
+las pantallas leían directamente del almacén en memoria. Conectar Firestore
+habría obligado a duplicar páginas o a mantener dos versiones de la aplicación,
+y a partir de ahí las dos se habrían separado.
+
+**Decisión.** Un único punto de entrada (`src/server/portal`) que elige la
+persistencia según la configuración del proceso y expone las mismas funciones
+para las dos:
+
+- con `DEMO_MODE=1`, almacén sintético en memoria;
+- sin él, Firestore y Firebase Authentication del proyecto `formacionus-63555`.
+
+El cálculo de la vista del alumno (progreso, temas, documentos, examen) vive en
+`src/server/portal/learner.ts` y lo usan **las dos** implementaciones, de modo
+que la demostración no puede mostrar un porcentaje distinto del real.
+
+El **identificador del proyecto** es un dato del entorno, no una suposición: el
+ID real, confirmado el 21/10/2026, es `formacionus-63555`. Aparece en un solo
+sitio por capa (`.firebaserc`, `EXPECTED_PROJECT`, `.env.example`) y una prueba
+falla si esos tres dejan de coincidir o si reaparece el identificador antiguo.
+Los valores de la app web (`apiKey`, `appId`) no se escriben en el repositorio:
+se copian de la consola cuando el usuario los facilite.
+
+**Consecuencias.**
+
+- La conmutación es explícita y no depende de que una consulta falle: si
+  Firestore no responde en modo real, se muestra un error de datos y **no** se
+  cae al almacén de memoria (sería una pérdida invisible de progreso).
+- Toda función de administración se autoriza en servidor **antes** de leer: el
+  Admin SDK elude las reglas de Firestore, así que esa barrera es la única que
+  existe en el servidor.
+- Añadir una función nueva supone implementarla una vez en la interfaz y dos en
+  la capa de datos; el compilador avisa si falta una de las dos.
