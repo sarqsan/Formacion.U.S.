@@ -3,6 +3,7 @@ import {
   validateQuizDefinition,
   type QuizQuestionDefinition,
 } from "@/domain/assessments/scoring";
+import { isSafeDocumentId } from "@/domain/storage/document-id";
 
 /**
  * MODELO DE CONTENIDO (autoría del administrador)
@@ -113,7 +114,13 @@ export function validateCourseVersion(definition: CourseVersionDefinition): Cont
 
     topic.documents.forEach((document, documentIndex) => {
       const documentPath = `${path}.documents[${documentIndex}]`;
-      if (!SLUG_PATTERN.test(document.id)) {
+      // El identificador de un documento NO sigue la regla de los slugs: lo
+      // genera el servidor al subir el PDF (`doc_` + 32 hex) y la barra baja no
+      // es un slug válido. Se usa la regla canónica del almacén —la misma que
+      // aplica la ruta que sirve el fichero—, que exige un identificador seguro
+      // y sin forma de ruta. Con la regla anterior, cualquier curso con un PDF
+      // real habría sido imposible de publicar.
+      if (!isSafeDocumentId(document.id)) {
         add("DOCUMENT_ID_INVALID", "Identificador de documento no válido.", `${documentPath}.id`);
       }
       if (documentIds.has(document.id)) {

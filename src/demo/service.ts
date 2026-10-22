@@ -669,7 +669,12 @@ export async function adminAttachDocument(
 // editor de estructura: una sola puerta, con revisión y puntero de borrador.
 
 export async function adminPublish(actor: Actor, courseId: string, version: number) {
-  return publishCourseVersion({ actor, courseId, version }, demoDeps());
+  // Publicar exige comprobar que los documentos de la versión existen y están
+  // activos: se pasa la misma consulta de metadatos que usa la subida.
+  return publishCourseVersion(
+    { actor, courseId, version },
+    { store: catalogStore(), documents: new MemoryPdfDocumentStore(demoState().pdf) },
+  );
 }
 
 // ---------------------------------------------------------------------------

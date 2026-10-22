@@ -676,6 +676,47 @@ if (createForm) {
         !learnerPanel.html.includes("Curso del recorrido automático"),
       "un curso con solo borrador no aparece al alumnado",
     );
+
+    // -----------------------------------------------------------------------
+    // 3 quater. La publicación se valida en el SERVIDOR (bloque 08)
+    // -----------------------------------------------------------------------
+
+    // El botón «Publicar» está desactivado en el HTML, pero una acción de
+    // servidor se puede enviar sin pasar por el navegador: se envía igual y el
+    // servidor tiene que rechazarla por sí mismo.
+    const emptyDetailPage = await get(`/admin/cursos/${NEW_COURSE}?v=1`, admin);
+    const emptyPublish = forms(emptyDetailPage.html).find(
+      (form) => form.fields.courseId === NEW_COURSE && form.fields.version === "1",
+    );
+    assert(Boolean(emptyPublish), "el borrador vacío ofrece el formulario de publicar");
+
+    if (emptyPublish) {
+      const refused = await postForm(
+        `/admin/cursos/${NEW_COURSE}?v=1`,
+        admin,
+        emptyPublish.fields,
+      );
+      assert(
+        refused.status === 303 && Boolean(refused.location?.includes("error=")),
+        `el servidor rechaza publicar un curso vacío (${refused.location})`,
+      );
+      assert(
+        !Boolean(refused.location?.includes("ok=publicada")),
+        "el rechazo no se anuncia como publicación",
+      );
+
+      const stillDraft = await get(`/admin/cursos/${NEW_COURSE}?v=1`, admin);
+      assert(
+        stillDraft.html.includes("Borrador") && !stillDraft.html.includes("Publicada el"),
+        "el curso sigue en borrador después del intento",
+      );
+
+      const learnerAfterAttempt = await get("/panel", learner);
+      assert(
+        !learnerAfterAttempt.html.includes("Curso del recorrido automático"),
+        "un curso rechazado al publicar no aparece al alumnado",
+      );
+    }
   }
 }
 
@@ -782,7 +823,10 @@ if (publishForm) {
   assert(result.status === 303, `publica la versión 2 (HTTP ${result.status})`);
 
   const after = await get(result.location ?? "/admin/cursos/curso-proteccion-datos?v=2", admin);
-  assert(after.html.includes("Versión publicada"), "la versión 2 queda publicada");
+  assert(
+    after.html.includes("Versión publicada"),
+    `la versión 2 queda publicada (${result.location})`,
+  );
 
   const panel = await get("/panel", learner);
   assert(

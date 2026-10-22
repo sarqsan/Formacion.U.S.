@@ -27,13 +27,13 @@ const ROWS: Row[] = [
     feature: "Publicación de versiones",
     state: "real",
     detail:
-      "Servicio real: valida el contenido, impide publicar saltándose versiones y hace inmutable lo publicado.",
+      "El servidor valida el contenido con la misma función que el editor, exige que cada PDF esté activo y completo, impide saltarse versiones y archiva la anterior, así que nunca hay dos publicadas. Probado con dobles y en la demostración; la transacción de Firestore no se ha ejecutado contra Firestore real.",
   },
   {
     feature: "Lectura en orden",
     state: "real",
     detail:
-      "El servidor rechaza cualquier salto de página o pantalla. Los PDF por fragmentos están implementados y probados con dobles; la demostración usa texto para no necesitar documentos reales.",
+      "El servidor rechaza cualquier salto de página o pantalla. Los PDF por fragmentos están implementados y probados con dobles; la demostración genera sus propios PDF de ejemplo en memoria.",
   },
   {
     feature: "Cuestionarios y examen final",

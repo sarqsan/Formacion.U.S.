@@ -790,3 +790,58 @@ fragmentos con la misma latencia y atomicidad, ni que las reglas impidan leer
 `pdfChunks` desde un cliente. Dobles y demostración son memoria. Tampoco se ha
 abierto un PDF real en un dispositivo Android: la alternativa (enlace a pestaña
 nueva) está en la interfaz, pero **no se ha medido** en un teléfono.
+
+## 20. Bloque 08 — publicación como puerta del servidor (22/10/2026)
+
+Alcance ejecutado: publicar deja de ser un botón desactivado y pasa a ser una
+comprobación del servidor. Antes de escribir nada se valida el contenido (la
+misma `validateCourseVersion` que usa el editor, aplicada a la definición
+reconstruida con sus claves) y se exige que **cada documento** de la versión
+exista, esté `active`, tenga todas sus partes y sea de ese curso. Al publicar, la
+versión anterior pasa a `archived` en la misma transacción. No se ha tocado el
+visor, la subida, el progreso, las reglas de seguridad ni el modelo de datos.
+
+| Comprobación | Comando | Resultado |
+| --- | --- | --- |
+| Cadena completa | `npm run verify` | **exit 0**: tipado 0 errores, lint 0 avisos, **774 pruebas en verde**, build OK |
+| Pruebas totales | `npm test` | **774 pasan**, 4 omitidas (emulador), 48 ficheros + 1 omitido (49) |
+| Recorrido de la demostración | `DEMO_MODE=1 npx next start -p 3000` + `npm run check:demo` | **PASSED**, **109 comprobaciones** (antes 104) |
+| Reglas de Firestore | `npm run test:rules` | **BLOQUEADO**: sin JVM |
+| Integración con emulador | `npm run test:firestore` | **BLOQUEADO**: sin JVM |
+| Conexión real | `npm run check:firebase` | **BLOQUEADO**: TLS hacia Google cortado; sin credenciales |
+
+Pruebas nuevas (17, en `tests/server/publish-gate.test.ts`):
+
+| Grupo | Qué fija |
+| --- | --- |
+| Contenido | Una versión sin temas, con un tema obligatorio sin cuestionario o sin examen final se rechaza con `COURSE_CONTENT_INVALID` (400) y **no se escribe nada**: sigue en borrador, el curso no cambia de versión publicada y el almacén no recibe la llamada de publicación. Un alumno no publica (`FORBIDDEN`). |
+| Documentos | Se publica cuando el documento está activo y completo; se rechaza con `DOCUMENT_NOT_PUBLISHABLE` (409) si no existe, si está `pending`/`aborted`/`archivado`, si le faltan partes, si es de otro curso o si el identificador no es seguro. Cuando hay varios problemas se devuelven **todos** de una vez. |
+| Coherencia | Publicar dos veces la misma versión da `VERSION_ALREADY_PUBLISHED` (409), no un 500. Los dobles archivan la anterior y dejan **una sola** publicada, de modo que la v3 se puede publicar. |
+| Demostración | `adminPublish` archiva la v1 y deja la v2 publicada con `lastDraftVersion` a `null`; si un documento asociado al borrador se archiva después, la publicación se rechaza y la v1 sigue siendo la publicada. |
+| Firestore (fuente) | La transacción de `publishVersion` lee el puntero, marca `archived` la anterior, actualiza versión, puntero y `lastDraftVersion`, y hace todas las lecturas antes de la primera escritura. **Comprobación sobre el código, no una ejecución.** |
+
+Recorrido HTTP añadido a `scripts/demo-smoke.mjs` (5 comprobaciones nuevas): el
+borrador vacío ofrece el formulario de publicar; el **servidor** rechaza
+publicarlo (303 con `error=`, sin `ok=publicada`) aunque la petición se envíe sin
+pasar por el botón desactivado; el curso sigue en borrador; y no aparece al
+alumnado.
+
+### Dos defectos encontrados al ejecutar
+
+1. **`validateCourseVersion` habría bloqueado cualquier curso con PDF real.**
+   Exigía identificadores con forma de slug, pero el servidor los genera como
+   `doc_` + 32 hex (bloque 06): la publicación de la demostración falló en el
+   recorrido con «Identificador de documento no válido». Se ha alineado esa
+   comprobación con la regla canónica del almacén (`isSafeDocumentId`), que
+   sigue rechazando formas de ruta. No se ha relajado ninguna otra regla.
+2. **El adaptador de Firestore no archivaba la versión anterior.** Dobles y
+   demostración sí, así que las pruebas estaban en verde y el fallo solo habría
+   aparecido en producción: tras publicar la v2 habría quedado la v1
+   `published` y la siguiente publicación habría respondido 500 «estado
+   inconsistente». Corregido en la transacción y fijado con una prueba sobre la
+   fuente (no ejecutada contra Firestore).
+
+Lo que **no** demuestran estas pruebas: que la transacción real archive y mueva
+el puntero de forma atómica (sin emulador no se ejecuta), ni que Firestore
+entregue los metadatos de los documentos con la misma latencia. El bloqueo de
+B09 sigue vigente y declarado en `/estado` y en `ENTORNO-PRUEBAS.md`.

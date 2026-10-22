@@ -684,3 +684,74 @@ subida (crear, partes, finalizar, asociar, cancelar) contra el mismo código que
 se despliega; las pruebas estáticas de autorización aceptan `requirePortalActor(`
 como guarda de sesión, con lo que sigue sin poder añadirse una ruta de
 administración sin guarda.
+
+## ADR-027 · Publicar es una puerta del servidor, no un botón desactivado
+
+**Contexto.** El bloque 03 dejó `publishCourseVersion` comprobando el orden de
+las versiones (`assertPublishable`) y la existencia de claves, y el bloque 04
+añadió en el panel de administración un botón «Publicar» que se **desactiva**
+mientras queden problemas de validación. El bloque 05 empezó a guardar
+borradores incompletos a propósito (un curso a medias tiene que poder
+guardarse). El resultado era una garantía de interfaz, no de servidor: una
+acción de servidor se puede enviar sin pasar por el navegador, y entonces se
+publicaba un curso sin temas, sin examen o con un PDF que no existe.
+
+Al escribir la comprobación aparecieron dos defectos que solo se ven al
+publicar de verdad:
+
+1. **`validateCourseVersion` rechazaba los identificadores de documento
+   reales.** Exigía forma de slug (`[a-z0-9-]`), pero el servidor genera los
+   identificadores como `doc_` + 32 hex (bloque 06). Cualquier curso con un PDF
+   subido era, literalmente, imposible de publicar. No se había notado porque
+   la publicación nunca validaba el contenido.
+2. **El adaptador de Firestore no archivaba la versión anterior.** Los dobles y
+   la demostración sí (y el comentario del doble decía «igual que la transacción
+   real»), pero `FirestoreCourseCatalogStore.publishVersion` solo actualizaba la
+   nueva y el puntero. Tras publicar la v2, la v1 seguía `published`: la
+   siguiente publicación habría fallado con `VERSION_MULTIPLE_PUBLISHED` (500,
+   «estado inconsistente») y la vista del alumnado podía resolver dos versiones.
+
+**Decisión.**
+
+1. **Validación en servidor.** `publishCourseVersion` aplica
+   `validateCourseVersion` a la definición **reconstruida** con
+   `definitionFromDocuments(versión, claves)`. No se duplica la regla: es la
+   misma función que usa el editor para avisar. Un borrador se guarda igual de
+   permisivo que antes; lo que cambia es que ya no se puede publicar lo que el
+   editor marca como error.
+2. **Los documentos son parte de la publicación.** Puerto estrecho
+   `PublishDocumentLookup` (`getMeta`), y `checkPublishableDocuments` exige, para
+   cada documento: identificador seguro, existencia, `state === "active"`,
+   todas las partes recibidas y que sea del mismo curso. Devuelve **todos** los
+   problemas a la vez y el servicio responde `DOCUMENT_NOT_PUBLISHABLE` (409)
+   con la lista. No se lee ni un byte del PDF.
+3. **El tipo obliga.** `publishCourseVersion` recibe `PublishDependencies`
+   (catálogo **+** documentos), no las dependencias generales. Si alguien
+   intenta publicar sin la consulta de documentos, no compila: la garantía no
+   depende de acordarse.
+4. **La regla de identificadores de documento se alinea con el almacén.**
+   `validateCourseVersion` usa `isSafeDocumentId` (la misma que la ruta que
+   sirve el PDF y la que valida el almacén) en lugar de la de slugs. Sigue
+   rechazando formas de ruta (`../`), que es lo que la regla protegía; deja de
+   rechazar lo que el propio servidor genera.
+5. **Archivar la anterior, en la misma transacción.** El adaptador de Firestore
+   lee el puntero del curso, marca `archived` la versión publicada anterior y
+   actualiza versión + puntero + `lastDraftVersion: null` en una sola
+   transacción (todas las lecturas antes de la primera escritura). Se conserva
+   la v1 y sus claves: el histórico no se borra.
+
+**Consecuencias.**
+
+- Un fallo de la puerta ocurre **antes** de escribir: la versión sigue en
+  borrador, el curso mantiene su versión publicada y no hay estado intermedio.
+- Publicar dos veces la misma versión da `VERSION_ALREADY_PUBLISHED` (409), no
+  un 500; después de publicar la v2 se puede publicar la v3 sin tocar nada.
+- `lastDraftVersion` queda en `null` al publicar: el editor deja de reanudar un
+  borrador que ya es inmutable.
+- El panel sigue desactivando el botón cuando `validateCourseVersion` encuentra
+  problemas (comodidad), pero ese desactivado ya **no es la garantía**.
+- La comprobación contra Firestore real sigue sin ejecutarse (sin emulador y sin
+  credenciales). Lo que sí está probado es que el código de la transacción
+  archiva la anterior y mueve el puntero (`tests/server/publish-gate.test.ts`,
+  comprobación sobre la fuente), y que demo y dobles se comportan igual
+  (ejecutado). El bloqueo de B09 sigue declarado.

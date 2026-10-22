@@ -1,5 +1,6 @@
 import { DomainError } from "@/domain/text";
 import { createPdfMemoryState, MemoryPdfDocumentStore } from "@/demo/pdf-store";
+import type { PublishDocumentLookup } from "@/server/courses/catalog";
 import type { PdfDocumentMeta, StoredChunk } from "@/server/documents/store";
 
 /**
@@ -117,4 +118,60 @@ export class InMemoryPdfDocumentStore extends MemoryPdfDocumentStore {
 /** Error explícito para pruebas que esperan un fallo del almacén. */
 export function failStorage(): never {
   throw new DomainError("FIRESTORE_UNAVAILABLE", "La base de datos no responde.", 503);
+}
+
+/**
+ * CONSULTA DE DOCUMENTOS PARA LA PUBLICACIÓN
+ * =========================================
+ *
+ * `publishCourseVersion` comprueba, antes de escribir nada, que cada documento
+ * de la versión existe y está activo. Este doble devuelve esos metadatos sin
+ * almacenar bytes: lo que se prueba es la puerta, no el fichero.
+ *
+ * Dos modos:
+ *   - `seed(id, {…})`: el documento existe con el estado indicado (por defecto,
+ *     activo, completo y del curso `curso-a`);
+ *   - `autoActiveCourseId`: cualquier identificador desconocido se considera
+ *     activo y de ese curso. Se usa en las pruebas que van de otra cosa
+ *     (orden de versiones), para no sembrar documentos en cada caso.
+ */
+export class PublishingDocuments implements PublishDocumentLookup {
+  private readonly metas = new Map<
+    string,
+    { courseId: string; state: string; partsReceived: number; chunkLengths: number[] }
+  >();
+
+  constructor(private readonly options: { autoActiveCourseId?: string } = {}) {}
+
+  seed(
+    documentId: string,
+    overrides: {
+      courseId?: string;
+      state?: string;
+      partsReceived?: number;
+      chunkLengths?: number[];
+    } = {},
+  ): this {
+    this.metas.set(documentId, {
+      courseId: overrides.courseId ?? this.options.autoActiveCourseId ?? "curso-a",
+      state: overrides.state ?? "active",
+      partsReceived: overrides.partsReceived ?? 1,
+      chunkLengths: overrides.chunkLengths ?? [1024],
+    });
+    return this;
+  }
+
+  async getMeta(documentId: string) {
+    const meta = this.metas.get(documentId);
+    if (meta) return meta;
+    if (this.options.autoActiveCourseId) {
+      return {
+        courseId: this.options.autoActiveCourseId,
+        state: "active",
+        partsReceived: 1,
+        chunkLengths: [1024],
+      };
+    }
+    return null;
+  }
 }

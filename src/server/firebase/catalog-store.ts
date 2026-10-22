@@ -25,7 +25,8 @@ import { getAdminDb } from "@/server/firebase/admin";
  * - `saveVersion` usa un lote: documento de versión + claves + ficha del curso
  *   (si es la primera). Las claves nunca acaban dentro de la versión.
  * - `publishVersion` usa una transacción: comprueba que la versión sigue en
- *   borrador y actualiza el puntero del curso a la vez.
+ *   borrador, archiva la que estaba publicada y actualiza el puntero del curso
+ *   a la vez. Así nunca hay dos versiones `published`.
  *
  * Lecturas: las que usan los servicios y el panel de administración, cada una
  * respaldada por un índice en `firestore.indexes.json`.
@@ -236,6 +237,9 @@ export class FirestoreCourseCatalogStore implements CourseCatalogStore {
       const versionRef = courseRef.collection(COLLECTIONS.versions).doc(String(input.version));
 
       await db.runTransaction(async (transaction) => {
+        // Todas las lecturas van antes de la primera escritura (requisito de
+        // las transacciones de Firestore).
+        const courseDoc = await transaction.get(courseRef);
         const versionDoc = await transaction.get(versionRef);
         if (!versionDoc.exists) {
           throw new DomainError("VERSION_NOT_FOUND", "La versión indicada no existe.", 404);
@@ -248,6 +252,27 @@ export class FirestoreCourseCatalogStore implements CourseCatalogStore {
             "Solo se puede publicar una versión en borrador.",
             409,
           );
+        }
+
+        // La versión publicada anterior pasa a `archived` en la MISMA
+        // transacción. Sin esto quedarían dos versiones `published` a la vez:
+        // `assertPublishable` lo detecta después como estado inconsistente y la
+        // siguiente publicación fallaría con un 500. La demostración y los
+        // dobles ya lo hacían así; el adaptador real no, y por eso no se veía.
+        const previousVersion =
+          (courseDoc.data() as { publishedVersion?: number | null } | undefined)?.publishedVersion ??
+          null;
+        if (typeof previousVersion === "number" && previousVersion !== input.version) {
+          const previousRef = courseRef
+            .collection(COLLECTIONS.versions)
+            .doc(String(previousVersion));
+          const previousDoc = await transaction.get(previousRef);
+          if (
+            previousDoc.exists &&
+            (previousDoc.data() as { status?: string }).status === "published"
+          ) {
+            transaction.update(previousRef, { status: "archived" });
+          }
         }
 
         // La versión pasa a publicada y el curso apunta a ella en la misma

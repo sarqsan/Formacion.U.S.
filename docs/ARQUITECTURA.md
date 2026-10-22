@@ -152,6 +152,28 @@ GET  /api/documents/{id}/file                    → PDF completo (portal del al
 Todas exigen sesión de administración, origen verificado y rol comprobado en el
 servicio (`assertAdmin`). El identificador del documento lo calcula el servidor:
 el cliente no lo elige y no puede modificar registros ajenos.
+
+### 4.4 bis Publicar: cinco comprobaciones antes de escribir
+
+Publicar es la única puerta por la que el contenido llega al alumnado, así que el
+servidor no se fía de que la interfaz haya desactivado el botón. En orden y sin
+escribir nada hasta el final:
+
+1. `assertAdmin` y `assertPublishable`: solo la versión inmediatamente siguiente a
+   la publicada, y solo si está en borrador.
+2. `assertNoAnswerLeak`: el contenido público no lleva respuestas correctas.
+3. Existen las claves de corrección de esa versión.
+4. `validateCourseVersion` sobre la definición reconstruida con
+   `definitionFromDocuments(versión, claves)` — la **misma** función con la que el
+   editor avisa, sin una segunda regla que pueda divergir.
+5. `checkPublishableDocuments`: cada documento existe, está `active`, tiene todas
+   sus partes y es de ese curso (solo metadatos: no se lee el PDF).
+
+Si algo falla, la versión sigue en borrador y el curso no cambia. Si todo pasa,
+una sola transacción escribe la versión como `published`, **archiva la anterior**,
+mueve el puntero del curso y deja `lastDraftVersion` en `null`. El tipo de las
+dependencias (`PublishDependencies`) obliga a inyectar la consulta de documentos:
+no se puede publicar «olvidándose» de comprobarlos. Ver ADR-027.
 - **Entrega al alumnado** (bloque 07): la página del documento ofrece el PDF con
   el **visor nativo del navegador** (`<object type="application/pdf">` y, siempre,
   un enlace a una pestaña nueva, porque Android Chrome no incrusta PDF en todos

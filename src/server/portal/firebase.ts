@@ -785,7 +785,13 @@ export async function adminDraftEditor(
 // administración pasa por `startDraft`/`saveDraftStructure`.
 
 export async function adminPublish(actor: Actor, courseId: string, version: number) {
-  return publishCourseVersion({ actor, courseId, version }, { store: firestoreDeps().catalog });
+  // Se reutilizan las dependencias de documentos ya cableadas (mismo adaptador
+  // que la subida y la lectura): no hay un segundo almacén que consultar.
+  const deps = documentDependencies();
+  return publishCourseVersion(
+    { actor, courseId, version },
+    { store: deps.catalog, documents: deps.documents },
+  );
 }
 
 // ---------------------------------------------------------------------------
