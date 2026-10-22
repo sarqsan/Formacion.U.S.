@@ -755,3 +755,57 @@ publicar de verdad:
   archiva la anterior y mueve el puntero (`tests/server/publish-gate.test.ts`,
   comprobación sobre la fuente), y que demo y dobles se comportan igual
   (ejecutado). El bloqueo de B09 sigue declarado.
+
+## ADR-028 · Una cuenta se deshabilita, no se borra; y deshabilitar cierra la sesión
+
+**Contexto.** Desde el principio existen en el dominio tres piezas que **ninguna
+operación usaba**: la tabla de transiciones de estado
+(`assertCanTransitionStatus`), la protección del último administrador
+(`assertCanRemoveAdmin`) y las claims con `claimsVersion`. En la interfaz solo se
+podía leer la lista de cuentas. En la práctica: un código de activación caducado
+no se podía reemitir (la persona quedaba fuera del sistema para siempre), una
+baja del servicio no se podía reflejar y una cuenta comprometida no se podía
+cerrar sin tocar la consola de Firebase.
+
+**Decisión.**
+
+1. **Deshabilitar, nunca borrar.** Borrar destruiría progreso, intentos e
+   histórico y dejaría el nombre de usuario reservado sin dueño. Deshabilitar es
+   reversible y conserva la trazabilidad.
+2. **Cerrar la puerta por los tres lados.** En una sola operación: `status =
+   disabled`, `claimsVersion + 1` (en la **misma** escritura, para que nadie lea
+   estado nuevo con versión vieja), claims nuevas y revocación de los refresh
+   tokens de Firebase Auth. La sesión abierta muere en la siguiente petición
+   porque el servidor relee la ficha.
+3. **Los códigos pendientes se anulan al deshabilitar.** Si no, el código que
+   alguien guardó podría reactivar la cuenta por la puerta de atrás y saltarse la
+   decisión de administración.
+4. **Reemitir solo para `pending_activation`**, y siempre revocando antes de
+   emitir: así nunca hay dos códigos vivos. Un código nuevo **no** activa ni
+   reactiva: reactivar es otra operación explícita.
+5. **El código se muestra una sola vez, fuera de la URL.** Se devuelve en el
+   resultado de la acción de servidor; no queda en el historial del navegador, en
+   `Referer` ni en los registros. En la base solo se guarda su hash y la
+   auditoría registra la emisión sin el secreto.
+6. **El último administrador activo no se puede deshabilitar**, ni por otro
+   administrador ni por sí mismo. Es la única operación que dejaría el sistema
+   sin acceso y sin forma de arreglarlo desde la aplicación.
+7. **Sin límites nuevos inventados.** No se añade caducidad a la cuenta ni
+   borrado automático: no hay TTL en Spark (ADR-025) y no hay requisito de
+   producto que lo pida.
+
+**Consecuencias.**
+
+- El panel tiene una sección **Personas** con lista filtrable, ficha con
+  matrículas, progreso e intentos, y las tres operaciones.
+- Las cuentas deshabilitadas siguen apareciendo en la lista (con su estado), no
+  desaparecen: lo que no se puede es entrar ni recibir documentos.
+- Reemitir un código no cambia el estado: si la cuenta estaba pendiente, sigue
+  pendiente hasta que la persona active con su contraseña.
+- Todo queda en `audits` con `targetUid`, `claimsVersion` resultante y, al
+  deshabilitar, el motivo (máximo 200 caracteres).
+- El portón contra la escalada de privilegios no cambia: por aquí **no** se
+  cambia el rol ni se crean administradores (ADR-013 sigue vigente).
+- Lo que no se ha podido verificar: que Firebase Auth revoque de verdad y que las
+  claims se propaguen. La batería usa dobles y la demostración; el bloqueo de B09
+  (reglas y emulador) sigue declarado.

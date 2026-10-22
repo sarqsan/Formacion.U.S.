@@ -103,6 +103,14 @@ Atajo para enseñar el progreso sin repetir todo: entrar como `rol2.ejemplo`
   que dejan la suite en **547 pruebas** (4 omitidas: las de integración con el
   emulador).
 
+**Administración de cuentas (bloque 09).** Se puede deshabilitar, reactivar y
+reemitir el código de activación de una cuenta **de la demostración**. Lo que se
+ve es real dentro del proceso: la cuenta deshabilitada pierde la sesión en la
+petición siguiente, el código anterior deja de valer y todo queda en la
+auditoría. Lo que **no** ocurre: no se habla con Firebase Auth, así que la
+revocación de refresh tokens y la propagación de claims son un registro local,
+no una llamada real.
+
 **Simulado (y así se indica en pantalla):**
 
 - El almacenamiento: un diccionario en memoria del proceso. Al reiniciar el

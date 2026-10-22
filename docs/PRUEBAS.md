@@ -845,3 +845,64 @@ Lo que **no** demuestran estas pruebas: que la transacción real archive y mueva
 el puntero de forma atómica (sin emulador no se ejecuta), ni que Firestore
 entregue los metadatos de los documentos con la misma latencia. El bloqueo de
 B09 sigue vigente y declarado en `/estado` y en `ENTORNO-PRUEBAS.md`.
+
+## 21. Bloque 09 — administración de cuentas (22/10/2026)
+
+Alcance ejecutado: **deshabilitar**, **reactivar** y **reemitir el código de
+activación** de una cuenta desde administración, con las reglas de transición
+del dominio que hasta ahora no usaba nadie, cierre real de la sesión
+(versión de claims + revocación de refresh tokens), protección del último
+administrador y auditoría sin secretos. No se ha tocado el visor, la subida, la
+publicación, el progreso ni el esquema de datos existente.
+
+| Comprobación | Comando | Resultado |
+| --- | --- | --- |
+| Cadena completa | `npm run verify` | **exit 0**: tipado 0 errores, lint 0 avisos, **799 pruebas en verde**, build OK |
+| Pruebas totales | `npm test` | **799 pasan**, 4 omitidas (emulador), 49 ficheros + 1 omitido (50) |
+| Recorrido de la demostración | `DEMO_MODE=1 npx next start -p 3000` + `npm run check:demo` | **PASSED**, **132 comprobaciones** (antes 109) |
+| Reglas de Firestore | `npm run test:rules` | **BLOQUEADO**: sin JVM |
+| Integración con emulador | `npm run test:firestore` | **BLOQUEADO**: sin JVM |
+| Conexión real | `npm run check:firebase` | **BLOQUEADO**: TLS hacia Google cortado; sin credenciales |
+
+Pruebas nuevas (25, en `tests/server/account-admin.test.ts`):
+
+| Grupo | Qué fija |
+| --- | --- |
+| Quién administra | Un alumno no puede deshabilitar (`FORBIDDEN`); una cuenta no activa tampoco; sin sesión, `UNAUTHENTICATED`; una cuenta inexistente da 404 **sin escribir** |
+| Deshabilitar | Cierra la puerta por los tres lados: estado, claims con `claimsVersion` incrementada y revocación de refresh tokens; anula los códigos pendientes; deja auditoría con el motivo. Funciona también sobre una cuenta pendiente de activación. Repetirlo da `STATUS_UNCHANGED` sin escribir |
+| Último administrador | Deshabilitar al único administrador activo se rechaza (`LAST_ADMIN`, 409) sin escribir y sin revocar nada; si hay otro administrador activo, se permite |
+| Reactivar | Vuelve a `active` con claims nuevas y revocación; una cuenta pendiente **no** se activa por esta vía (`ACCOUNT_PENDING_ACTIVATION`); una ya activa da `STATUS_UNCHANGED` |
+| Reemitir | Token de 32 bytes en formato válido, caducidad a 72 h, **solo el hash** en el almacén (ni en auditoría ni en el JSON), el código anterior queda revocado, cada emisión invalida la anterior (nunca dos vivos) y no se emite para cuentas activas ni deshabilitadas |
+| Resumen | Distingue pendientes, usados y revocados sin devolver hashes; 404 en cuenta inexistente; un alumno no lee el resumen de otra cuenta |
+| Demostración | El mismo servicio sobre el estado en memoria: deshabilitar deja la cuenta inutilizable y revoca; reactivar la recupera; reemitir emite un código válido; no se puede dejar la demo sin administración |
+| Firestore (fuente) | El recuento de administradores activos usa `role`+`status` con `.count()`, que **ya** tenía índice compuesto (no se añade ninguno); estado y `claimsVersion` se escriben juntos; el adaptador no toca contraseñas ni guarda tokens en claro |
+
+Recorrido HTTP añadido a `scripts/demo-smoke.mjs` (23 comprobaciones nuevas):
+
+- administración abre la lista de personas; un alumno recibe 307; una cuenta
+  inexistente da 404;
+- la ficha del único administrador avisa y **no** ofrece deshabilitar;
+- deshabilitar desde la ficha deja la cuenta en `disabled`, **la sesión de esa
+  persona deja de valer** (307 al panel), el filtro `?estado=disabled` la separa,
+  y reactivar la devuelve a `active` con acceso de nuevo (200);
+- reemitir devuelve 200 con el código en la respuesta (nunca en la URL), la
+  segunda emisión anuncia cuántos códigos anuló y el código nuevo **difiere** del
+  anterior; la cuenta sigue `pending_activation`;
+- una cuenta activa no ofrece reemitir.
+
+### Lo que hay que tener presente
+
+- **El código de activación se muestra una sola vez** y viaja en el resultado de
+  la acción de servidor, no en la URL ni en una cookie: no queda en el historial
+  del navegador ni en los registros. Para que el recorrido sin JavaScript pueda
+  enviar ese formulario, el guion de la demo ahora **descodifica las entidades
+  HTML** al leer los campos (es lo que hace un navegador); antes, los campos con
+  estado llegaban con `&quot;` y el servidor respondía 400.
+- **Deshabilitar no borra nada**: el progreso, los intentos y el histórico se
+  conservan, y por eso reactivar devuelve la cuenta tal y como estaba.
+- Lo que **no** demuestran estas pruebas: que Firebase Auth revoque de verdad los
+  refresh tokens ni que las claims nuevas se propaguen a los tokens ya emitidos.
+  En la demostración el cierre de sesión es real dentro del proceso porque cada
+  petición relee la ficha de la cuenta, que es justo la propiedad que interesa.
+  Las consultas nuevas usan índices que ya existían; **no se ha publicado
+  ninguno**.

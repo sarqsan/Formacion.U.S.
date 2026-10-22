@@ -4,6 +4,8 @@ import { FirestoreCourseCatalogStore } from "@/server/firebase/catalog-store";
 import { FirestoreCourseEditorStore } from "@/server/firebase/course-editor-store";
 import type { CourseEditorDependencies } from "@/server/courses/editor";
 import { FirestorePdfDocumentStore } from "@/server/firebase/document-store";
+import { FirestoreAccountAdminStore } from "@/server/firebase/account-admin-store";
+import type { AccountAdminDependencies } from "@/server/accounts/service";
 import { FirestoreEnrollmentStore } from "@/server/firebase/enrollment-store";
 import { FirestoreLearningStore } from "@/server/firebase/learning-store";
 import { pdfLimiter, uploadLimiter } from "@/server/ratelimit/limiter";
@@ -59,6 +61,19 @@ export function documentDependencies(): DocumentDependencies {
     //   - `uploadLimiter` cobra abrir y finalizar subidas (20/hora por admin).
     limiter: pdfLimiter(),
     uploadLimiter: uploadLimiter(),
+  };
+}
+
+/**
+ * Administración de cuentas (bloque 09): deshabilitar, reactivar y reemitir
+ * códigos de activación. Reutiliza el servicio de credenciales de la activación
+ * para revocar refresh tokens y escribir las claims nuevas.
+ */
+export function accountAdminDependencies(): AccountAdminDependencies {
+  return {
+    store: new FirestoreAccountAdminStore(),
+    credentials: new FirebaseCredentialService(),
+    activationTtlHours: ACTIVATION_TOKEN_TTL_HOURS,
   };
 }
 

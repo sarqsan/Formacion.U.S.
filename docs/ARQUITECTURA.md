@@ -182,6 +182,13 @@ no se puede publicar «olvidándose» de comprobarlos. Ver ADR-027.
   versión publicada vigente y que el documento esté **referenciado** en ella;
   antes de responder comprueba tamaño y SHA-256 globales. La lectura por páginas
   (`/pages`) y el progreso no cambian: son cosas distintas y siguen como estaban.
+- **Ciclo de vida de la cuenta** (bloque 09): administración puede deshabilitar,
+  reactivar y reemitir códigos de activación. El servicio
+  (`src/server/accounts/service.ts`) reutiliza las reglas de transición del
+  dominio y la protección del último administrador, y escribe estado y
+  `claimsVersion` juntos antes de revocar refresh tokens. El código nuevo se
+  devuelve una vez y se guarda solo como hash. Detalle en `SEGURIDAD.md`
+  §5.3 quinquies y ADR-028.
 - **Acceso por matrícula** (`enrollments/{uid}_{courseId}`): estar publicado ya
   no da acceso. Matricular y revocar es cosa de administración; toda lectura de
   contenido pasa por `assertCourseAccess`.

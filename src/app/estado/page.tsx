@@ -42,6 +42,12 @@ const ROWS: Row[] = [
       "Corrección en servidor con claves separadas del contenido público. El desbloqueo del examen final se comprueba en el servicio, no en la interfaz.",
   },
   {
+    feature: "Administración de cuentas",
+    state: "demo",
+    detail:
+      "Deshabilitar, reactivar y reemitir el código de activación desde la ficha de cada persona. El estado y la versión de claims se escriben juntos y se revocan las sesiones; el último administrador activo no se puede deshabilitar. Probado con dobles y en la demostración: la revocación real de Firebase Auth no se ha ejecutado.",
+  },
+  {
     feature: "Matrículas",
     state: "real",
     detail:

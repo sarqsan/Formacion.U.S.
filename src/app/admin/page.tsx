@@ -204,9 +204,14 @@ export default async function AdminPage() {
       </section>
 
       <section className="card p-4">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-semibold">Cuentas</h2>
-          <span className="muted text-xs">{accounts.length} en total</span>
+          <div className="flex items-center gap-3">
+            <span className="muted text-xs">{accounts.length} en total</span>
+            <Link href="/admin/personas" className="text-xs underline">
+              Gestionar personas
+            </Link>
+          </div>
         </div>
         <div className="table-wrap mt-2">
           <table className="data">

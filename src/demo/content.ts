@@ -363,7 +363,15 @@ export interface DemoAccount {
   personRol: PersonRol;
   role: AccountRole;
   status: AccountStatus;
+  /**
+   * Versión de las claims. Se incrementa al activar, deshabilitar y reactivar:
+   * un token con la versión anterior deja de valer. Es el mismo campo que en
+   * Firestore, para que la demostración no se comporte «de mentira».
+   */
+  claimsVersion: number;
   createdAt: string;
+  /** Fecha de la deshabilitación; `null` en los demás estados. */
+  disabledAt: string | null;
 }
 
 /**
@@ -378,7 +386,9 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
     personRol: "ROL 1",
     role: "admin",
     status: "active",
+    claimsVersion: 1,
     createdAt: "2026-01-05T08:00:00.000Z",
+    disabledAt: null,
   },
   {
     uid: "demo-alumno-1",
@@ -387,7 +397,9 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
     personRol: "ROL 1",
     role: "learner",
     status: "active",
+    claimsVersion: 1,
     createdAt: "2026-01-06T08:00:00.000Z",
+    disabledAt: null,
   },
   {
     uid: "demo-alumno-2",
@@ -396,7 +408,9 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
     personRol: "ROL 2",
     role: "learner",
     status: "active",
+    claimsVersion: 1,
     createdAt: "2026-01-06T08:05:00.000Z",
+    disabledAt: null,
   },
   {
     uid: "demo-pendiente",
@@ -405,7 +419,9 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
     personRol: "ROL 2",
     role: "learner",
     status: "pending_activation",
+    claimsVersion: 1,
     createdAt: "2026-01-06T08:10:00.000Z",
+    disabledAt: null,
   },
 ];
 

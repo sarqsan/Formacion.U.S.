@@ -20,6 +20,13 @@ import {
 } from "@/server/portal/learner";
 import { publishCourseVersion } from "@/server/courses/catalog";
 import {
+  activationSummary,
+  disableAccount,
+  enableAccount,
+  reissueActivationCode,
+} from "@/server/accounts/service";
+import { demoAccountAdminDeps } from "@/demo/account-admin";
+import {
   createCourse,
   draftEditorView,
   resolveEditorVersion,
@@ -667,6 +674,29 @@ export async function adminAttachDocument(
 // Los servicios de escritura anteriores (`saveDraftVersion`, `updateDraftVersion`)
 // siguen existiendo para pruebas de contrato, pero la administración usa el
 // editor de estructura: una sola puerta, con revisión y puntero de borrador.
+
+/**
+ * Administración de cuentas (bloque 09).
+ *
+ * Mismas operaciones que en producción, con el almacén en memoria y un doble de
+ * credenciales que **no** habla con Firebase: aquí se comprueba la lógica
+ * (transiciones, último admin, códigos por hash), no la revocación real.
+ */
+export async function adminDisableAccount(actor: Actor, uid: string, reason?: string | null) {
+  return disableAccount({ actor, uid, reason }, demoAccountAdminDeps());
+}
+
+export async function adminEnableAccount(actor: Actor, uid: string) {
+  return enableAccount({ actor, uid }, demoAccountAdminDeps());
+}
+
+export async function adminReissueActivationCode(actor: Actor, uid: string) {
+  return reissueActivationCode({ actor, uid }, demoAccountAdminDeps());
+}
+
+export async function adminActivationSummary(actor: Actor, uid: string) {
+  return activationSummary({ actor, uid }, demoAccountAdminDeps());
+}
 
 export async function adminPublish(actor: Actor, courseId: string, version: number) {
   // Publicar exige comprobar que los documentos de la versión existen y están
