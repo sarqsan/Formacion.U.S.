@@ -5,6 +5,9 @@ import type { ImportPreview } from "@/domain/people/import-rows";
 import type { ImportDependencies } from "@/server/import/service";
 import type { DraftStructure, SaveAssessmentsResult } from "@/server/courses/editor";
 import type { QuizQuestionDefinition } from "@/domain/assessments/scoring";
+import type { CreateUploadInput, StorageUsage } from "@/server/documents/service";
+import type { PdfDocumentMeta } from "@/server/documents/store";
+import type { AttachResult } from "@/server/documents/attach";
 import { submitAssessment } from "@/server/assessments/service";
 import { parsePeopleWorkbook } from "@/server/import/excel";
 import { buildImportPreview } from "@/server/import/service";
@@ -280,6 +283,99 @@ export async function adminSaveDraftAssessments(
   return portalMode() === "demo"
     ? demo.adminSaveDraftAssessments(actor, input)
     : firebase.adminSaveDraftAssessments(actor, input);
+}
+
+// ---------------------------------------------------------------------------
+// Documentos PDF (bloque 06)
+// ---------------------------------------------------------------------------
+
+/**
+ * Subida por partes y asociación al borrador.
+ *
+ * Estas operaciones son de administración y escriben: siempre exigen sesión de
+ * administrador **aquí** (además de en el servicio) y se enrutan al almacén de
+ * la demostración o a Firestore según el modo. El identificador del documento
+ * lo calcula el servidor.
+ */
+export async function adminCreatePdfUpload(actor: Actor, input: Omit<CreateUploadInput, "actor">) {
+  assertAdmin(actor);
+  return portalMode() === "demo"
+    ? demo.adminCreatePdfUpload(actor, input)
+    : firebase.adminCreatePdfUpload(actor, input);
+}
+
+export async function adminUploadPdfDocument(
+  actor: Actor,
+  input: {
+    courseId: string;
+    version: number;
+    topicId: string;
+    title: string;
+    pageCount: number;
+    bytes: Uint8Array;
+  },
+) {
+  assertAdmin(actor);
+  return portalMode() === "demo"
+    ? demo.adminUploadPdfDocument(actor, input)
+    : firebase.adminUploadPdfDocument(actor, input);
+}
+
+export async function adminPutPdfPart(
+  actor: Actor,
+  input: { documentId: string; index: number; bytes: Uint8Array },
+) {
+  assertAdmin(actor);
+  return portalMode() === "demo"
+    ? demo.adminPutPdfPart(actor, input)
+    : firebase.adminPutPdfPart(actor, input);
+}
+
+export async function adminFinalizePdfUpload(actor: Actor, documentId: string) {
+  assertAdmin(actor);
+  return portalMode() === "demo"
+    ? demo.adminFinalizePdfUpload(actor, documentId)
+    : firebase.adminFinalizePdfUpload(actor, documentId);
+}
+
+export async function adminAbortPdfUpload(actor: Actor, documentId: string) {
+  assertAdmin(actor);
+  return portalMode() === "demo"
+    ? demo.adminAbortPdfUpload(actor, documentId)
+    : firebase.adminAbortPdfUpload(actor, documentId);
+}
+
+export async function adminArchivePdfDocument(actor: Actor, documentId: string) {
+  assertAdmin(actor);
+  return portalMode() === "demo"
+    ? demo.adminArchivePdfDocument(actor, documentId)
+    : firebase.adminArchivePdfDocument(actor, documentId);
+}
+
+export async function adminPdfStorage(actor: Actor): Promise<StorageUsage> {
+  assertAdmin(actor);
+  return portalMode() === "demo" ? demo.adminPdfStorage() : firebase.adminPdfStorage(actor);
+}
+
+export async function adminPendingPdfUploads(
+  actor: Actor,
+  courseId: string,
+  version: number,
+): Promise<PdfDocumentMeta[]> {
+  assertAdmin(actor);
+  return portalMode() === "demo"
+    ? demo.adminPendingPdfUploads(courseId, version)
+    : firebase.adminPendingPdfUploads(actor, courseId, version);
+}
+
+export async function adminAttachDocument(
+  actor: Actor,
+  input: { documentId: string; expectedRevision: number },
+): Promise<AttachResult> {
+  assertAdmin(actor);
+  return portalMode() === "demo"
+    ? demo.adminAttachDocument(actor, input)
+    : firebase.adminAttachDocument(actor, input);
 }
 
 /** Datos del editor de estructura. Solo lectura; nunca publica. */

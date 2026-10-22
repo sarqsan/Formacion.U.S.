@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   MAX_PAGES_PER_REQUEST,
   archivePdfDocument,
+  documentIdFor,
   readDocumentPages,
   storageUsage,
   uploadPdfDocument,
@@ -11,8 +13,10 @@ import {
   MAX_CHUNKS,
   MAX_PDF_BYTES,
   MAX_TRANSACTION_BYTES,
+  chunkCount,
 } from "@/domain/storage/pdf-chunks";
 import { SlidingWindowLimiter } from "@/server/ratelimit/limiter";
+import type { PdfDocumentMeta } from "@/server/documents/store";
 import {
   ADMIN,
   FIXED_NOW,
@@ -25,6 +29,17 @@ import {
 import { InMemoryPdfDocumentStore } from "../helpers/document-double";
 import { InMemoryEnrollmentStore } from "../helpers/enrollment-double";
 
+/**
+ * DOCUMENTOS: LÍMITES, LECTURA AUTORIZADA Y CUOTA
+ * ===============================================
+ *
+ * Esta batería cubre lo que ya existía (lectura por páginas, matrícula,
+ * secuencia, límites de consumo, cuota) con el ciclo de subida nuevo. El ciclo
+ * de vida completo —partes, reanudación, idempotencia, cancelación y
+ * asociación al borrador— tiene su propia batería en
+ * `tests/server/document-upload.test.ts`.
+ */
+
 function fakePdf(size: number, marker = "A"): Uint8Array {
   const bytes = new Uint8Array(size);
   bytes.fill(marker.charCodeAt(0));
@@ -35,12 +50,18 @@ function fakePdf(size: number, marker = "A"): Uint8Array {
   return bytes;
 }
 
+function sha256(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
 function setup(
   options: {
     budgetBytes?: number;
     publish?: boolean;
     enrolled?: boolean;
     limiter?: SlidingWindowLimiter;
+    /** Siembra el curso con un borrador en lugar de una versión publicada. */
+    draftVersion?: boolean;
   } = {},
 ) {
   const catalog = new InMemoryCatalogStore();
@@ -48,7 +69,8 @@ function setup(
   const enrollments = new InMemoryEnrollmentStore();
   const learning = new InMemoryLearningStore();
 
-  catalog.seedPublished(makeDefinition());
+  if (options.draftVersion) catalog.seedDraft(makeDefinition());
+  else catalog.seedPublished(makeDefinition());
   if (options.publish === false) {
     catalog.courses.set("curso-a", { ...catalog.courses.get("curso-a")!, publishedVersion: null });
   }
@@ -73,7 +95,6 @@ const upload = (bytes: Uint8Array, overrides: Record<string, unknown> = {}) => (
   courseId: "curso-a",
   version: 1,
   topicId: "tema-1",
-  documentId: "doc-tema-1",
   title: "Tema 1 — Apuntes",
   pageCount: 3,
   bytes,
@@ -83,44 +104,97 @@ const upload = (bytes: Uint8Array, overrides: Record<string, unknown> = {}) => (
 /** PDF de tamaño válido para las pruebas de lectura (10 fragmentos). */
 const READ_PDF_BYTES = 40_000;
 
+/**
+ * Siembra un documento **activo** por el ciclo real del almacén (reserva,
+ * partes y verificación) con un identificador fijo, para no repetir la subida
+ * en cada prueba de lectura.
+ */
+async function seedActiveDocument(
+  context: ReturnType<typeof setup>,
+  input: { documentId: string; bytes: Uint8Array; pageCount: number; topicId?: string },
+) {
+  const chunkLengths = Array.from({ length: chunkCount(input.bytes.length) }, (_, index) =>
+    Math.min(CHUNK_BYTES, input.bytes.length - index * CHUNK_BYTES),
+  );
+  const meta: PdfDocumentMeta = {
+    documentId: input.documentId,
+    courseId: "curso-a",
+    version: 1,
+    topicId: input.topicId ?? "tema-1",
+    title: "Tema 1 — Apuntes",
+    pageCount: input.pageCount,
+    bytes: input.bytes.length,
+    sha256: sha256(input.bytes),
+    chunkLengths,
+    uploadedBy: ADMIN.uid,
+    uploadedAt: FIXED_NOW.toISOString(),
+    state: "pending",
+    partsReceived: 0,
+    finalizedAt: null,
+    abortedAt: null,
+  };
+
+  await context.documents.createUpload({ meta, budgetBytes: context.deps.budgetBytes });
+  for (let index = 0; index < chunkLengths.length; index += 1) {
+    await context.documents.putPart({
+      documentId: input.documentId,
+      index,
+      data: input.bytes.subarray(
+        index * CHUNK_BYTES,
+        Math.min((index + 1) * CHUNK_BYTES, input.bytes.length),
+      ),
+      ownerUid: ADMIN.uid,
+    });
+  }
+  await context.documents.finalizeUpload({
+    documentId: input.documentId,
+    bytes: input.bytes.length,
+    sha256: sha256(input.bytes),
+    ownerUid: ADMIN.uid,
+    at: FIXED_NOW.toISOString(),
+  });
+}
+
 async function seedReadable(context: ReturnType<typeof setup>, pageCount = 10) {
   const pdf = fakePdf(READ_PDF_BYTES);
   pdf.fill("B".charCodeAt(0), 10);
-  await uploadPdfDocument(upload(pdf, { pageCount }), context.deps);
+  await seedActiveDocument(context, { documentId: "doc-tema-1", bytes: pdf, pageCount });
   return pdf;
 }
 
 describe("subida: límites de tamaño", () => {
   it("rechaza un archivo vacío", async () => {
-    const { deps, documents } = setup();
+    const { deps, documents } = setup({ draftVersion: true });
     await expect(uploadPdfDocument(upload(new Uint8Array(0)), deps)).rejects.toMatchObject({
       code: "PDF_EMPTY",
     });
-    expect(documents.saves).toBe(0);
+    expect(documents.partWrites).toBe(0);
   });
 
   it("acepta exactamente el máximo permitido (8 MiB)", async () => {
-    const { deps, documents } = setup({ budgetBytes: 64 * 1024 * 1024 });
+    const { deps, documents } = setup({ budgetBytes: 64 * 1024 * 1024, draftVersion: true });
     const pdf = fakePdf(MAX_PDF_BYTES);
 
     const result = await uploadPdfDocument(upload(pdf, { pageCount: 100 }), deps);
 
     expect(result.bytes).toBe(MAX_PDF_BYTES);
     expect(result.chunks).toBe(MAX_CHUNKS);
-    expect(documents.saves).toBe(1);
+    expect(documents.finalizations).toBe(1);
+    expect(await documents.usageBytes()).toBe(MAX_PDF_BYTES);
   });
 
   it("rechaza un byte más del máximo", async () => {
-    const { deps, documents } = setup();
+    const { deps, documents } = setup({ draftVersion: true });
     const pdf = fakePdf(MAX_PDF_BYTES + 1);
 
     await expect(uploadPdfDocument(upload(pdf, { pageCount: 100 }), deps)).rejects.toMatchObject({
       code: "PDF_TOO_LARGE",
     });
-    expect(documents.saves).toBe(0);
+    expect(documents.partWrites).toBe(0);
+    expect(await documents.reservedBytes()).toBe(0);
   });
 
-  it("el máximo cabe en una transacción de Firestore (10 MiB)", async () => {
+  it("el máximo cabe en una transacción de Firestore (10 MiB)", () => {
     // Es el fallo de la fase 5: 20 MiB en 27 fragmentos no cabían.
     expect(MAX_CHUNKS * CHUNK_BYTES).toBeLessThan(MAX_TRANSACTION_BYTES);
     // Con el tope anterior (20 MiB) habría fallado: queda como regresión.
@@ -131,71 +205,85 @@ describe("subida: límites de tamaño", () => {
   });
 
   it("rechaza más páginas que bytes", async () => {
-    const { deps } = setup();
+    const { deps } = setup({ draftVersion: true });
     await expect(
       uploadPdfDocument(upload(fakePdf(1000), { pageCount: 5000 }), deps),
     ).rejects.toMatchObject({ code: "PDF_PAGES_EXCEED_BYTES" });
   });
 
   it("rechaza lo que no es un PDF", async () => {
-    const { deps, documents } = setup();
+    const { deps, documents } = setup({ draftVersion: true });
     const html = new TextEncoder().encode("<html>no soy un pdf</html>");
     await expect(uploadPdfDocument(upload(html), deps)).rejects.toMatchObject({
       code: "PDF_SIGNATURE_INVALID",
     });
-    expect(documents.saves).toBe(0);
+    expect(documents.partWrites).toBe(0);
   });
 
   it("solo administradores activos pueden subir", async () => {
-    const { deps, documents } = setup();
+    const { deps, documents } = setup({ draftVersion: true });
     await expect(
       uploadPdfDocument(upload(fakePdf(1024), { actor: LEARNER }), deps),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
     await expect(
       uploadPdfDocument(upload(fakePdf(1024), { actor: PENDING }), deps),
     ).rejects.toMatchObject({ code: "ACCOUNT_NOT_ACTIVE" });
-    expect(documents.saves).toBe(0);
+    expect(documents.partWrites).toBe(0);
   });
 });
 
 describe("subida: presupuesto, fallos parciales y concurrencia", () => {
-  it("no escribe nada si el documento no cabe en el presupuesto", async () => {
-    const { deps, documents } = setup({ budgetBytes: 10 * 1024 });
+  it("no reserva nada si el documento no cabe en el presupuesto", async () => {
+    const { deps, documents } = setup({ budgetBytes: 10 * 1024, draftVersion: true });
     await expect(
       uploadPdfDocument(upload(fakePdf(20 * 1024), { pageCount: 5 }), deps),
     ).rejects.toMatchObject({ code: "STORAGE_BUDGET_EXCEEDED" });
-    expect(documents.saves).toBe(0);
+    expect(documents.partWrites).toBe(0);
     expect(await documents.usageBytes()).toBe(0);
+    expect(await documents.reservedBytes()).toBe(0);
   });
 
-  it("un fallo a mitad de la escritura no deja fragmentos huérfanos ni contador", async () => {
-    const { deps, documents } = setup();
+  it("un fallo a mitad de la escritura cancela la subida y no deja reserva ni fragmentos", async () => {
+    const { deps, documents } = setup({ draftVersion: true });
     const pdf = fakePdf(CHUNK_BYTES * 2 + 10);
 
-    documents.failOnChunk(1);
+    documents.failOnPart(1);
 
-    await expect(
-      uploadPdfDocument(upload(pdf, { pageCount: 50 }), deps),
-    ).rejects.toThrow();
+    await expect(uploadPdfDocument(upload(pdf, { pageCount: 50 }), deps)).rejects.toThrow();
 
-    // Contrato todo-o-nada: sin metadatos, sin fragmentos y sin cuota gastada.
-    expect(await documents.getMeta("doc-tema-1")).toBeNull();
+    // La subida se cancela: sin metadatos, sin fragmentos y sin cuota gastada
+    // ni reservada.
+    expect(
+      await documents.getMeta(
+        documentIdFor({
+          courseId: "curso-a",
+          version: 1,
+          topicId: "tema-1",
+          sha256: sha256(pdf),
+          bytes: pdf.length,
+        }),
+      ),
+    ).toBeNull();
     expect(await documents.usageBytes()).toBe(0);
+    expect(await documents.reservedBytes()).toBe(0);
     expect(documents.chunkCount()).toBe(0);
 
-    // Y se puede volver a intentar con el mismo id.
+    // Y se puede volver a intentar con el mismo fichero.
     const retry = await uploadPdfDocument(upload(pdf, { pageCount: 50 }), deps);
     expect(retry.bytes).toBe(pdf.length);
   });
 
-  it("dos subidas simultáneas no superan el presupuesto (comprobación al escribir)", async () => {
+  it("dos subidas simultáneas no superan el presupuesto (reserva en la transacción)", async () => {
     // 1 MiB de presupuesto y dos PDF de 700 KiB: solo cabe uno.
-    const { deps, documents } = setup({ budgetBytes: 1024 * 1024 });
-    const pdf = fakePdf(700 * 1024);
+    const { deps, documents } = setup({ budgetBytes: 1024 * 1024, draftVersion: true });
+    // Dos ficheros distintos (huellas distintas ⇒ activos distintos) al mismo
+    // tema: la reserva de uno debe dejar sin sitio al otro.
+    const first = fakePdf(700 * 1024, "A");
+    const second = fakePdf(700 * 1024, "B");
 
     const results = await Promise.allSettled([
-      uploadPdfDocument(upload(pdf, { documentId: "doc-a", pageCount: 20 }), deps),
-      uploadPdfDocument(upload(pdf, { documentId: "doc-b", pageCount: 20 }), deps),
+      uploadPdfDocument(upload(first, { pageCount: 20 }), deps),
+      uploadPdfDocument(upload(second, { pageCount: 20 }), deps),
     ]);
 
     const fulfilled = results.filter((result) => result.status === "fulfilled");
@@ -207,17 +295,27 @@ describe("subida: presupuesto, fallos parciales y concurrencia", () => {
       code: "STORAGE_BUDGET_EXCEEDED",
     });
     expect(await documents.usageBytes()).toBe(700 * 1024);
-    expect(documents.saves).toBe(1);
+    expect(documents.finalizations).toBe(1);
   });
 
-  it("un documento existente no se sobrescribe", async () => {
-    const { deps, documents } = setup();
-    await uploadPdfDocument(upload(fakePdf(1024), { pageCount: 5 }), deps);
+  it("un activo es inmutable: un fichero distinto crea un activo nuevo", async () => {
+    const { deps, documents } = setup({ draftVersion: true });
+    const first = await uploadPdfDocument(upload(fakePdf(1024), { pageCount: 5 }), deps);
+    const second = await uploadPdfDocument(
+      upload(fakePdf(2048, "C"), { pageCount: 5 }),
+      deps,
+    );
 
-    await expect(
-      uploadPdfDocument(upload(fakePdf(2048), { pageCount: 5 }), deps),
-    ).rejects.toMatchObject({ code: "DOCUMENT_ALREADY_EXISTS" });
-    expect(documents.saves).toBe(1);
+    expect(second.documentId).not.toBe(first.documentId);
+    expect((await documents.getMeta(first.documentId))?.bytes).toBe(1024);
+    expect((await documents.getMeta(second.documentId))?.bytes).toBe(2048);
+
+    // Volver a subir el MISMO fichero al mismo sitio no reserva cuota de nuevo.
+    const reservedBefore = await documents.reservedBytes();
+    const again = await uploadPdfDocument(upload(fakePdf(1024), { pageCount: 5 }), deps);
+    expect(again.documentId).toBe(first.documentId);
+    expect(await documents.reservedBytes()).toBe(reservedBefore);
+    expect(await documents.usageBytes()).toBe(1024 + 2048);
   });
 });
 
@@ -422,7 +520,7 @@ describe("lectura: secuencia obligatoria", () => {
     const context = setup();
     // Documento de 1,5 MiB: ocupa dos fragmentos (0 y 1). 30 páginas ⇒ 50 KB/página.
     const pdf = fakePdf(2 * CHUNK_BYTES + 1000);
-    await uploadPdfDocument(upload(pdf, { pageCount: 30 }), context.deps);
+    await seedActiveDocument(context, { documentId: "doc-tema-1", bytes: pdf, pageCount: 30 });
     context.documents.dropChunk("doc-tema-1", 1);
 
     // Las páginas 1..14 caen íntegras en el fragmento 0 y se leen bien…
@@ -583,7 +681,7 @@ describe("lectura: límites de consumo", () => {
 
 describe("cuota de almacenamiento", () => {
   it("informa de lo usado y de lo que queda", async () => {
-    const { deps } = setup({ budgetBytes: 1024 * 1024 });
+    const { deps } = setup({ budgetBytes: 1024 * 1024, draftVersion: true });
     await uploadPdfDocument(upload(fakePdf(256 * 1024), { pageCount: 50 }), deps);
 
     const usage = await storageUsage(deps);

@@ -134,6 +134,23 @@ POST /api/admin/import/confirm   (mismo cuerpo + decisiones)
   avanza página a página (`assertCanViewPage`) en la capa de progreso. Tope del
   PDF: **8 MiB** (11 fragmentos), elegido para que quepa en la transacción de
   10 MiB de Firestore. Ver §4.6.
+- La **subida** es un ciclo con estados, no una escritura: el administrador abre
+  la subida (se reserva la cuota), envía partes de 768 KiB en orden, finaliza (se
+  verifica tamaño y SHA-256 y el documento pasa a `active`) o cancela (se libera
+  la reserva). Solo un documento `active` se asocia a un tema del borrador.
+
+```
+POST /api/admin/documents/uploads                → 201 { documentId, partsTotal, … } (reserva)
+PUT  /api/admin/documents/uploads/{id}/parts/{n} → octet-stream ≤ 768 KiB (orden + %PDF-)
+POST /api/admin/documents/uploads/{id}/finalize  → verifica y activa (idempotente)
+POST /api/admin/documents/uploads/{id}/abort     → cancela y libera la reserva
+POST /api/admin/documents/{id}/attach            → { expectedRevision } → tema del borrador
+GET  /api/admin/documents                        → cuota usada / reservada / libre
+```
+
+Todas exigen sesión de administración, origen verificado y rol comprobado en el
+servicio (`assertAdmin`). El identificador del documento lo calcula el servidor:
+el cliente no lo elige y no puede modificar registros ajenos.
 - **Acceso por matrícula** (`enrollments/{uid}_{courseId}`): estar publicado ya
   no da acceso. Matricular y revocar es cosa de administración; toda lectura de
   contenido pasa por `assertCourseAccess`.

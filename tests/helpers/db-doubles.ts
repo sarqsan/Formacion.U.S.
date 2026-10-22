@@ -326,6 +326,33 @@ export class InMemoryCatalogStore implements CourseCatalogStore {
     this.keys.set(key, toAnswerKeys(definition, { createdAt: now }));
     return definition;
   }
+
+  /**
+   * Siembra una versión **en borrador** (sin publicar), para las pruebas que
+   * necesitan editar contenido: subir un PDF o asociarlo solo se permite sobre
+   * un borrador.
+   */
+  seedDraft(definition = makeDefinition()): CourseVersionDefinition {
+    const now = FIXED_NOW.toISOString();
+    const key = this.versionKey(definition.courseId, definition.version);
+    this.courses.set(definition.courseId, {
+      courseId: definition.courseId,
+      title: definition.title,
+      publishedVersion: null,
+      lastDraftVersion: definition.version,
+    });
+
+    const version = toPublicVersion(definition, {
+      createdAt: now,
+      createdBy: ADMIN.uid,
+      status: "draft",
+    });
+    version.revision = 0;
+
+    this.versions.set(key, version);
+    this.keys.set(key, toAnswerKeys(definition, { createdAt: now }));
+    return definition;
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -33,6 +33,25 @@ import {
 } from "@/server/courses/editor";
 import type { QuizQuestionDefinition } from "@/domain/assessments/scoring";
 import { definitionFromDocuments } from "@/server/courses/definition";
+import {
+  abortPdfUpload,
+  archivePdfDocument,
+  createPdfUpload,
+  finalizePdfUpload,
+  putPdfUploadPart,
+  storageUsage,
+  uploadPdfDocument,
+  type StorageUsage,
+  type UploadDependencies,
+  type UploadDocumentResult,
+} from "@/server/documents/service";
+import {
+  attachDocumentToDraft,
+  type AttachResult,
+} from "@/server/documents/attach";
+import type { PdfDocumentMeta } from "@/server/documents/store";
+import { MemoryPdfDocumentStore } from "@/demo/pdf-store";
+import { budgetBytesFromMiB } from "@/domain/storage/pdf-chunks";
 import type { AttemptRecord, StoredProgress } from "@/server/learning/store";
 import { screensForDocument, type DemoScreen } from "@/demo/content";
 import {
@@ -77,6 +96,32 @@ function catalogStore(): DemoCatalogStore {
 
 function demoCourseEditorDeps(): CourseEditorDependencies {
   return { store: new DemoCourseEditorStore() };
+}
+
+/**
+ * Dependencias de la subida de PDF en demostración.
+ *
+ * Los bytes viven en memoria (`demoState().pdf`) pero el ciclo de vida es el
+ * real: reserva de cuota, partes en orden, verificación de SHA-256 y activación.
+ * No se aplican límites de peticiones: en la demostración hay un solo proceso y
+ * el límite haría fallar una sesión larga sin proteger nada real.
+ */
+/**
+ * Dependencias de la subida en la demostración.
+ *
+ * La demo no lee la configuración del servidor: no hay Firebase y no debe
+ * exigir credenciales para arrancar. El presupuesto sale de la misma variable
+ * (`PDF_STORAGE_BUDGET_MB`, opcional) con el mismo recorte al techo seguro; si
+ * no está, se usa el valor por defecto del dominio (512 MiB).
+ */
+function demoUploadDeps(): UploadDependencies {
+  const raw = process.env.PDF_STORAGE_BUDGET_MB;
+  const mib = raw && raw.trim() !== "" ? Number(raw) : undefined;
+  return {
+    documents: new MemoryPdfDocumentStore(demoState().pdf),
+    catalog: catalogStore(),
+    budgetBytes: budgetBytesFromMiB(mib),
+  };
 }
 
 export function accountLabel(uid: string): string {
@@ -515,6 +560,81 @@ export async function adminDraftEditor(
     version: document,
     definition: definitionFromDocuments(document, keys),
   });
+}
+
+// ---------------------------------------------------------------------------
+// Documentos PDF (subida por partes)
+// ---------------------------------------------------------------------------
+
+export async function adminCreatePdfUpload(
+  actor: Actor,
+  input: {
+    courseId: string;
+    version: number;
+    topicId: string;
+    title: string;
+    pageCount: number;
+    bytes: number;
+    sha256: string;
+  },
+) {
+  return createPdfUpload({ actor, ...input }, demoUploadDeps());
+}
+
+/** Subida de una sola petición (ficheros pequeños), mismo ciclo y misma reserva. */
+export async function adminUploadPdfDocument(
+  actor: Actor,
+  input: {
+    courseId: string;
+    version: number;
+    topicId: string;
+    title: string;
+    pageCount: number;
+    bytes: Uint8Array;
+  },
+): Promise<UploadDocumentResult> {
+  return uploadPdfDocument({ actor, ...input }, demoUploadDeps());
+}
+
+export async function adminPutPdfPart(
+  actor: Actor,
+  input: { documentId: string; index: number; bytes: Uint8Array },
+) {
+  return putPdfUploadPart({ actor, ...input }, demoUploadDeps());
+}
+
+export async function adminFinalizePdfUpload(actor: Actor, documentId: string) {
+  return finalizePdfUpload({ actor, documentId }, demoUploadDeps());
+}
+
+export async function adminAbortPdfUpload(actor: Actor, documentId: string) {
+  return abortPdfUpload({ actor, documentId }, demoUploadDeps());
+}
+
+export async function adminArchivePdfDocument(actor: Actor, documentId: string) {
+  return archivePdfDocument({ actor, documentId }, demoUploadDeps());
+}
+
+export async function adminPdfStorage(): Promise<StorageUsage> {
+  return storageUsage(demoUploadDeps());
+}
+
+/** Subidas pendientes de una versión, para reanudarlas o cancelarlas. */
+export async function adminPendingPdfUploads(
+  courseId: string,
+  version: number,
+): Promise<PdfDocumentMeta[]> {
+  return demoUploadDeps().documents.listPending({ courseId, version });
+}
+
+export async function adminAttachDocument(
+  actor: Actor,
+  input: { documentId: string; expectedRevision: number },
+): Promise<AttachResult> {
+  return attachDocumentToDraft(
+    { actor, ...input },
+    { documents: demoUploadDeps().documents, catalog: catalogStore() },
+  );
 }
 
 // Los servicios de escritura anteriores (`saveDraftVersion`, `updateDraftVersion`)

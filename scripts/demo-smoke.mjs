@@ -5,6 +5,8 @@
  *   node scripts/demo-smoke.mjs [http://127.0.0.1:3000]
  */
 
+import { createHash } from "node:crypto";
+
 const BASE = process.argv[2] ?? "http://127.0.0.1:3000";
 const COURSE = "curso-prevencion-riesgos";
 
@@ -334,6 +336,200 @@ if (editorPath) {
       !learnerWithQuiz.html.includes(questionText) &&
         !learnerWithQuiz.html.includes(finalText),
       "el alumnado no ve las preguntas del borrador",
+    );
+  }
+
+  // --- Documentos PDF: subida por partes, cuota y asociación (bloque 06) ---
+
+  const pdfEditor = await get(editorUrl, admin);
+  assert(
+    pdfEditor.html.includes("Documentos PDF de esta versión"),
+    "el editor incluye la sección de documentos PDF",
+  );
+  assert(
+    pdfEditor.html.includes("no verifica") && pdfEditor.html.includes("Confirmo que el documento"),
+    "el editor pide confirmar las páginas y avisa de que no se verifican",
+  );
+  assert(
+    pdfEditor.html.includes("Cuota de PDF:"),
+    "el editor muestra el estado de la cuota de PDF",
+  );
+
+  const revisionMatch = /expectedRevision" value="(\d+)"/.exec(pdfEditor.html);
+  assert(Boolean(revisionMatch), "el editor expone la revisión vigente del borrador");
+
+  if (revisionMatch) {
+    const revision = Number(revisionMatch[1]);
+    const pdfBytes = Buffer.concat([
+      Buffer.from("%PDF-1.7\n"),
+      Buffer.alloc(2048, 0x41),
+    ]);
+    const digest = createHash("sha256").update(pdfBytes).digest("hex");
+
+    const createResponse = await fetch(`${BASE}/api/admin/documents/uploads`, {
+      method: "POST",
+      headers: { ...admin, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        courseId: EDIT_COURSE,
+        version: 2,
+        topicId: "tema-borrador",
+        title: "PDF del recorrido automático",
+        pageCount: 2,
+        bytes: pdfBytes.length,
+        sha256: digest,
+      }),
+    });
+    const createdUpload = await createResponse.json();
+    assert(
+      createResponse.status === 201 && createdUpload.upload?.state === "pending",
+      `abre la subida pendiente (HTTP ${createResponse.status})`,
+    );
+
+    const documentId = createdUpload.upload?.documentId;
+    assert(
+      typeof documentId === "string" && documentId.startsWith("doc_"),
+      "el servidor asigna el identificador del documento",
+    );
+
+    // El cliente no elige el identificador: si lo manda, la petición se rechaza.
+    const forged = await fetch(`${BASE}/api/admin/documents/uploads`, {
+      method: "POST",
+      headers: { ...admin, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        courseId: EDIT_COURSE,
+        version: 2,
+        topicId: "tema-borrador",
+        title: "Intento de identificador propio",
+        pageCount: 2,
+        bytes: pdfBytes.length,
+        sha256: digest,
+        documentId: "doc_elegido_por_el_cliente",
+      }),
+    });
+    assert(forged.status === 400, `rechaza un identificador elegido por el cliente (HTTP ${forged.status})`);
+
+    // Una parte que no es un PDF se rechaza y la subida no avanza.
+    const notPdf = Buffer.from("<html>no soy un pdf</html>");
+    const badPart = await fetch(
+      `${BASE}/api/admin/documents/uploads/${documentId}/parts/0`,
+      {
+        method: "PUT",
+        headers: { ...admin, "Content-Type": "application/octet-stream" },
+        body: notPdf,
+      },
+    );
+    assert(badPart.status === 400, `rechaza una parte que no es PDF (HTTP ${badPart.status})`);
+
+    // Finalizar antes de tiempo no activa nada.
+    const early = await fetch(`${BASE}/api/admin/documents/uploads/${documentId}/finalize`, {
+      method: "POST",
+      headers: admin,
+    });
+    assert(early.status === 409, `no finaliza con partes ausentes (HTTP ${early.status})`);
+
+    const putPart = await fetch(`${BASE}/api/admin/documents/uploads/${documentId}/parts/0`, {
+      method: "PUT",
+      headers: { ...admin, "Content-Type": "application/octet-stream" },
+      body: pdfBytes,
+    });
+    assert(putPart.status === 200, `guarda la parte 0 (HTTP ${putPart.status})`);
+
+    const pendingEditor = await get(editorUrl, admin);
+    assert(
+      pendingEditor.html.includes("Subidas pendientes") &&
+        pendingEditor.html.includes(documentId),
+      "la subida pendiente aparece en el editor, marcada como pendiente",
+    );
+    assert(
+      !pendingEditor.html.includes("PDF del recorrido automático · 2 página"),
+      "un pendiente no se lista como documento asociado",
+    );
+
+    const finalized = await fetch(`${BASE}/api/admin/documents/uploads/${documentId}/finalize`, {
+      method: "POST",
+      headers: admin,
+    });
+    const finalizedBody = await finalized.json();
+    assert(finalized.status === 200, `finaliza y verifica la huella (HTTP ${finalized.status})`);
+    assert(
+      finalizedBody.upload?.state === "active" && finalizedBody.usage?.usedBytes >= pdfBytes.length,
+      "el documento queda activo y cuenta en la cuota",
+    );
+
+    const attach = await fetch(`${BASE}/api/admin/documents/${documentId}/attach`, {
+      method: "POST",
+      headers: { ...admin, "Content-Type": "application/json" },
+      body: JSON.stringify({ expectedRevision: revision }),
+    });
+    const attachBody = await attach.json();
+    assert(attach.status === 200 && attachBody.attached === true, `asocia el PDF al tema (HTTP ${attach.status})`);
+
+    const attachedEditor = await get(editorUrl, admin);
+    assert(
+      attachedEditor.html.includes("PDF del recorrido automático"),
+      "el documento asociado aparece en el tema del borrador",
+    );
+
+    // Asociar dos veces no duplica.
+    const attachAgain = await fetch(`${BASE}/api/admin/documents/${documentId}/attach`, {
+      method: "POST",
+      headers: { ...admin, "Content-Type": "application/json" },
+      body: JSON.stringify({ expectedRevision: revision + 1 }),
+    });
+    const attachAgainBody = await attachAgain.json();
+    assert(
+      attachAgain.status === 200 && attachAgainBody.attached === false,
+      "reasociar el mismo documento no lo duplica",
+    );
+
+    // Cancelar una subida incompleta libera la cuota reservada.
+    const secondBytes = Buffer.concat([Buffer.from("%PDF-1.7\n"), Buffer.alloc(1024, 0x42)]);
+    const secondDigest = createHash("sha256").update(secondBytes).digest("hex");
+    const secondCreate = await fetch(`${BASE}/api/admin/documents/uploads`, {
+      method: "POST",
+      headers: { ...admin, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        courseId: EDIT_COURSE,
+        version: 2,
+        topicId: "tema-borrador",
+        title: "Subida que se cancela",
+        pageCount: 1,
+        bytes: secondBytes.length,
+        sha256: secondDigest,
+      }),
+    });
+    const secondBody = await secondCreate.json();
+    const secondId = secondBody.upload?.documentId;
+    assert(secondCreate.status === 201, "abre una segunda subida para cancelarla");
+
+    const usageWithReserve = await (await fetch(`${BASE}/api/admin/documents`, { headers: admin })).json();
+    assert(
+      usageWithReserve.reservedBytes >= secondBytes.length,
+      "la subida pendiente reserva cuota antes de recibir bytes",
+    );
+
+    const aborted = await fetch(`${BASE}/api/admin/documents/uploads/${secondId}/abort`, {
+      method: "POST",
+      headers: admin,
+    });
+    const abortedBody = await aborted.json();
+    assert(aborted.status === 200, `cancela la subida incompleta (HTTP ${aborted.status})`);
+    assert(
+      abortedBody.releasedBytes === secondBytes.length,
+      "la cancelación libera exactamente lo reservado",
+    );
+
+    const usageAfterAbort = await (await fetch(`${BASE}/api/admin/documents`, { headers: admin })).json();
+    assert(usageAfterAbort.reservedBytes === 0, "no queda cuota reservada tras cancelar");
+
+    // El alumnado no ve el documento del borrador ni puede leerlo.
+    const learnerDoc = await get(
+      `/cursos/${EDIT_COURSE}/documentos/${documentId}`,
+      learner,
+    );
+    assert(
+      learnerDoc.status !== 200 || !learnerDoc.html.includes("PDF del recorrido automático"),
+      `el pendiente/borrador no se sirve al alumnado (HTTP ${learnerDoc.status})`,
     );
   }
 

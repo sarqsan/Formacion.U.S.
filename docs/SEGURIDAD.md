@@ -16,7 +16,7 @@ una prueba o una configuración verificable detrás.
 | T5 | Alteración del progreso | Escritura desde cliente prohibida en reglas; recálculo en servidor; auditoría automática comprueba que no hay escrituras de Firestore en el código de navegador | Sí (dominio, servicio y auditoría) / reglas sin ejecutar |
 | T6 | Autoinflado de resultados | El cliente envía opciones; `gradeAttempt` corrige contra la clave del servidor; `passed` nunca viene del cliente | Sí |
 | T7 | Fuga de respuestas correctas | `toClientQuiz` elimina `correctOptionIds`; `answerKeys` con `allow read: false` | Sí (dominio) / reglas sin emular |
-| T8 | PDF público permanente | Bucket sin acceso cliente; URLs firmadas de 300 s; rutas validadas | Sí (rutas) / firma sin ejecutar |
+| T8 | PDF público permanente | No hay Storage ni URL: fragmentos solo-servidor y lectura por páginas con sesión, matrícula y orden | Sí (dominio y rutas) / reglas sin emular |
 | T9 | Path traversal en Storage | `isSafeStoragePath` + `assertPathWithinTopic` | Sí |
 | T10 | Alteración de rol/estado | `role`/`status`/`claimsVersion` solo con Admin SDK; reglas `write: false`; `isAdmin()` exige rol admin en la ficha y en el token | Sí (dominio y auditoría estática) / reglas sin ejecutar |
 | T11 | Sesión robada persiste tras deshabilitar | Triple barrera: (1) `resolveSession` compara ficha y token en servidor; (2) las **reglas** consultan la ficha con `get()`, no solo las claims; (3) sesión `checkRevoked`. Política probada con 16 pruebas; reglas **sin ejecutar** | Parcial: lógica sí, reglas no |
@@ -26,6 +26,13 @@ una prueba o una configuración verificable detrás.
 | T15 | Fuga de secretos en el repositorio | `.env*` ignorado; sin claves en código; `.env.example` sin valores | Revisado |
 | T16 | Duplicar cuentas de una persona real | Duplicados exigen decisión; "ya existe" no se puede incluir | Sí |
 | T17 | Dejar el sistema sin administradores | Protección del último admin activo | Sí |
+
+| T18 | Subida de PDF sin permiso | `assertAdmin` en el servicio, sesión de portal en la ruta y origen verificado; la versión debe ser `draft` | Sí |
+| T19 | Ocupar la cuota con subidas falsas | La reserva se hace **en la misma transacción** que el registro, hay límite por usuario y hora (20/h) y la cancelación libera la reserva | Sí (dominio y demo) / transacción real sin emulador |
+| T20 | Colar un fichero que no es un PDF | La parte 0 debe empezar por `%PDF-`; se comprueban tamaño declarado, tamaño por parte, número de partes y SHA-256 global antes de activar | Sí |
+| T21 | Servir o publicar un documento incompleto | `getMeta` oculta `aborted`; la lectura y la asociación exigen `state === "active"` | Sí |
+| T22 | Elegir el id de un documento ajeno | El id lo calcula el servidor a partir del contenido y del destino; el cuerpo con `documentId` u otros campos extra se rechaza (`strictObject`) | Sí |
+| T23 | Sustituir un PDF ya publicado | Un `active` es inmutable: no acepta más partes y la cancelación se rechaza (`UPLOAD_ALREADY_ACTIVE`); sustituir es un activo nuevo | Sí |
 
 ## 2. Autenticación y sesión
 
@@ -117,6 +124,32 @@ peticiones en orden y dentro de los límites) y reconstruir el PDF. Los límites
 por usuario y globales encarecen el abuso y protegen la cuota gratuita, no son
 DRM. No se ha implementado marca de agua ni cifrado; si se exige, es un bloque
 aparte (marca de agua por usuario, PDF cifrado).
+
+### 5.3 ter Subida de PDF: límites conocidos
+
+Lo que la subida por partes **no** resuelve, dicho sin adornos:
+
+- **No hay análisis antivirus.** El servidor comprueba que el fichero es un PDF
+  (cabecera, tamaños, SHA-256) pero no que su contenido sea inocuo. Un PDF con
+  código incrustado es un PDF válido. El alumnado lo descarga por páginas y lo
+  abre con su lector: la mitigación real es que solo se aceptan ficheros de
+  administradores y que el visor es un bloque posterior.
+- **El número de páginas es una declaración**, no una comprobación. Si el
+  administrador se equivoca, el control de lectura usará un número incorrecto.
+  La interfaz lo exige de forma expresa y el modelo de datos lo guarda tal cual.
+- **Sin TTL**: Firestore solo ofrece TTL en Blaze. Una subida pendiente que se
+  abandona ocupa su reserva hasta que alguien la cancela desde el editor. Es
+  visible (aparece como «subida pendiente») y cancelable, pero no caduca sola.
+- **La atomicidad de la reserva está probada en dobles y en la demo, no en
+  Firestore real**: sin JVM no hay emulador y no se ha ejecutado. La
+  implementación usa transacciones con lectura previa del contador, que es el
+  patrón documentado, pero **no está verificado aquí**.
+- **El límite de cuerpo de las funciones desplegadas no se puede verificar desde
+  el repositorio.** Por eso la interfaz usa partes de 768 KiB: el margen frente a
+  los ~4,5 MB documentados por Vercel en el plan Hobby es amplio, pero es una
+  precaución, no una medición hecha en producción.
+- **Un `pending` no se sirve a nadie**: ni al alumnado, ni al administrador por
+  la API de lectura. Para inspeccionarlo hay que finalizarlo o cancelarlo.
 
 ### 5.3 bis Copias de seguridad: cifradas, pero sin instantánea global
 

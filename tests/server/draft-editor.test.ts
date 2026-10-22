@@ -788,6 +788,7 @@ describe("equivalencia demo ↔ contrato real", () => {
         order: 1,
         mandatory: true,
         documents: 0,
+        documentList: [],
         questions: 0,
         quiz: [],
       },

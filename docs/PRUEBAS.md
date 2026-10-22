@@ -686,3 +686,57 @@ Lo que **no** demuestran estas pruebas: que la transacción de Firestore escriba
 los dos documentos de forma atómica en un proyecto real, ni que las reglas
 permitan o denieguen nada. Dobles y demo son memoria; el emulador no arranca sin
 JVM y la conexión real está cortada.
+
+## 18. Bloque 06 — subida privada de PDF y control de cuota (22/10/2026)
+
+Alcance ejecutado: abrir una subida pendiente con reserva de cuota, enviar el
+PDF por partes, finalizar verificando tamaño y SHA-256, cancelar liberando la
+reserva, y asociar el documento **activo** al tema de un borrador. **No** se ha
+tocado la publicación, el visor por páginas ni ningún bloque posterior.
+
+| Comprobación | Comando | Resultado |
+| --- | --- | --- |
+| Cadena completa | `npm run verify` | **exit 0**: tipado 0 errores, lint 0 avisos, **725 pruebas en verde**, build OK |
+| Pruebas totales | `npm test` | **725 pasan**, 4 omitidas (emulador), 45 ficheros + 1 omitido (46) |
+| Recorrido de la demostración | `DEMO_MODE=1 npx next start -p 3000` + `npm run check:demo` | **PASSED**, **79 comprobaciones** (antes 56) |
+| Reglas de Firestore | `npm run test:rules` | **BLOQUEADO**: sin JVM |
+| Integración con emulador | `npm run test:firestore` | **BLOQUEADO**: sin JVM |
+| Conexión real | `npm run check:firebase` | **BLOQUEADO**: TLS hacia Google cortado; sin credenciales |
+
+Pruebas nuevas (36):
+
+| Fichero | Pruebas | Qué fijan |
+| --- | ---: | --- |
+| `tests/domain/pdf-upload.test.ts` | 12 | Tamaño declarado (0, exacto 8 MiB, exceso), forma del SHA-256, páginas declaradas y su relación con los bytes, identificador `doc_` + 32 hex, material de identidad, tamaño de cada parte (la última puede ser corta), orden (`write`/`retry`/fuera de orden), progreso sin pasarse de 100 %, partes ausentes, cabecera `%PDF-` (incluida tras relleno) y rechazo de HTML/vacío |
+| `tests/server/document-upload.test.ts` | 24 | Ciclo completo y activación solo tras verificar; 8 MiB exactos en 11 partes; parte 0 que no es PDF; versión publicada; tema inexistente y páginas imposibles; autor ajeno y alumno; parte adelantada, corta o fuera de rango; reenvío idempotente y conflicto con contenido distinto; finalización incompleta con números; SHA-256 incorrecto y fragmento corrompido en el almacén; interrupción y reanudación sin reescribir; creación y finalización idempotentes; cancelación que libera y borra una sola vez; archivo de un activo; volver a subir tras cancelar; reserva antes de recibir bytes; dos aperturas simultáneas que no caben; reserva convertida en uso; asociación idempotente, rechazo de pendientes y de versiones publicadas, revisión obsoleta; inmutabilidad del activo; paridad demo ↔ dobles |
+| `tests/server/document-service.test.ts` | reescrito (36) | La batería anterior de lectura, límites y cuota, ahora sobre el ciclo nuevo: incluye presupuesto agotado sin reserva, fallo a mitad con reintento y concurrencia de dos ficheros distintos |
+
+Recorrido HTTP añadido a `scripts/demo-smoke.mjs` (23 comprobaciones nuevas):
+
+- el editor incluye la sección de PDF, avisa de que el número de páginas **no se
+  verifica** y pide confirmarlo, y muestra la cuota;
+- abrir la subida devuelve **201** y un `documentId` que asigna el servidor; un
+  cuerpo con `documentId` propio se rechaza con **400**;
+- una parte que no es PDF se rechaza con **400** y finalizar antes de tiempo con
+  **409**;
+- la subida pendiente aparece en el editor y **no** se lista como documento
+  asociado;
+- finalizar verifica la huella (**200**), el documento queda activo y cuenta en
+  la cuota; asociarlo lo deja en el tema y reasociarlo no lo duplica;
+- una segunda subida reserva cuota antes de recibir bytes y, al cancelarla,
+  libera exactamente lo reservado (la reserva vuelve a cero);
+- el alumnado no recibe el documento del borrador.
+
+Corrección encontrada al ejecutar el recorrido: las rutas nuevas llamaban a
+`getServerConfig()` para comprobar el origen y en la demostración devolvían
+**503** por falta de `FIREBASE_PROJECT_ID`. Ahora usan `configuredAppOrigin()`
+(solo lee `APP_ORIGIN`) y `requirePortalActor()` (sesión de Firebase en modo
+real, cookie de la demo en la demostración). El endurecimiento de producción no
+se relaja: el camino real sigue exigiendo la configuración completa.
+
+Lo que **no** demuestran estas pruebas: que la transacción de Firestore reserve
+de verdad sin carreras en un proyecto real (dobles y demo son memoria, sin
+concurrencia real) ni que la lectura de fragmentos fuera de la transacción no
+pueda dejar un estado intermedio visible. El emulador sigue sin arrancar por
+falta de JVM, así que la subida se declara **verificada en dominio, servicio y
+demostración**, y **no verificada** contra Firestore real.

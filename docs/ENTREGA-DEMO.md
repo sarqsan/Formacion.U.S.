@@ -110,8 +110,11 @@ Atajo para enseñar el progreso sin repetir todo: entrar como `rol2.ejemplo`
   real.
 - La sesión: una cookie con el uid de una cuenta ficticia. No hay contraseña,
   token firmado ni verificación de Firebase.
-- El «PDF»: la lectura usa pantallas de texto. El código de PDF por fragmentos
-  existe y está probado con dobles, pero no se ejecuta aquí.
+- El «PDF»: la **subida** sí se ejecuta de verdad en la demostración (el
+  administrador elige un PDF, se parte en trozos de 768 KiB, se verifica el
+  SHA-256 y el documento queda activo o se cancela), pero los fragmentos viven en
+  la memoria del proceso. La **lectura** del alumnado sigue usando pantallas de
+  texto: el visor por páginas es un bloque posterior.
 - La creación de cuentas tras la importación: no se ejecuta.
 
 **Pendiente de Firebase o servicios externos (no se declara conectado):**
@@ -120,7 +123,8 @@ Atajo para enseñar el progreso sin repetir todo: entrar como `rol2.ejemplo`
 | --- | --- |
 | Inicio de sesión y activación reales | Proyecto Firebase con Authentication y credenciales de servicio |
 | Persistencia de cursos, matrículas, progreso e intentos | Firestore; las reglas están escritas pero **0 de 41 pruebas ejecutadas** |
-| Subida y servido de PDF | Firestore + emulador para validar transacciones y cuota |
+| Persistencia de PDF y cuota real | Firestore + emulador para validar transacciones y reservas; en la demo los fragmentos se pierden al reiniciar |
+| Lectura del PDF por páginas | Visor (bloque posterior) sobre `/api/documents/{id}/pages` |
 | Creación de cuentas al confirmar la importación | Firebase Authentication (no disponible en el plan gratuito sin proyecto) |
 | Copia de seguridad ensayada de verdad | Emulador; el ensayo automático está bloqueado |
 
@@ -157,7 +161,8 @@ formularios del servidor tal cual (sin JavaScript) y comprueba las redirecciones
   preparado para demostrar la publicación.
 - Un administrador no puede «entrar como alumno» a un curso: se le redirige al
   panel de contenido (es una decisión de permisos, no un fallo).
-- No hay subida de PDF ni reproducción de documentos reales.
+- La subida de PDF funciona en el editor del borrador (en memoria y sin
+  persistencia); lo que no hay todavía es la lectura del PDF por páginas.
 - La accesibilidad se ha revisado a mano (foco visible, etiquetas, contraste);
   falta una pasada con lector de pantalla.
 

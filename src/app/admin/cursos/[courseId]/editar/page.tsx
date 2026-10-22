@@ -1,9 +1,11 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { getUiSession } from "@/demo/session";
-import { adminDraftEditor } from "@/server/portal";
+import { adminDraftEditor, adminPendingPdfUploads, adminPdfStorage } from "@/server/portal";
 import { saveDraftAction, saveQuizAction, startDraftAction } from "@/app/actions/demo";
+import { formatBytes } from "@/domain/storage/pdf-chunks";
 import { QuizFields } from "./quiz-fields";
+import { PdfUploader, type PendingUploadView } from "./pdf-uploader";
 
 export const dynamic = "force-dynamic";
 
@@ -60,6 +62,33 @@ export default async function DraftEditorPage({
 
   const isDraft = view.status === "draft";
   const coursePath = `/admin/cursos/${view.courseId}`;
+
+  // Cuota y subidas pendientes solo tienen sentido en un borrador editable; en
+  // una versión publicada no se consultan (no se puede subir nada a ella).
+  const [pdfUsage, pendingUploads] = isDraft
+    ? await Promise.all([
+        adminPdfStorage(session.actor),
+        adminPendingPdfUploads(session.actor, view.courseId, view.version),
+      ])
+    : [null, []];
+
+  const pendingViews: PendingUploadView[] = pendingUploads.map((item) => {
+    const partsTotal = Math.max(1, item.chunkLengths.length);
+    return {
+      documentId: item.documentId,
+      topicId: item.topicId,
+      title: item.title,
+      bytes: item.bytes,
+      pageCount: item.pageCount,
+      partsTotal,
+      partsReceived: item.partsReceived,
+      percent: Math.min(100, Math.floor((item.partsReceived / partsTotal) * 100)),
+      uploadedAt: item.uploadedAt,
+    };
+  });
+
+  const documentsByTopic: Record<string, Array<{ id: string; title: string; pageCount: number }>> =
+    Object.fromEntries(view.topics.map((topic) => [topic.id, topic.documentList]));
 
   return (
     <div className="space-y-5">
@@ -274,6 +303,54 @@ export default async function DraftEditorPage({
               </span>
             </div>
           </form>
+
+          <section className="card space-y-4 p-5">
+            <div>
+              <h2 className="text-sm font-semibold">Documentos PDF de esta versión</h2>
+              <p className="muted mt-1 text-xs">
+                Los PDF se guardan en Firestore por fragmentos, solo en el servidor: no hay enlaces
+                públicos ni Storage. Un documento se sube por partes, se verifica con su SHA-256 y
+                solo entonces se asocia al tema. Hasta ese momento no lo ve nadie.
+              </p>
+              {pdfUsage ? (
+                <div className="mt-2">
+                  <p className="text-xs">
+                    Cuota de PDF: <strong>{formatBytes(pdfUsage.usedBytes)}</strong> en uso ·{" "}
+                    <strong>{formatBytes(pdfUsage.reservedBytes)}</strong> reservado por subidas
+                    pendientes · <strong>{formatBytes(pdfUsage.freeBytes)}</strong> libres de{" "}
+                    {formatBytes(pdfUsage.budgetBytes)} ({pdfUsage.percent}% comprometido)
+                  </p>
+                  <div
+                    className="mt-1 h-2 w-full overflow-hidden rounded bg-[var(--line)]"
+                    role="img"
+                    aria-label={`Cuota comprometida: ${pdfUsage.percent}%`}
+                  >
+                    <div
+                      className="h-full bg-[var(--accent,#2563eb)]"
+                      style={{ width: `${Math.min(100, pdfUsage.percent)}%` }}
+                    />
+                  </div>
+                </div>
+              ) : null}
+              <p className="muted mt-1 text-xs">
+                {view.topics.reduce((sum, topic) => sum + topic.documents, 0)} documento(s)
+                asociados · {pendingUploads.length} subida(s) pendiente(s)
+              </p>
+            </div>
+
+            <PdfUploader
+              courseId={view.courseId}
+              version={view.version}
+              expectedRevision={view.revision}
+              topics={view.topics.map((topic) => ({
+                id: topic.id,
+                title: topic.title,
+                order: topic.order,
+              }))}
+              pending={pendingViews}
+              documentsByTopic={documentsByTopic}
+            />
+          </section>
 
           <section className="card space-y-4 p-5">
             <div>

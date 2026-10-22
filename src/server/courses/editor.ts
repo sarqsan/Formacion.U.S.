@@ -661,6 +661,8 @@ export interface DraftTopicView {
   order: number;
   mandatory: boolean;
   documents: number;
+  /** Referencias de los PDF asociados al tema (título y páginas declaradas). */
+  documentList: Array<{ id: string; title: string; pageCount: number }>;
   questions: number;
   /**
    * Preguntas con su clave, para el editor. Esta vista solo la usan las
@@ -732,6 +734,11 @@ export function draftEditorView(input: {
         order: topic.order,
         mandatory: topic.mandatory,
         documents: topic.documents.length,
+        documentList: topic.documents.map((document) => ({
+          id: document.id,
+          title: document.title,
+          pageCount: document.pageCount,
+        })),
         questions: topic.quiz.length,
         quiz: topic.quiz.map((question) => ({
           ...question,

@@ -6,7 +6,7 @@ import type { CourseEditorDependencies } from "@/server/courses/editor";
 import { FirestorePdfDocumentStore } from "@/server/firebase/document-store";
 import { FirestoreEnrollmentStore } from "@/server/firebase/enrollment-store";
 import { FirestoreLearningStore } from "@/server/firebase/learning-store";
-import { pdfLimiter } from "@/server/ratelimit/limiter";
+import { pdfLimiter, uploadLimiter } from "@/server/ratelimit/limiter";
 import type { DocumentDependencies } from "@/server/documents/service";
 import type { EnrollmentDependencies } from "@/server/enrollments/service";
 import { ACTIVATION_TOKEN_TTL_HOURS } from "@/domain/auth/activation";
@@ -52,9 +52,12 @@ export function documentDependencies(): DocumentDependencies {
     enrollments: new FirestoreEnrollmentStore(),
     learning: new FirestoreLearningStore(),
     budgetBytes: budgetBytesFromMiB(config.PDF_STORAGE_BUDGET_MB),
-    // Límite en memoria por proceso: suficiente para un servidor propio; con
+    // Límites en memoria por proceso: suficiente para un servidor propio; con
     // varias instancias habría que compartir el contador.
+    //   - `limiter` cobra lecturas (por página) y partes de subida;
+    //   - `uploadLimiter` cobra abrir y finalizar subidas (20/hora por admin).
     limiter: pdfLimiter(),
+    uploadLimiter: uploadLimiter(),
   };
 }
 

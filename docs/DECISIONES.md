@@ -602,3 +602,85 @@ documentos.
 - Las pruebas fijan: contenido sin claves, claves sin restos, atomicidad ante
   fallo del almacén, publicación intacta y ausencia de respuestas en la vista
   del alumno.
+
+## ADR-025 · La subida de un PDF es un ciclo con estados, no una escritura
+
+**Contexto.** El bloque 06 tiene que aceptar PDF de hasta 8 MiB en una
+plataforma cuyo plan gratuito no incluye Cloud Storage y cuyas funciones
+desplegadas tienen un límite de cuerpo pequeño (≈4,5 MB documentados por Vercel
+en Hobby, no medibles desde el repositorio). El PDF vive troceado en Firestore
+(768 KiB por fragmento), y Firestore limita a 1 MiB por documento y 10 MiB por
+transacción. Una sola petición con el fichero entero no es una opción.
+
+**Decisión.**
+
+1. **Cuatro pasos idempotentes con estado explícito** en lugar de un `PUT`
+   grande: `create → putPart × n → finalize`, y `abort` para cancelar. El estado
+   (`pending`, `active`, `aborted`, `archived`) está en el documento, no en la
+   memoria del proceso: si el servidor se reinicia a mitad, la subida se puede
+   reanudar o cancelar.
+2. **La cuota se reserva al crear, no al terminar.** Sin reserva habría una
+   ventana en la que diez subidas simultáneas caben todas y el presupuesto se
+   desborda al finalizar. La reserva se comprueba y se escribe en la **misma
+   transacción** que el registro; al finalizar se convierte en uso y al cancelar
+   se libera. `create` es idempotente por `documentId`, así que un reintento no
+   reserva dos veces.
+3. **El SHA-256 se verifica fuera de la transacción de finalización.** Leer once
+   fragmentos (8,25 MiB) dentro de una transacción se acerca al límite de 10 MiB
+   con el propio PDF y con el registro de cuota. Se leen y se comprueban antes; y
+   solo cuando la huella coincide, una transacción corta mueve la reserva a uso y
+   activa. El coste es una ventana en la que el documento está `pending` aunque
+   sus bytes ya estén escritos: es visible (aparece como pendiente) y no se sirve
+   a nadie.
+4. **El identificador lo pone el servidor.** `doc_` + 32 hex de
+   `sha256(courseId|version|topicId|bytes|sha256)`. Dos consecuencias buscadas:
+   el cliente no puede elegir ni adivinar un id para ocuparlo, y subir dos veces
+   el mismo fichero al mismo tema es la misma operación (idempotencia gratis).
+   Sustituir un PDF es subir otro: un activo nunca se sobrescribe.
+5. **Solo un `active` cuenta.** `pending` y `aborted` no se sirven, no se
+   asocian y no se publican. Asociar exige además que la versión sea `draft`.
+6. **Nada de un fichero de 8 MiB como base64 en un documento**: serían ~10,7 MiB
+   en un límite de 1 MiB. El troceado en `Bytes` no es una optimización.
+
+**Consecuencias.**
+
+- Reanudar exige volver a elegir el fichero (el navegador no conserva `File`
+  entre recargas); el servidor comprueba el tamaño y acepta las partes que ya
+  tenía. El editor dice explícitamente «el documento aún no está guardado»
+  hasta que la finalización responde.
+- Una subida abandonada ocupa su reserva hasta que se cancela desde el editor:
+  **no hay TTL**, porque Firestore solo lo ofrece en Blaze.
+- El número de páginas es **declarado**, no verificado: el servidor no
+  interpreta PDF. La interfaz exige confirmarlo y lo deja escrito.
+- `archiveDocument` libera el uso de un activo que ya no se referencia, sin
+  borrar el historial de la versión que lo usó.
+- La atomicidad de la reserva está probada en dobles y en la demo; contra
+  Firestore real **no está verificada** (sin JVM no hay emulador).
+
+## ADR-026 · La demostración no pide configuración de Firebase para subir PDF
+
+**Contexto.** Las rutas nuevas nacieron llamando a `getServerConfig()` para
+comprobar el origen de la petición. En la demostración (`DEMO_MODE=1`) no hay
+`FIREBASE_PROJECT_ID` ni credenciales, así que todas las llamadas devolvían 503:
+la sección de PDF se veía, pero ningún botón funcionaba.
+
+**Decisión.** Dos piezas pequeñas, sin duplicar el camino real:
+
+1. `configuredAppOrigin()` lee **solo** `APP_ORIGIN` (opcional). La comprobación
+   de origen (`assertTrustedOrigin`) es la misma de siempre y sigue aceptando el
+   `Host` real como respaldo.
+2. `requirePortalActor()` resuelve la sesión de la demo en modo demostración y
+   delega en `requireActor()` (Firebase) en modo real. La autorización no se
+   decide ahí: `assertAdmin` sigue en el servicio.
+
+**Por qué no se relaja la seguridad.** En modo real el camino completo sigue
+exigiendo la configuración entera —incluido el endurecimiento de producción
+(`APP_ORIGIN` obligatorio y https, prefijo `__Host-` en la cookie)— porque
+`requireActor()` la pide antes de leer la sesión. Lo único que cambia es que una
+petición **anónima** en la demostración ya no falla con un 503 engañoso.
+
+**Consecuencias.** El recorrido `check:demo` ejercita las rutas HTTP reales de
+subida (crear, partes, finalizar, asociar, cancelar) contra el mismo código que
+se despliega; las pruebas estáticas de autorización aceptan `requirePortalActor(`
+como guarda de sesión, con lo que sigue sin poder añadirse una ruta de
+administración sin guarda.

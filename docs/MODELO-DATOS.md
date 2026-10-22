@@ -182,9 +182,30 @@ contenido**. Reglas:
 
 ### `documents/{documentId}` — metadatos de PDF (sin binario, solo servidor)
 
-`{ courseId, version, originVersion, topicId, title, pageCount, bytes, sha256, chunkLengths, uploadedBy, uploadedAt, archived }`
+```
+{ courseId, version, originVersion, topicId, title, pageCount, bytes, sha256,
+  chunkLengths: number[], partsReceived: number,
+  state: "pending" | "active" | "aborted" | "archived",
+  uploadedBy, uploadedAt, finalizedAt: string | null, abortedAt: string | null,
+  archived: boolean }        // campo heredado; state es la fuente de verdad
+```
 
 No hay ruta de Storage ni URL: **el binario no tiene ubicación pública**.
+
+**Ciclo de vida (`state`).** Un documento nace `pending`, con la cuota ya
+reservada y sin fragmentos; pasa a `active` cuando el servidor ha comprobado el
+número de fragmentos, el tamaño total y el **SHA-256** del fichero entero. Una
+subida que se cancela queda `aborted` (sin fragmentos y sin reserva). Solo un
+`active` puede asociarse a un tema y solo un `active` se sirve al alumnado: un
+`pending` es invisible incluso con su identificador en la mano. `aborted` y
+`archived` no se sirven nunca.
+
+`documentId` **lo calcula el servidor**: `doc_` + 32 hex de
+`sha256("courseId|version|topicId|bytes|sha256")`. El cliente no elige ids, así
+que no puede ocupar el identificador de otro documento ni «reservar» uno vacío.
+Consecuencia práctica: subir dos veces el mismo fichero al mismo tema es la
+misma operación (idempotente), y subir un fichero distinto crea otro activo
+(sustituir un PDF = activo nuevo, nunca sobrescribir).
 
 **Desde el esquema v2 esta colección es solo-servidor** (`allow read, write: if
 false`). Antes la leía cualquier cuenta con matrícula activa en el curso, y eso
@@ -217,6 +238,18 @@ Storage** (requiere Blaze). Detalles que importan:
   absoluto con este tamaño de fragmento: 12 fragmentos (9 MiB).
 - El límite de 500 escrituras por transacción se retiró; el que manda es el
   de 10 MiB por petición.
+- Cada fragmento lleva también `index` y `sha256OfDocument`, y el servicio
+  comprueba **en la parte 0** que el contenido empieza por `%PDF-`: el nombre y
+  el `Content-Type` no cuentan como validación.
+- Las partes se aceptan **en orden** (`index === partsReceived`): reenviar una ya
+  guardada es idempotente si su huella coincide y un conflicto (`PDF_CHUNK_CONFLICT`)
+  si no. Eso permite reanudar una subida interrumpida sin repetir escrituras y
+  sin aceptar un fichero a medias de dos versiones distintas.
+- La verificación del SHA-256 global se hace **fuera** de la transacción de
+  finalización (leer once fragmentos dentro de una transacción se acercaría al
+  límite de 10 MiB con el propio PDF): primero se leen y se comprueban los
+  fragmentos, y solo si la huella coincide se mueve la reserva a uso y se activa
+  el documento en una transacción corta.
 - Solo los lee y escribe el servidor con el Admin SDK. Las reglas los cierran
   (`allow read, write: if false`), así que conocer el id no sirve de nada.
 - El cliente pide páginas a `/api/documents/{id}/pages?from=&to=` (máximo 20
@@ -238,14 +271,24 @@ versión nueva. Es un histórico inmutable: permite responder qué había
 completado alguien en la v1 cuando ya va por la v3. Sin regla de lectura para
 el cliente, salvo la propia del usuario (ver §3).
 
-### `meta/storage` — contador de cuota de PDF
+### `meta/storage` — contadores de cuota de PDF
 
-`{ usedBytes, updatedAt }`
+`{ usedBytes, reservedBytes, updatedAt }`
 
-Se actualiza en la **misma transacción** que los fragmentos, de modo que dos
-subidas simultáneas no pueden pasar ambas la comprobación de cuota. `db:check`
-compara este contador con la suma real de `documents.bytes` y avisa si se
-separan.
+- `usedBytes`: bytes de documentos `active`. Es lo que ocupa de verdad.
+- `reservedBytes`: bytes de documentos `pending`. Es cuota **comprometida** que
+  todavía no está en el almacén. Al crear la subida se reserva, al finalizar se
+  convierte en uso y al cancelar se libera.
+
+Los dos se actualizan en la **misma transacción** que el documento, de modo que
+dos subidas simultáneas no pueden pasar ambas la comprobación de presupuesto (la
+comprobación y la reserva ocurren en la misma transacción, no en dos pasos). Un
+reintento de la misma subida no reserva dos veces porque el `documentId` es
+determinista y la segunda llamada ve el registro existente. `recomputeUsage`
+recalcula `usedBytes` a partir de los documentos `active` (herramienta de
+reparación: un fallo de red a mitad de una transacción no puede dejar el
+contador desviado, pero conviene poder demostrarlo). `db:check` compara este
+contador con la suma real de `documents.bytes` y avisa si se separan.
 
 ### `meta/schema` — control de esquema
 
@@ -386,6 +429,54 @@ npm run backup:export  -- --out backups/copia.fbak
 npm run backup:restore -- --in backups/copia.fbak --dry-run
 npm run backup:restore -- --in backups/copia.fbak
 ```
+
+## 6 ter. Ciclo de subida de un PDF (bloque 06)
+
+Cuatro operaciones, todas de servidor, con el rol de administrador y el origen
+comprobados:
+
+| Paso | Operación | Efecto |
+| --- | --- | --- |
+| 1 | `POST /api/admin/documents/uploads` | Crea el registro `pending`, calcula el `documentId` y **reserva** `bytes` en el presupuesto |
+| 2 | `PUT .../uploads/{id}/parts/{n}` | Guarda una parte (≤ 768 KiB, en orden, comprobando tamaño y `%PDF-` en la 0) |
+| 3 | `POST .../uploads/{id}/finalize` | Verifica partes, tamaño y SHA-256; mueve reserva → uso y activa |
+| 4 | `POST .../uploads/{id}/abort` | Cancela, libera la reserva y borra los fragmentos (idempotente) |
+
+Después, `POST /api/admin/documents/{id}/attach` asocia un documento **activo**
+al tema del borrador. El curso, la versión y el tema los aporta el propio
+documento: el cliente solo manda la revisión que tenía abierta, de modo que no
+puede mover un PDF a otro curso cambiando el cuerpo de la petición.
+
+Garantías y límites, explícitos:
+
+- **Reanudación**: las partes ya guardadas no se reenvían; el editor puede
+  reanudar pidiendo el mismo fichero (el navegador no puede conservar un fichero
+  entre recargas). Si el fichero elegido tiene otro tamaño, se rechaza antes de
+  escribir.
+- **Idempotencia**: crear la misma subida devuelve el registro existente
+  (`created: false`), finalizar dos veces no cuenta la cuota dos veces
+  (`alreadyActive: true`) y cancelar dos veces libera una sola vez
+  (`releasedBytes: 0` la segunda).
+- **Concurrencia**: reserva y comprobación de presupuesto van en la misma
+  transacción. En los dobles y en la demo esto se prueba con dos aperturas
+  simultáneas; en Firestore real depende de que la transacción se reintente
+  (comportamiento documentado de Firestore, no verificado aquí: sin emulador).
+- **Fallo a mitad**: la subida queda `pending` y se puede reanudar o cancelar; la
+  fachada de una sola petición cancela en su `catch` para no dejar reservas
+  colgadas. Un `pending` huérfano (cierre del navegador) se ve en el editor como
+  subida pendiente y se cancela desde ahí: **no hay TTL** porque Firestore lo
+  exige en Blaze.
+- **Sustitución**: un PDF activo es inmutable. Sustituirlo es subir otro (otro
+  `documentId`) y asociarlo; el anterior se archiva
+  (`archiveDocument`, que libera su cuota) para que una versión publicada no
+  pierda un documento que el alumnado está usando.
+- **Nada de un PDF de 8 MiB en un documento**: 8 MiB supera el límite de 1 MiB
+  por documento; el troceado no es una optimización, es un requisito.
+
+Lo que **no** se verifica: que el PDF tenga las páginas que declara el
+administrador. El servidor no interpreta PDF; el número de páginas es una
+declaración expresa de la interfaz (`Confirmo que el documento tiene N páginas`)
+y se guarda tal cual.
 
 ## 7. Límites de tamaño
 

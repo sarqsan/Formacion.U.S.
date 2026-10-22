@@ -14,7 +14,23 @@ import { submitAssessment } from "@/server/assessments/service";
 import { parsePeopleWorkbook } from "@/server/import/excel";
 import { buildImportPreview } from "@/server/import/service";
 import { courseEditorDependencies, documentDependencies, importDependencies } from "@/server/deps";
-import { readDocumentPages, uploadPdfDocument } from "@/server/documents/service";
+import {
+  abortPdfUpload,
+  archivePdfDocument,
+  createPdfUpload,
+  finalizePdfUpload,
+  putPdfUploadPart,
+  readDocumentPages,
+  storageUsage as pdfStorageUsage,
+  uploadPdfDocument,
+  type CreateUploadInput,
+  type FinalizeUploadResult,
+  type PdfUploadView,
+  type StorageUsage,
+  type UploadDocumentResult,
+} from "@/server/documents/service";
+import { attachDocumentToDraft, type AttachResult } from "@/server/documents/attach";
+import type { PdfDocumentMeta } from "@/server/documents/store";
 import { getAdminDb } from "@/server/firebase/admin";
 import { FirestoreCourseCatalogStore } from "@/server/firebase/catalog-store";
 import {
@@ -616,6 +632,94 @@ export async function adminSaveDraftAssessments(
 ): Promise<SaveAssessmentsResult> {
   assertAdmin(actor);
   return saveDraftAssessments({ actor, ...input }, { store: firestoreDeps().catalog });
+}
+
+// ---------------------------------------------------------------------------
+// Documentos PDF: subida por partes y asociación al borrador
+// ---------------------------------------------------------------------------
+
+/**
+ * Abre una subida (reserva cuota). El identificador lo calcula el servicio a
+ * partir del contenido: el cliente no lo elige.
+ */
+export async function adminCreatePdfUpload(
+  actor: Actor,
+  input: Omit<CreateUploadInput, "actor">,
+): Promise<{ created: boolean; upload: PdfUploadView }> {
+  assertAdmin(actor);
+  return createPdfUpload({ actor, ...input }, documentDependencies());
+}
+
+/** Subida de una sola petición (ficheros pequeños), mismo ciclo y misma reserva. */
+export async function adminUploadPdfDocument(
+  actor: Actor,
+  input: {
+    courseId: string;
+    version: number;
+    topicId: string;
+    title: string;
+    pageCount: number;
+    bytes: Uint8Array;
+  },
+): Promise<UploadDocumentResult> {
+  assertAdmin(actor);
+  return uploadPdfDocument({ actor, ...input }, documentDependencies());
+}
+
+/** Guarda una parte del fichero; el orden y el tamaño se comprueban en servidor. */
+export async function adminPutPdfPart(
+  actor: Actor,
+  input: { documentId: string; index: number; bytes: Uint8Array },
+) {
+  assertAdmin(actor);
+  return putPdfUploadPart({ actor, ...input }, documentDependencies());
+}
+
+/** Verifica la huella y activa el documento (idempotente). */
+export async function adminFinalizePdfUpload(
+  actor: Actor,
+  documentId: string,
+): Promise<FinalizeUploadResult> {
+  assertAdmin(actor);
+  return finalizePdfUpload({ actor, documentId }, documentDependencies());
+}
+
+export async function adminAbortPdfUpload(actor: Actor, documentId: string) {
+  assertAdmin(actor);
+  return abortPdfUpload({ actor, documentId }, documentDependencies());
+}
+
+export async function adminArchivePdfDocument(actor: Actor, documentId: string) {
+  assertAdmin(actor);
+  return archivePdfDocument({ actor, documentId }, documentDependencies());
+}
+
+export async function adminPdfStorage(actor: Actor): Promise<StorageUsage> {
+  assertAdmin(actor);
+  return pdfStorageUsage(documentDependencies());
+}
+
+/** Subidas pendientes de una versión (para reanudar o cancelar). */
+export async function adminPendingPdfUploads(
+  actor: Actor,
+  courseId: string,
+  version: number,
+): Promise<PdfDocumentMeta[]> {
+  assertAdmin(actor);
+  return documentDependencies().documents.listPending({ courseId, version });
+}
+
+/** Asocia un documento **activo** al tema de un borrador. */
+export async function adminAttachDocument(
+  actor: Actor,
+  input: { documentId: string; expectedRevision: number },
+): Promise<AttachResult> {
+  assertAdmin(actor);
+  const deps = documentDependencies();
+  return attachDocumentToDraft(
+    { actor, ...input },
+    { documents: deps.documents, catalog: deps.catalog },
+  );
 }
 
 /** Vista del editor de estructura, o `null` si el curso o la versión no existen. */

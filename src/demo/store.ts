@@ -15,6 +15,7 @@ import type { CourseVersionStatus, CourseVersionSummary } from "@/domain/courses
 import type { CourseEditorStore } from "@/server/courses/editor";
 import type { EnrollmentStore } from "@/server/enrollments/store";
 import type { AttemptRecord, LearningStore, StoredProgress } from "@/server/learning/store";
+import { createPdfMemoryState, type PdfMemoryState } from "@/demo/pdf-store";
 import {
   DEMO_ACCOUNTS,
   DEMO_COURSES,
@@ -55,6 +56,12 @@ export interface DemoState {
   enrollments: Map<string, Enrollment>;
   progress: Map<string, StoredProgress>;
   attempts: AttemptRecord[];
+  /**
+   * PDF de la demostración: bytes reales en memoria, con la misma máquina de
+   * estados y la misma contabilidad de cuota que Firestore. Se pierde al
+   * reiniciar, como todo lo demás.
+   */
+  pdf: PdfMemoryState;
 }
 
 const SEED_NOW = "2026-01-08T09:00:00.000Z";
@@ -74,6 +81,7 @@ function seedState(): DemoState {
     enrollments: new Map(),
     progress: new Map(),
     attempts: [],
+    pdf: createPdfMemoryState(),
   };
 
   for (const { definition, published } of DEMO_COURSES) {
