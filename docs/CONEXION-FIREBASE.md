@@ -241,10 +241,10 @@ el plan sin escribir.
 
 ### Paso 7 — Reglas e índices **[MANUAL, y solo cuando toque]**
 
-- **No publicar todavía.** Las 41 pruebas de reglas siguen **BLOCKED** (no hay
+- **No publicar todavía.** Las 57 pruebas de reglas siguen **BLOCKED** (no hay
   emulador oficial en el entorno de desarrollo). Publicar `firestore.rules` sin
   validarlas está prohibido en este proyecto.
-- Cuando el emulador esté disponible: `npm run test:rules` (41 casos) y, con
+- Cuando el emulador esté disponible: `npm run test:rules` (57 casos) y, con
   todo en verde, publicar con `firebase deploy --only firestore:rules`.
 - Índices: `npm run test:firestore` y `firebase deploy --only firestore:indexes`
   (el fichero ya contiene solo los índices que el código usa).
@@ -565,11 +565,14 @@ las del fichero.
 
 ### 6.2 Con Firebase real (requiere autorización expresa; nada de esto se ha hecho)
 
-1. Registrar la app web (`formacion-web`) y copiar `apiKey`/`appId`/`authDomain`.
+1. ~~Registrar la app web~~ **hecho**: existe una app web en `formacionus-63555` y
+   sus cuatro valores están puestos (ver §4.6). `npm run check:web` → `PASSED`.
 2. Credenciales de servicio en el **entorno privado del proceso** (nunca en el
-   repositorio, ni en `.env.local` del espacio de trabajo: ver §4.5) y
-   `DB_ALLOW_PROD=yes` para los diagnósticos de solo lectura.
-3. `npm run check:firebase` → debe encender todas las comprobaciones.
+   repositorio ni en un fichero compartido: ver §4.5 y §8). `DB_ALLOW_PROD=yes`
+   **no** hace falta aquí: solo lo exigen `db:init` y `db:check`, que sí pueden
+   escribir o consultar el esquema.
+3. `npm run check:firebase` (solo lectura) → debe encender todas las
+   comprobaciones. Procedimiento detallado fuera de este entorno: **§8**.
 4. `npm run db:init` (simulación) y `npm run db:check`: comprobar `INDEXES_OK` con
    las consultas reales. **No añadir índices** salvo que `db:check` señale una
    consulta que el código ejecuta de verdad.
@@ -620,3 +623,155 @@ red). `check:setup` solo evita perder tiempo con un despiste de pegado.
 - **`GET /api/health`**: añade `ready` (todo rellenado) sin exponer nombres de
   variables ni valores. `ready: true` **no** significa «conectado»: la conexión
   exige red y la comprueba `check:firebase`.
+
+---
+
+## 8. Ejecutar la comprobación REAL fuera de este espacio de trabajo (fase 5)
+
+`npm run check:firebase` responde a una pregunta que **este entorno no puede
+responder**: *¿puede un proceso, con credenciales reales, leer Firestore y
+Authentication de `formacionus-63555`?* Aquí fallan dos cosas a la vez: no hay
+salida de red hacia Google y no hay ningún almacén privado de secretos. Por eso
+la comprobación se ejecuta fuera, en un entorno tuyo.
+
+### 8.1 Qué hace falta (y qué NO)
+
+| Necesario | Detalle |
+| --- | --- |
+| Node.js **22 o superior** | `package.json` declara `engines.node: ">=22"`; comprobar con `node -v` |
+| El repositorio clonado + `npm ci` | el diagnóstico corre con `tsx`, que está en `devDependencies`: sin instalar dependencias de desarrollo no arranca |
+| `.env.local` con los **cinco valores públicos** | `check:firebase` también valida la configuración web; sin ella da `FAILED` aunque las credenciales sean perfectas. Los valores son públicos (§4.6) |
+| `FIREBASE_CLIENT_EMAIL` y `FIREBASE_PRIVATE_KEY` | en el **entorno del proceso**, no en un fichero del repositorio |
+| Red hacia `*.googleapis.com` y `*.firebaseio.com` | sin ella el resultado será `BLOCKED`, no `FAILED` |
+
+**No** hace falta: `next build`, Firebase CLI, el emulador, `DB_ALLOW_PROD=yes`,
+ni ninguna dependencia nueva. Es un script de Node que solo lee.
+
+Códigos de salida (recordatorio): **0** `PASSED` · **2** `FAILED` (falta o está
+mal la configuración; no se ha tocado la red) · **3** `BLOCKED` (configuración
+correcta, pero el servicio no responde o la cuenta no tiene permiso de lectura).
+
+### 8.2 Plan A — un ordenador con terminal (recomendado)
+
+Es el camino corto: cinco minutos, sin instalar nada global.
+
+1. Comprobar la versión de Node: `node -v` (debe ser 22 o superior).
+2. Clonar y preparar:
+   ```bash
+   git clone https://github.com/sarqsan/Formacion.U.S..git
+   cd Formacion.U.S.
+   git switch arena/1aa99b2c-formacion-u-s
+   npm ci
+   ```
+3. Crear `.env.local` en la raíz **solo con los valores públicos** (los mismos
+   que ya están en este espacio de trabajo): `FIREBASE_PROJECT_ID`,
+   `NEXT_PUBLIC_FIREBASE_API_KEY`, `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`,
+   `NEXT_PUBLIC_FIREBASE_PROJECT_ID`, `NEXT_PUBLIC_FIREBASE_APP_ID` y
+   `NEXT_PUBLIC_AUTH_EMAIL_DOMAIN`. Comprobar sin red:
+   ```bash
+   npm run check:web      # debe dar PASSED
+   ```
+4. En la consola: *Configuración del proyecto → Cuentas de servicio → Generar
+   nueva clave privada*. Se descarga un `.json`. **No se abre en el editor y no
+   se copia a ninguna carpeta del repositorio.**
+5. Cargar las credenciales en la sesión del terminal **sin escribirlas en ningún
+   fichero** y sin que queden en el historial (el comando solo lee el JSON, no
+   imprime nada):
+   ```bash
+   export FIREBASE_CLIENT_EMAIL="$(node -p 'require(process.argv[1]).client_email' "$HOME/Descargas/clave.json")"
+   export FIREBASE_PRIVATE_KEY="$(node -p 'require(process.argv[1]).private_key' "$HOME/Descargas/clave.json")"
+   ```
+   Ajusta la ruta al nombre real del archivo. Si prefieres pegar la clave a mano,
+   hazlo con `read -rsp "FIREBASE_PRIVATE_KEY: " FIREBASE_PRIVATE_KEY` (entrada
+   oculta; pega la línea `private_key` del JSON, con los `\n` tal cual).
+6. Ejecutar:
+   ```bash
+   npm run check:firebase
+   ```
+7. Limpiar, pase lo que pase:
+   ```bash
+   unset FIREBASE_CLIENT_EMAIL FIREBASE_PRIVATE_KEY
+   ```
+   y **borrar el JSON** de la carpeta de descargas. Si la clave se generó solo
+   para esta prueba y no se va a usar, revocarla en la consola.
+
+Reglas de seguridad de esta sesión de terminal: no uses `set -x`, no redirijas
+la salida de `check:firebase` a un fichero, no ejecutes `env` ni `printenv`, y
+cierra el terminal al terminar.
+
+**Qué contarme después:** solo el veredicto (`0`/`2`/`3`) y las líneas de
+resultado **sin valores** (por ejemplo `✓ Firestore responde` o
+`… Firebase Authentication responde: PERMISSION_DENIED`). El script está diseñado
+para no repetir la clave, el correo completo, el `apiKey` ni el `appId`; aun así,
+no pegues la salida entera.
+
+### 8.3 Plan B — solo con el móvil (GitHub Codespaces)
+
+Ventaja: el secreto no se pega en una terminal ni se guarda en un fichero; queda
+cifrado en tu cuenta de GitHub y se inyecta como variable de entorno en el
+Codespace, que es exactamente el mecanismo que lee la aplicación.
+
+1. Desde el navegador del móvil, en el repositorio: **Code → Codespaces → Create
+   codespace on `arena/1aa99b2c-formacion-u-s`**.
+2. **Antes o después** de crearlo, en *github.com → Settings → Codespaces →
+   Secrets → New secret*, crear dos secretos con los nombres **exactos**
+   `FIREBASE_CLIENT_EMAIL` y `FIREBASE_PRIVATE_KEY` (el valor de `private_key`
+   tal cual viene en el JSON: una línea con los `\n`). Los secretos se exportan
+   como variables de entorno de la sesión y **no** se pasan a los forks
+   (GitHub Docs). Límite: 48 KB por secreto.
+3. En la terminal del Codespace:
+   ```bash
+   npm ci
+   npm run check:web
+   npm run check:firebase
+   ```
+   Si `check:web` falla, crea `.env.local` con los seis valores públicos (§4.6):
+   son públicos y no necesitan secreto.
+4. Al terminar, **parar el Codespace** (consume cuota mientras está encendido) y,
+   si la clave era solo para la prueba, revocarla.
+
+Coste: las cuentas personales de GitHub incluyen 120 core-hours y 15 GB-mes de
+Codespaces al mes (unas 60 h en una máquina de 2 núcleos). Pasado ese límite,
+GitHub factura. Con un Codespace de 2 núcleos y una sesión de 15 minutos, el
+consumo es despreciable. Comprobado en la documentación de GitHub el 22/10/2026.
+
+### 8.4 Plan C — sin terminal propia
+
+Si no hay ordenador ni quieres usar Codespaces, la alternativa honesta es que
+**otra persona de confianza** ejecute el Plan A en su equipo, con dos
+condiciones: la clave se genera en la consola de *tu* proyecto y se revoca al
+terminar, y el resultado se comparte sin valores. No hace falta que esa persona
+vea la clave: puede pegar el JSON con `read -rsp` sin mostrarlo en pantalla.
+
+Lo que **no** se debe hacer en ningún caso: pegar la clave privada en este chat,
+en un documento compartido, en un `commit`, en una issue, en un gist o en un
+`.env.local` de un espacio de trabajo compartido (como el de este entorno).
+
+### 8.5 Qué cambia al pasar al despliegue
+
+| Variable | Cuándo se lee | ¿Reconstruir? |
+| --- | --- | --- |
+| `NEXT_PUBLIC_*` (las cinco) | en **tiempo de compilación**: Next.js las inserta en el bundle del navegador | **Sí**: si cambian, hay que volver a construir |
+| `FIREBASE_*` (proyecto, correo, clave) | en **tiempo de ejecución**, en el servidor | No: basta reiniciar el proceso |
+| `APP_ORIGIN`, `SESSION_COOKIE_NAME`, `PDF_STORAGE_BUDGET_MB` | en tiempo de ejecución | No |
+
+Para `npm run check:firebase` **no hay que reconstruir nada**: es un script de
+Node que lee el entorno en el momento de ejecutarse.
+
+### 8.6 Estado de esta fase
+
+- Lo comprobado **aquí**: `check:web` → `PASSED`; `check:setup` → `FAILED` con una
+  única acción pendiente, `[SECRETA]` (las credenciales); `npm run verify` y
+  `check:demo` en verde. Todo sin red hacia Google.
+- **Ensayo en seco del Plan A**: con un par de claves **sintético** (generado y
+  borrado en `/tmp`, nunca del proyecto), los comandos del paso 5 cargan correo y
+  clave sin imprimirlos, y `check:firebase` valida toda la configuración
+  (`✓` en proyecto, credenciales, clave PEM y los cinco valores web) y termina en
+  **`BLOCKED` (exit 3)** al intentar leer Firestore: exactamente lo que debe
+  pasar cuando la red está cortada. Es decir, el procedimiento está probado
+  hasta el último paso que este entorno puede dar.
+- Ese ensayo destapó un aviso falso: la comprobación comparaba el dominio del
+  correo con `gserviceaccount.com` y marcaba «no es el habitual» en las cuentas
+  reales de Firebase (`*.iam.gserviceaccount.com`). Corregido y cubierto con
+  tres pruebas.
+- Lo **no** comprobado: la conexión real. Sigue pendiente y no se afirma.

@@ -91,7 +91,13 @@ export const DEFAULT_EXPECTED_PROJECT = "formacionus-63555";
 
 type Env = Record<string, string | undefined>;
 
-const SERVICE_ACCOUNT_DOMAIN = "gserviceaccount.com";
+/**
+ * Dominios de una cuenta de servicio de Google. Las claves de Firebase Admin
+ * tienen correos del tipo `firebase-adminsdk-xxxxx@<proyecto>.iam.gserviceaccount.com`;
+ * comparar solo con `gserviceaccount.com` avisaba en falso («no es el habitual»)
+ * justo en la comprobación que se ejecuta con credenciales reales.
+ */
+const SERVICE_ACCOUNT_SUFFIXES = [".iam.gserviceaccount.com", ".gserviceaccount.com"];
 
 function value(env: Env, name: string): string | null {
   const raw = env[name];
@@ -185,15 +191,17 @@ function serverFindings(env: Env, expectedProject: string): ReadinessFinding[] {
     });
   } else {
     const domain = clientEmail.split("@")[1] ?? "";
+    const looksLikeServiceAccount = SERVICE_ACCOUNT_SUFFIXES.some((suffix) =>
+      domain.endsWith(suffix),
+    );
     findings.push({
       id: "FIREBASE_CLIENT_EMAIL",
       title: "Credenciales de la cuenta de servicio",
       level: "PASSED",
       kind: "secreta",
-      detail:
-        domain === SERVICE_ACCOUNT_DOMAIN
-          ? `Cuenta de servicio (${domain}).`
-          : `Correo con dominio «${domain}», que no es el habitual de una cuenta de servicio (${SERVICE_ACCOUNT_DOMAIN}): revisa que hayas copiado client_email.`,
+      detail: looksLikeServiceAccount
+        ? `Cuenta de servicio (${domain}).`
+        : `Correo con dominio «${domain}», que no es el habitual de una cuenta de servicio (*.iam.gserviceaccount.com): revisa que hayas copiado client_email.`,
     });
   }
 

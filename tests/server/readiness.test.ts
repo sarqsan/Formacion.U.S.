@@ -386,3 +386,29 @@ describe("la salida del diagnóstico no copia credenciales", () => {
     expect(text).not.toContain(webEnv.NEXT_PUBLIC_FIREBASE_API_KEY.slice(0, 12));
   });
 });
+
+describe("correo de la cuenta de servicio: no avisar en falso", () => {
+  const withEmail = (email: string) =>
+    assessFirebaseReadiness({ ...serverEnv, ...webEnv, FIREBASE_CLIENT_EMAIL: email }).serverFindings.find(
+      (finding) => finding.id === "FIREBASE_CLIENT_EMAIL",
+    );
+
+  it("acepta el formato real de Firebase Admin", () => {
+    // Es el correo que trae la clave descargada de la consola.
+    const finding = withEmail("firebase-adminsdk-abc12@formacionus-63555.iam.gserviceaccount.com");
+    expect(finding?.level).toBe("PASSED");
+    expect(finding?.detail).toContain("Cuenta de servicio");
+    expect(finding?.detail).not.toContain("no es el habitual");
+  });
+
+  it("acepta el formato antiguo sin «.iam»", () => {
+    const finding = withEmail("cuenta@formacionus-63555.gserviceaccount.com");
+    expect(finding?.detail).not.toContain("no es el habitual");
+  });
+
+  it("avisa si lo pegado no es un correo de servicio", () => {
+    const finding = withEmail("alguien@example.com");
+    expect(finding?.level).toBe("PASSED");
+    expect(finding?.detail).toContain("no es el habitual");
+  });
+});

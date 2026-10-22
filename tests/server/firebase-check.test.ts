@@ -106,9 +106,13 @@ describe("modo sin red (--setup)", () => {
       fileURLToPath(new URL("../../src/server/firebase/readiness.ts", import.meta.url)),
       "utf8",
     );
-    expect(readiness).not.toContain("firebase-admin");
-    expect(readiness).not.toContain("getFirestore");
-    expect(readiness).not.toContain("getAdminDb");
+    // Se analiza el CÓDIGO, no los comentarios: el módulo puede nombrar
+    // `firebase-adminsdk` al explicar el correo de una cuenta de servicio sin
+    // que eso signifique que importe nada de Firestore.
+    const readinessCode = stripComments(readiness);
+    expect(readinessCode).not.toContain("firebase-admin");
+    expect(readinessCode).not.toContain("getFirestore");
+    expect(readinessCode).not.toContain("getAdminDb");
   });
 
   it("el script npm existe y apunta al modo sin red", () => {

@@ -1217,3 +1217,39 @@ informes, diffs ni commits.
 
 La demostración sigue en `DEMO_MODE=1` sin cambios y no usa ninguno de estos
 valores.
+
+## 28. Fase 5 — Ejecución real fuera del sandbox (22/10/2026)
+
+Objetivo: dejar el camino para ejecutar `npm run check:firebase` con credenciales
+reales, **sin** tocar código ni añadir dependencias, y sin que el secreto pase
+por el chat, el repositorio ni un fichero compartido.
+
+### Lo que se ha comprobado en este entorno (sin red hacia Google)
+
+| Comprobación | Resultado |
+| --- | --- |
+| `npm run check:web` | **PASSED (exit 0)** |
+| `npm run check:setup` | **FAILED (exit 2)**: una sola acción, `[SECRETA]` (credenciales) |
+| `check:firebase` con credenciales **sintéticas** (`/tmp`, generadas y borradas en la misma sesión) | configuración entera en `✓` (proyecto, credenciales, PEM RSA y los cinco valores web) y **`BLOCKED` (exit 3)** al leer Firestore: `tiempo de espera agotado (listCollections)`. Confirma que el procedimiento funciona hasta el límite de red del sandbox |
+| `npm run verify` | **exit 0**: 903 pasan / 9 omitidas, lint sin avisos, build OK |
+| `npm run check:demo` | **PASSED**, 140 comprobaciones |
+| Fuga de valores en la salida del diagnóstico | ninguna: el `apiKey` solo como longitud, el correo solo por dominio, la clave solo «PEM correcto» |
+
+### Defecto corregido (lo encontró el ensayo en seco)
+
+`readiness.ts` comparaba el dominio del correo con `gserviceaccount.com`. Las
+cuentas de servicio reales de Firebase son
+`firebase-adminsdk-…@<proyecto>.iam.gserviceaccount.com`, así que la
+comprobación habría avisado «no es el habitual de una cuenta de servicio»
+**justo en la ejecución con credenciales buenas**, invitando a tocar lo que
+estaba bien. Ahora se aceptan `*.iam.gserviceaccount.com` y
+`*.gserviceaccount.com`, y solo se avisa cuando el dominio no es de Google.
+**+3 pruebas** (36 en `readiness.test.ts`).
+
+### Documentación
+
+`docs/CONEXION-FIREBASE.md` §8 (nuevo): requisitos, Plan A (ordenador con
+terminal, incluida la carga de credenciales desde el JSON sin escribir nada en
+un fichero ni en el historial), Plan B (móvil con Codespaces y secretos
+cifrados), Plan C (otra persona), tabla de qué se lee en compilación y qué en
+ejecución, y qué **no** se debe hacer nunca con la clave.
