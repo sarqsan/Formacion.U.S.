@@ -38,11 +38,29 @@ import { checkPublicFirebaseConfig } from "@/server/firebase/public-config";
 
 export type ReadinessLevel = "PASSED" | "FAILED";
 
+/**
+ * Naturaleza del valor, para no tratar igual lo que se puede pegar en un chat
+ * que lo que nunca debe salir del entorno privado:
+ *
+ *   · `publica`      → viaja en el bundle del navegador (apiKey, projectId…);
+ *   · `secreta`      → credenciales de la cuenta de servicio (correo y clave);
+ *   · `configuracion`→ se fija a mano y no es secreto (origen, cookie, cuota).
+ */
+export type ReadinessKind = "publica" | "secreta" | "configuracion";
+
+export const KIND_LABEL: Record<ReadinessKind, string> = {
+  publica: "pública",
+  secreta: "SECRETA",
+  configuracion: "configuración",
+};
+
 export interface ReadinessFinding {
   /** Identificador estable (el nombre de la variable o del grupo). */
   id: string;
   title: string;
   level: ReadinessLevel;
+  /** Pública, secreta o configuración: decide dónde puede escribirse. */
+  kind: ReadinessKind;
   detail: string;
   /** Qué hacer si falla. Sin secretos: solo la ruta y el nombre del valor. */
   fix?: string | null;
@@ -114,6 +132,7 @@ function serverFindings(env: Env, expectedProject: string): ReadinessFinding[] {
       id: "FIREBASE_PROJECT_ID",
       title: "Proyecto de Firebase",
       level: "FAILED",
+      kind: "publica",
       detail: "No está definido.",
       fix: `Añade FIREBASE_PROJECT_ID=${expectedProject} a .env.local (sin comillas).`,
     });
@@ -122,6 +141,7 @@ function serverFindings(env: Env, expectedProject: string): ReadinessFinding[] {
       id: "FIREBASE_PROJECT_ID",
       title: "Proyecto de Firebase",
       level: "FAILED",
+      kind: "publica",
       detail: `El proyecto configurado es «${project}» y el previsto es «${expectedProject}».`,
       fix: "No se reutiliza el Firebase de otra aplicación: corrige FIREBASE_PROJECT_ID.",
     });
@@ -130,6 +150,7 @@ function serverFindings(env: Env, expectedProject: string): ReadinessFinding[] {
       id: "FIREBASE_PROJECT_ID",
       title: "Proyecto de Firebase",
       level: "PASSED",
+      kind: "publica",
       detail: `FIREBASE_PROJECT_ID=${project}`,
     });
   }
@@ -140,6 +161,7 @@ function serverFindings(env: Env, expectedProject: string): ReadinessFinding[] {
       id: "FIREBASE_CLIENT_EMAIL",
       title: "Credenciales de la cuenta de servicio",
       level: "PASSED",
+      kind: "secreta",
       detail: `Modo emulador (${[authEmulator, firestoreEmulator].filter(Boolean).join(", ")}): no hacen falta credenciales.`,
     });
   } else if (!clientEmail || !privateKey) {
@@ -152,8 +174,14 @@ function serverFindings(env: Env, expectedProject: string): ReadinessFinding[] {
       id: "FIREBASE_CLIENT_EMAIL",
       title: "Credenciales de la cuenta de servicio",
       level: "FAILED",
+      kind: "secreta",
       detail: `Faltan ${missing.join(" y ")}.`,
-      fix: "Consola de Firebase → Configuración del proyecto → Cuentas de servicio → Generar nueva clave privada; copia project_id, client_email y private_key a .env.local.",
+      // El correo y la clave NO se tratan igual: el correo puede ir a
+      // `.env.local`; la clave es lo único verdaderamente secreto del proyecto.
+      fix:
+        "Consola de Firebase → Configuración del proyecto → Cuentas de servicio → Generar nueva clave privada. " +
+        "client_email puede ir a .env.local; FIREBASE_PRIVATE_KEY va SOLO al entorno privado del proceso " +
+        "(variables del proveedor de despliegue), nunca al chat, a un commit ni a un fichero compartido.",
     });
   } else {
     const domain = clientEmail.split("@")[1] ?? "";
@@ -161,6 +189,7 @@ function serverFindings(env: Env, expectedProject: string): ReadinessFinding[] {
       id: "FIREBASE_CLIENT_EMAIL",
       title: "Credenciales de la cuenta de servicio",
       level: "PASSED",
+      kind: "secreta",
       detail:
         domain === SERVICE_ACCOUNT_DOMAIN
           ? `Cuenta de servicio (${domain}).`
@@ -176,6 +205,7 @@ function serverFindings(env: Env, expectedProject: string): ReadinessFinding[] {
         id: "FIREBASE_PRIVATE_KEY",
         title: "Clave privada legible",
         level: "FAILED",
+        kind: "secreta",
         detail: "FIREBASE_PRIVATE_KEY no es un PEM válido.",
         fix: 'Pega la clave entre comillas dobles conservando los \\n: FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\\n…\\n-----END PRIVATE KEY-----\\n".',
       });
@@ -184,6 +214,7 @@ function serverFindings(env: Env, expectedProject: string): ReadinessFinding[] {
         id: "FIREBASE_PRIVATE_KEY",
         title: "Clave privada legible",
         level: "FAILED",
+        kind: "secreta",
         detail: `El PEM se lee, pero es de tipo «${key.asymmetricKeyType ?? "desconocido"}» y la clave de servicio es RSA.`,
         fix: "Vuelve a descargar la clave desde la consola: es un JSON con private_key RSA (PKCS#8).",
       });
@@ -192,6 +223,7 @@ function serverFindings(env: Env, expectedProject: string): ReadinessFinding[] {
         id: "FIREBASE_PRIVATE_KEY",
         title: "Clave privada legible",
         level: "PASSED",
+        kind: "secreta",
         detail: "PEM RSA correcto (no se muestra la clave).",
       });
     }
@@ -215,6 +247,7 @@ function serverFindings(env: Env, expectedProject: string): ReadinessFinding[] {
       id: "APP_ORIGIN",
       title: "Origen público (producción)",
       level: originOk ? "PASSED" : "FAILED",
+      kind: "configuracion",
       detail: !origin
         ? "Falta APP_ORIGIN: en producción la aplicación no arranca sin él."
         : originOk
@@ -229,6 +262,7 @@ function serverFindings(env: Env, expectedProject: string): ReadinessFinding[] {
       id: "SESSION_COOKIE_NAME",
       title: "Cookie de sesión (producción)",
       level: cookieOk ? "PASSED" : "FAILED",
+      kind: "configuracion",
       detail: cookieOk
         ? `Prefijo __Host- presente (${cookie}).`
         : `«${cookie}» no empieza por __Host-: un subdominio podría sobrescribirla.`,
@@ -240,6 +274,7 @@ function serverFindings(env: Env, expectedProject: string): ReadinessFinding[] {
         id: "EMULATOR_IN_PRODUCTION",
         title: "Emuladores fuera de producción",
         level: "FAILED",
+        kind: "configuracion",
         detail: "Hay variables de emulador definidas con NODE_ENV=production: la aplicación se negará a arrancar.",
         fix: "Vacía FIREBASE_AUTH_EMULATOR_HOST y FIRESTORE_EMULATOR_HOST fuera del entorno local.",
       });
@@ -255,6 +290,7 @@ function serverFindings(env: Env, expectedProject: string): ReadinessFinding[] {
         id: "PDF_STORAGE_BUDGET_MB",
         title: "Presupuesto de PDF",
         level: "FAILED",
+        kind: "configuracion",
         detail: `«${budget}» no es un número de MiB positivo.`,
         fix: "Usa un entero, por ejemplo PDF_STORAGE_BUDGET_MB=512.",
       });
@@ -263,6 +299,7 @@ function serverFindings(env: Env, expectedProject: string): ReadinessFinding[] {
         id: "PDF_STORAGE_BUDGET_MB",
         title: "Presupuesto de PDF",
         level: "PASSED",
+        kind: "configuracion",
         detail: `${numeric} MiB (se acota al máximo seguro de la cuota gratuita).`,
       });
     }
@@ -291,6 +328,8 @@ export function assessFirebaseReadiness(
     id: issue.field,
     title: issue.field,
     level: issue.ok ? "PASSED" : "FAILED",
+    // La configuración web no es secreta: viaja en el bundle del navegador.
+    kind: "publica",
     detail: issue.detail,
     fix: issue.fix ?? null,
   }));
@@ -322,9 +361,12 @@ export function assessFirebaseReadiness(
   const actions = failing
     .map((finding) => ({ finding, rank: order.indexOf(finding.id) }))
     .sort((a, b) => (a.rank === -1 ? 99 : a.rank) - (b.rank === -1 ? 99 : b.rank))
-    .map(({ finding }) =>
-      finding.fix ? `${finding.id} → ${finding.fix}` : `Revisa ${finding.id}: ${finding.detail}`,
-    );
+    .map(({ finding }) => {
+      const body = finding.fix
+        ? `${finding.id} → ${finding.fix}`
+        : `Revisa ${finding.id}: ${finding.detail}`;
+      return `${body} · [${KIND_LABEL[finding.kind]}]`;
+    });
 
   // Deduplicar conservando el orden: dos hallazgos pueden compartir consejo.
   const uniqueActions = [...new Set(actions)];
@@ -339,6 +381,17 @@ export function assessFirebaseReadiness(
     webFindings: web,
     actions: uniqueActions,
   };
+}
+
+/**
+ * Variables secretas que siguen pendientes. Sirve para avisar en la CLI de que
+ * esas no se pegan en el chat ni se commitean: `check:setup` no es un lugar
+ * seguro para pegarlas.
+ */
+export function pendingSecrets(readiness: FirebaseReadiness): string[] {
+  return [...readiness.serverFindings, ...readiness.webFindings]
+    .filter((finding) => finding.level === "FAILED" && finding.kind === "secreta")
+    .map((finding) => finding.id);
 }
 
 /** Nombres de lo que falta, para mensajes cortos en la interfaz. */

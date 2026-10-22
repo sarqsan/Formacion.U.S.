@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   assessFirebaseReadiness,
   missingConfiguration,
+  pendingSecrets,
   type FirebaseReadiness,
 } from "@/server/firebase/readiness";
 
@@ -300,5 +301,60 @@ describe("no filtra secretos", () => {
 
     expect(serialized).not.toContain("formacion@app-123");
     expect(serialized).toContain("gserviceaccount.com");
+  });
+});
+
+describe("público, secreto o configuración: dónde puede escribirse cada valor", () => {
+  /** Entorno vacío: todo pendiente, incluidos los secretos. */
+  const empty = assessFirebaseReadiness({});
+
+  it("todo hallazgo lleva su naturaleza, sin huecos", () => {
+    for (const finding of [...empty.serverFindings, ...empty.webFindings]) {
+      expect(finding.kind, `sin clasificar: ${finding.id}`).toMatch(
+        /^(publica|secreta|configuracion)$/,
+      );
+    }
+  });
+
+  it("las credenciales de la cuenta de servicio son secretas", () => {
+    const withServer = assessFirebaseReadiness(serverEnv);
+    const secrets = withServer.serverFindings.filter((finding) => finding.kind === "secreta");
+    expect(secrets.map((finding) => finding.id)).toEqual(
+      expect.arrayContaining(["FIREBASE_CLIENT_EMAIL"]),
+    );
+  });
+
+  it("la configuración web es pública: viaja en el bundle", () => {
+    const web = empty.webFindings;
+    expect(web.length).toBeGreaterThan(0);
+    for (const finding of web) expect(finding.kind).toBe("publica");
+  });
+
+  it("el origen y la cookie no son secretos, pero tampoco públicos", () => {
+    const production = assessFirebaseReadiness({ ...serverEnv, ...webEnv, NODE_ENV: "production" });
+    const kinds = Object.fromEntries(
+      production.serverFindings.map((finding) => [finding.id, finding.kind]),
+    );
+    expect(kinds.APP_ORIGIN).toBe("configuracion");
+    expect(kinds.SESSION_COOKIE_NAME).toBe("configuracion");
+    expect(kinds.FIREBASE_PROJECT_ID).toBe("publica");
+  });
+
+  it("cada acción pendiente dice de qué tipo es", () => {
+    for (const action of empty.actions) {
+      expect(action).toMatch(/· \[(pública|SECRETA|configuración)\]$/);
+    }
+  });
+
+  it("solo se listan como secretas las credenciales, y nunca con su valor", () => {
+    const secrets = pendingSecrets(empty);
+    expect(secrets).toEqual(["FIREBASE_CLIENT_EMAIL"]);
+
+    const configuradas = pendingSecrets(assessFirebaseReadiness({ ...serverEnv, ...webEnv }));
+    expect(configuradas).toEqual([]);
+
+    const texto = empty.actions.join("\n");
+    expect(texto).not.toContain("BEGIN PRIVATE KEY");
+    expect(texto).toContain("nunca al chat");
   });
 });

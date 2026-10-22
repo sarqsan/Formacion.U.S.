@@ -93,6 +93,14 @@ describe("modo sin red (--setup)", () => {
     expect(code).toContain("assessFirebaseReadiness");
   });
 
+  it("avisa de que las secretas no se pegan en el chat", () => {
+    // La salida se copia y se pega en conversaciones e informes: el aviso tiene
+    // que estar en el propio comando, no solo en la documentación.
+    expect(code).toContain("pendingSecrets");
+    expect(code).toContain("[SECRETA]");
+    expect(code).toContain("se pegan en el chat");
+  });
+
   it("la comprobación de preparación no importa nada de Firestore", () => {
     const readiness = readFileSync(
       fileURLToPath(new URL("../../src/server/firebase/readiness.ts", import.meta.url)),

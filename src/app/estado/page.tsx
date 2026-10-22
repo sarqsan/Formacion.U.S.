@@ -63,7 +63,7 @@ const ROWS: Row[] = [
     feature: "Preparación de la conexión",
     state: "real",
     detail:
-      "`npm run check:setup` comprueba sin red qué valores faltan o están mal: proyecto, credenciales, clave RSA, configuración web y endurecimiento de producción. La pantalla de acceso usa la misma valoración, así que no muestra el formulario si falta algo. No demuestra que la conexión funcione: eso exige red y credenciales (npm run check:firebase).",
+      "`npm run check:setup` comprueba sin red qué valores faltan o están mal, y marca cada uno como público, secreto o de configuración: proyecto, credenciales, clave RSA, configuración web y endurecimiento de producción. La pantalla de acceso usa la misma valoración, así que no muestra el formulario si falta algo. No demuestra que la conexión funcione: eso exige red y credenciales (npm run check:firebase).",
   },
   {
     feature: "Historial de formación",

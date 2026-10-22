@@ -43,7 +43,7 @@ import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
 import { loadEnvFiles } from "../src/server/firebase/env-file";
-import { assessFirebaseReadiness } from "../src/server/firebase/readiness";
+import { assessFirebaseReadiness, pendingSecrets } from "../src/server/firebase/readiness";
 
 const EXPECTED_PROJECT = "formacionus-63555";
 const json = process.argv.includes("--json");
@@ -365,6 +365,14 @@ async function main(): Promise<void> {
     if (setupOnly && !readiness.ready) {
       console.log("\nACCIONES PENDIENTES (en este orden)\n");
       readiness.actions.forEach((action, index) => console.log(`  ${index + 1}. ${action}`));
+      // Aviso explícito: este comando se ejecuta en el espacio de trabajo, y lo
+      // que se pega aquí acaba en la terminal del agente y en el historial.
+      if (pendingSecrets(readiness).length > 0) {
+        console.log(
+          "\nLas marcadas [SECRETA] NO se pegan en el chat ni se commitean: van al entorno\n" +
+            "privado del proceso (docs/CONEXION-FIREBASE.md §4.5). Este comando solo dice qué falta.",
+        );
+      }
       console.log(
         "\nCuando estén hechas: `npm run check:firebase` (con red) comprueba que el proyecto responde.",
       );

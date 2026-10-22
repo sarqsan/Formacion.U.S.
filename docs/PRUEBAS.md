@@ -1122,3 +1122,43 @@ Pruebas nuevas (**28**):
 - Que la cuenta de servicio exista o tenga permisos, ni que Firestore esté creado.
 - Que el inicio de sesión real funcione: depende de Firebase Authentication y de
   la app web registrada.
+
+## 26. Fase 4 — Configurar la app web y preparar el secreto (22/10/2026)
+
+Pregunta de la fase: **¿podemos dejar la configuración web puesta y preparar las
+credenciales de servidor sin escribir en Firebase?** Respuesta corta: la parte
+web sí se puede dejar puesta en cuanto existan los cuatro valores; las
+credenciales de servidor **no** en este entorno, porque no hay ningún almacén
+privado y persistente.
+
+### Comprobaciones ejecutadas (todas de solo lectura)
+
+| Comprobación | Resultado |
+| --- | --- |
+| `git status` / `git ls-remote` | árbol limpio en `23e4f32`; rama y remoto coinciden |
+| `.env.local` | **no existe** (la guía lo daba por hecho en su revisión del 21/10) |
+| `env` con `FIREBASE`/`GOOGLE*` | **0 variables** |
+| `/run/secrets`, `.arena/`, `.config/arena` | **no existen**: no hay almacén de secretos |
+| `curl` a `firebase.googleapis.com`, `identitytoolkit.googleapis.com`, `formacionus-63555.firebaseapp.com` | **000 / bloqueado** (sin salida a Google) |
+| `grep` de `AIza…` / `1:…:web:…` en el árbol y en el historial | solo marcadores de prueba; **ninguna credencial real** |
+| `.env.local` en el historial de Git | sin resultados: nunca se ha versionado |
+
+### Qué se ha cambiado
+
+| Pieza | Cambio |
+| --- | --- |
+| `src/server/firebase/readiness.ts` | Cada hallazgo declara su naturaleza: `publica`, `secreta` o `configuracion`. Las acciones pendientes terminan en `· [pública]`, `· [SECRETA]` o `· [configuración]`. Nuevo `pendingSecrets()`. El consejo de las credenciales deja de decir «cópialo todo a `.env.local`»: el correo sí, la clave **solo** al entorno privado |
+| `scripts/firebase-check.ts` | `check:setup` avisa de que lo marcado `[SECRETA]` no se pega en el chat ni se commitea |
+| `docs/CONEXION-FIREBASE.md` | §4.1 corregida (el fichero no existe hoy y no se conserva entre sesiones); §4.5 nueva con la tabla de comprobaciones; Paso 3 con el procedimiento para **reutilizar** la app web si ya existe; §6.2 alineada |
+| `tests/server/readiness.test.ts` | **+6** (30): clasificación sin huecos, secretas = cuenta de servicio, web = pública, origen/cookie = configuración, etiqueta en cada acción, `pendingSecrets` y **no se filtra la clave** |
+| `tests/server/firebase-check.test.ts` | **+1** (23): el aviso de «no se pega» está en la salida del propio comando |
+
+Resultado de la batería completa tras el cambio: `npm run verify` **exit 0**,
+**897 pruebas en verde** (9 omitidas), lint sin avisos y build correcto.
+
+### Lo que sigue sin poder afirmarse
+
+- Que exista la app web `formacion-web`: **no se puede consultar desde aquí**
+  (sin credenciales y sin red hacia Google). Solo lo dice la consola.
+- Que la conexión funcione: `npm run check:firebase` **no se ha ejecutado con
+  red**, y en este entorno acabaría en `BLOCKED` por la falta de salida a Google.

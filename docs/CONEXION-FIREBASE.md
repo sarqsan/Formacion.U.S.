@@ -123,10 +123,23 @@ a una **app web** registrada dentro del proyecto. Sin ese registro no existen
 5. Copiar **solo esos cuatro valores**. El `storageBucket` y el
    `messagingSenderId` no se usan y no hay que añadirlos.
 
-**Si la app web ya existe** (por ejemplo, creada al abrir el proyecto por
-primera vez): no hay que crear otra. El mismo bloque está en
-**Configuración del proyecto → General → Tus apps → `formacion-web` →
-Configuración del SDK**, y se puede volver a copiar en cualquier momento.
+**Cómo saber si la app web ya existe (antes de crear nada).** Desde este
+entorno **no se puede comprobar**: no hay credenciales y las llamadas a
+`firebase.googleapis.com` están bloqueadas. Se mira en la consola, en un solo
+sitio:
+
+> <https://console.firebase.google.com/project/formacionus-63555/settings/general>
+> → **Tus apps**. La lista enseña todas las apps registradas.
+
+- Si aparece una app **Web** con apodo `formacion-web` (o cualquier app web:
+  solo puede haber una por proyecto en la práctica), **se reutiliza**: se abre y
+  se copian sus cuatro valores de *Configuración del SDK*. **No se registra otra
+  app**: cada registro crea un `appId` distinto y el que se use debe ser el de
+  la app real.
+- Si **no** aparece ninguna app web, se registra siguiendo los pasos de abajo
+  (solo entonces).
+- Si aparece una app web con **otro** apodo, se usa esa igualmente y se dice
+  cuál es; no se crea una segunda.
 
 Comprobaciones que evitan el error más habitual:
 
@@ -141,19 +154,26 @@ Comprobaciones que evitan el error más habitual:
   servidor.
 
 `check:firebase` valida la **forma** de estos cinco valores y su coherencia con
-el servidor **antes** de intentar conectar (ver Paso 5).
+el servidor **antes** de intentar conectar (ver Paso 5). Y `npm run check:setup`
+los marca como `[pública]`: si alguno falta, es lo primero que se puede
+arreglar sin credenciales ni red.
 
 ### Paso 4 — Cuenta de servicio **[MANUAL]**
 
 1. **Configuración del proyecto → Cuentas de servicio** → **Generar nueva
    clave privada** → se descarga un `.json`.
-2. De ese fichero, copiar a `.env.local`:
-   - `project_id` → `FIREBASE_PROJECT_ID`
-   - `client_email` → `FIREBASE_CLIENT_EMAIL`
-   - `private_key` → `FIREBASE_PRIVATE_KEY` **entre comillas dobles y con los
-     `\n` tal cual vienen en el JSON**.
-3. Guardar el `.json` fuera del repositorio y borrarlo del escritorio cuando
-   ya esté copiado. Nunca se sube a git.
+2. De ese fichero:
+   - `project_id` → `FIREBASE_PROJECT_ID` (público; va en `.env.local`);
+   - `client_email` → `FIREBASE_CLIENT_EMAIL`;
+   - `private_key` → `FIREBASE_PRIVATE_KEY`, **solo al entorno privado del
+     proceso**, nunca a un fichero del espacio de trabajo, ni al chat, ni a un
+     commit. Ver §4.5.
+3. Guardar el `.json` en un gestor de contraseñas y **borrarlo del disco**
+   cuando ya esté cargado en el entorno de ejecución. Nunca se sube a git.
+
+> Este paso **no se ejecuta todavía** en este entorno: no hay ningún sitio
+> privado donde dejar la clave, y la red hacia Google está cortada, así que
+> generar la clave ahora solo añadiría un secreto sin poder comprobarlo.
 
 ### Paso 5 — Comprobar la conexión **[YA IMPLEMENTADO]**
 
@@ -263,23 +283,22 @@ chat, no en un documento y no en un commit.
 sitio previsto para valores reales; `.env.example` solo documenta nombres y
 debe quedarse con los valores vacíos.
 
-> **Estado actual (21/10/2026):** `.env.local` **ya existe** en la raíz y está
-> completo en lo que respecta al **cliente**. Contiene el proyecto
-> (`formacionus-63555`), `authDomain`, `apiKey` y `appId` de la app
-> `formacion-web`, el dominio de correo, `DEMO_MODE=1` y los emuladores vacíos.
-> `npm run check:web` da **PASSED (exit 0)**.
+> **Estado actual (22/10/2026): en este entorno NO existe `.env.local`.** Lo que
+> sigue siendo cierto es el procedimiento; lo que ya no se puede afirmar es el
+> estado descrito en una revisión anterior de esta guía (que el fichero estaba
+> completo y que `check:web` daba `PASSED`). Hoy `npm run check:setup` termina en
+> **FAILED (exit 2)** porque no hay ningún valor, ni público ni secreto, y no
+> existe ninguna variable `FIREBASE_*` en el proceso. Conclusión práctica: **el
+> fichero no se conserva entre sesiones** y no se puede dar por hecho. Cada vez
+> que se retome el trabajo hay que comprobar `ls .env.local` antes de suponer
+> nada, y volver a crearlo si falta.
 >
-> Desde el 21/10/2026 el fichero incluye también la **cuenta de servicio**
-> (`FIREBASE_CLIENT_EMAIL` y `FIREBASE_PRIVATE_KEY`, en una sola línea con los
-> saltos escapados). La clave se **rotó** ese mismo día: la anterior quedó
-> sustituida y su revocación la hace el usuario desde la consola, no el
-> repositorio. Ningún identificador ni fragmento de clave se guarda en docs. `npm run check:web` da **PASSED (exit 0)** y
-> `npm run check:firebase` valida credenciales, clave PEM y configuración web,
-> pero en **este entorno de desarrollo** termina en **BLOCKED (exit 3)**: la
-> salida de red del sandbox solo permite npm, PyPI y GitHub, y las conexiones
-> TLS a `firestore.googleapis.com` / `identitytoolkit.googleapis.com` se cortan
-> (`SSL_ERROR_SYSCALL`). No es un problema de configuración ni una escritura:
-> es el único sitio desde el que aún no se puede leer Firestore.
+> Además, este entorno **no tiene salida de red hacia Google**: las conexiones a
+> `firebase.googleapis.com`, `identitytoolkit.googleapis.com` y
+> `<proyecto>.firebaseapp.com` se cortan. Es decir, incluso con el fichero
+> completo, `npm run check:firebase` aquí acabaría en **BLOCKED (exit 3)**: la
+> verificación de la conexión real tiene que hacerse donde Firebase sea
+> alcanzable (tu máquina o el despliegue).
 
 **Cómo se crea desde la interfaz de Arena:**
 
@@ -376,11 +395,51 @@ git ls-files --error-unmatch .env.local   # debe fallar: «did not match any fil
   demostración y `isFirebaseConfigured()` sigue en `false` (solo mira el
   proyecto y las credenciales de servidor, no las variables públicas).
 
+### 4.5 Dónde va la clave privada (y dónde no)
+
+Comprobado en este entorno (22/10/2026), sin suposiciones:
+
+| Comprobación | Resultado |
+| --- | --- |
+| `/run/secrets` | no existe |
+| gestor de secretos del entorno (`.arena/`, `.config/arena`) | no existe |
+| variables de entorno del proceso | ninguna `FIREBASE_*` ni `GOOGLE*` |
+| `.env.local` | no existe; la revisión anterior lo daba por hecho |
+| ficheros del espacio de trabajo | se guardan en instantáneas y se ven en el explorador; `.env.local` **no** está excluido de esas instantáneas |
+
+**Conclusión: aquí no hay ningún almacén privado y persistente.** Por tanto:
+
+- **Valores públicos** (`NEXT_PUBLIC_*`): pueden ir a `.env.local` sin problema.
+  Viajan en el bundle del navegador; la seguridad no depende de esconderlos.
+- **`FIREBASE_PROJECT_ID`**: es público (aparece en el `appId` y en el
+  `authDomain`), pero se guarda junto a la configuración del servidor porque es
+  el que se compara con el previsto.
+- **`FIREBASE_CLIENT_EMAIL` y `FIREBASE_PRIVATE_KEY`**: son las credenciales de
+  la cuenta de servicio. La clave **no se pega en el chat, no se escribe en un
+  documento, no se commitea y no se deja en un fichero del espacio de trabajo**.
+  Se inyecta como variable de entorno del proceso que ejecuta la aplicación:
+  - en el despliegue, en la configuración de variables de entorno del proveedor
+    (cifradas, nunca en el repositorio);
+  - en local, exportada solo en la misma orden que la usa, por ejemplo
+    `FIREBASE_PRIVATE_KEY="$(cat /ruta/privada/clave.pem)" npm run check:firebase`,
+    borrando el fichero temporal después. Nunca mediante `set -x` ni con
+    `npm run check:firebase --json` volcado a un log.
+
+Mientras no exista ese entorno, **la aplicación se queda sin credenciales de
+servidor y no se afirma que haya conexión**: `check:setup` lo dirá como
+`[SECRETA]` pendiente y `/login` no mostrará el formulario real.
+
+La CLI ayuda a no equivocarse: `npm run check:setup` marca cada acción pendiente
+con `[pública]`, `[SECRETA]` o `[configuración]` y avisa de que las secretas no
+se pegan en el chat.
+
 ## 5. Qué NO se puede afirmar todavía
 
 - Que la conexión funcione: no se ha ejecutado con credenciales reales.
-- Que exista la app web `formacion-web`: no se ha registrado (o no se ha
-  confirmado) todavía, y sin ella no hay `apiKey` ni `appId`.
+- Que exista la app web `formacion-web`: **no se puede comprobar desde aquí**
+  (sin credenciales y con las llamadas a `firebase.googleapis.com` bloqueadas).
+  Solo la consola lo dice: *Configuración del proyecto → Tus apps*. Hasta
+  entonces, ni `apiKey` ni `appId` existen en este entorno.
 - Que la **configuración web** sea la del proyecto real: el ID
   `formacionus-63555` está confirmado y ya escrito en el código, pero `apiKey` y
   `appId` aún no existen en este entorno porque no se ha registrado (o no se ha
@@ -437,7 +496,8 @@ las del fichero.
 ### 6.2 Con Firebase real (requiere autorización expresa; nada de esto se ha hecho)
 
 1. Registrar la app web (`formacion-web`) y copiar `apiKey`/`appId`/`authDomain`.
-2. Credenciales de servicio en `.env.local` (nunca en el repositorio) y
+2. Credenciales de servicio en el **entorno privado del proceso** (nunca en el
+   repositorio, ni en `.env.local` del espacio de trabajo: ver §4.5) y
    `DB_ALLOW_PROD=yes` para los diagnósticos de solo lectura.
 3. `npm run check:firebase` → debe encender todas las comprobaciones.
 4. `npm run db:init` (simulación) y `npm run db:check`: comprobar `INDEXES_OK` con
