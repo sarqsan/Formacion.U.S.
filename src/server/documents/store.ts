@@ -1,3 +1,5 @@
+import type { PdfUploadState } from "@/domain/storage/pdf-upload";
+
 /**
  * DOCUMENTOS PDF (puerto de persistencia)
  * ======================================
@@ -29,7 +31,8 @@
  *     estado y contadores.
  */
 
-export type PdfUploadState = "pending" | "active" | "aborted";
+/** Estados del ciclo de vida de un documento (definidos en el dominio). */
+export type { PdfUploadState };
 
 export interface PdfDocumentMeta {
   documentId: string;

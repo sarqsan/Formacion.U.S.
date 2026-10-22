@@ -256,7 +256,7 @@ export function assertPdfHeader(bytes: Uint8Array): void {
  * Material con el que el servicio deriva el identificador del activo.
  *
  * El cliente no elige identificadores: el servidor los calcula con SHA-256 a
- * partir de estos datos (ver `uploadDocumentId` en el servicio). Así:
+ * partir de estos datos (ver `documentIdFor` en el servicio). Así:
  *   - dos subidas del **mismo** fichero al mismo sitio son la misma operación
  *     (no se reserva cuota dos veces);
  *   - un fichero distinto —aunque se llame igual— es un activo nuevo, que es
