@@ -1162,3 +1162,34 @@ Resultado de la batería completa tras el cambio: `npm run verify` **exit 0**,
   (sin credenciales y sin red hacia Google). Solo lo dice la consola.
 - Que la conexión funcione: `npm run check:firebase` **no se ha ejecutado con
   red**, y en este entorno acabaría en `BLOCKED` por la falta de salida a Google.
+
+## 27. Fase 4 — Configuración web recibida, no escrita en el espacio de trabajo (22/10/2026)
+
+Se recibieron los cuatro valores del SDK web de `formacionus-63555`. Decisión:
+**no escribirlos en ningún fichero de este entorno**, porque no es un almacén
+privado (instantáneas del espacio de trabajo + explorador de ficheros a la
+vista). Los valores son públicos por diseño, pero el criterio que se aplica es
+el que pidió el usuario: si el fichero no puede mantenerse privado, no se
+escribe.
+
+| Comprobación | Ejecutada | Resultado |
+| --- | --- | --- |
+| `projectId` recibido frente al previsto | sí (lectura de la orden) | coincide: `formacionus-63555` |
+| Forma de los cuatro valores frente a los patrones de `public-config.ts` | sí (`AIza…` ≥30, `1:\d{6,}:web:[0-9a-f]+`, `^[a-z0-9][a-z0-9-]{2,39}$`, `<proyecto>.firebaseapp.com`) | los cuatro encajan |
+| `.env.local` | `ls` | **no existe**; no se ha creado |
+| `npm run check:setup` | sí | **FAILED (exit 2)**: sin valores en el entorno (esperado) |
+| `npm run check:web` | sí | **FAILED (exit 2)**: sin los cinco `NEXT_PUBLIC_*` (esperado) |
+| `npm run check:firebase` | **no** | sin red hacia Google en este entorno; no aporta nada aún |
+
+### Salvaguarda añadida
+
+La salida de `check:web` / `check:setup` se copia y se pega en conversaciones e
+informes. Tres pruebas nuevas (33 en `readiness.test.ts`) fijan que **nunca se
+repite un valor**: del `apiKey` solo se dice la longitud; del `appId`, nada; del
+correo de servicio, solo el dominio; de la clave privada, solo si se puede leer.
+
+### Plantilla
+
+`.env.example` sigue siendo la **plantilla vacía** con los seis nombres exactos;
+su cabecera ahora dice explícitamente que se rellena la copia, nunca el ejemplo
+versionado.

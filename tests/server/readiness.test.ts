@@ -358,3 +358,31 @@ describe("público, secreto o configuración: dónde puede escribirse cada valor
     expect(texto).toContain("nunca al chat");
   });
 });
+
+describe("la salida del diagnóstico no copia credenciales", () => {
+  /** Configuración completa: la salida es lo que la gente pega en un chat. */
+  const full = assessFirebaseReadiness({ ...serverEnv, ...webEnv });
+
+  const text = [
+    ...full.serverFindings.flatMap((finding) => [finding.detail, finding.fix ?? ""]),
+    ...full.webFindings.flatMap((finding) => [finding.detail, finding.fix ?? ""]),
+    ...full.actions,
+  ].join("\n");
+
+  it("no aparece la apiKey ni el appId, aunque estén configurados", () => {
+    expect(text).not.toContain(webEnv.NEXT_PUBLIC_FIREBASE_API_KEY);
+    expect(text).not.toContain(webEnv.NEXT_PUBLIC_FIREBASE_APP_ID);
+  });
+
+  it("no aparece la clave privada ni el correo de la cuenta de servicio", () => {
+    expect(text).not.toContain("BEGIN PRIVATE KEY");
+    expect(text).not.toContain(serverEnv.FIREBASE_CLIENT_EMAIL);
+    // Del correo solo se conserva el dominio, que es lo útil para diagnosticar.
+    expect(text).toContain("gserviceaccount.com");
+  });
+
+  it("del apiKey solo se dice la longitud: sirve para detectar un pegado a medias", () => {
+    expect(text).toContain("Clave web con la forma esperada");
+    expect(text).not.toContain(webEnv.NEXT_PUBLIC_FIREBASE_API_KEY.slice(0, 12));
+  });
+});

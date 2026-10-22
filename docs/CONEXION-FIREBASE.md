@@ -433,6 +433,51 @@ La CLI ayuda a no equivocarse: `npm run check:setup` marca cada acción pendient
 con `[pública]`, `[SECRETA]` o `[configuración]` y avisa de que las secretas no
 se pegan en el chat.
 
+### 4.6 Valores públicos recibidos y NO escritos (fase 4, 22/10/2026)
+
+Se recibió del usuario la configuración del SDK web de `formacionus-63555`
+(`apiKey`, `authDomain`, `projectId`, `appId`). **No se ha escrito ninguno en un
+fichero de este espacio de trabajo**, y esta es la razón, con las comprobaciones
+hechas:
+
+| Comprobación | Resultado |
+| --- | --- |
+| `projectId` recibido | `formacionus-63555` — coincide con `.firebaserc` y con `FIREBASE_PROJECT_ID` |
+| Forma de los cuatro valores frente a los patrones de `public-config.ts` | los cuatro pasan (la CLI lo confirmará al ejecutarse con ellos) |
+| Almacén privado disponible | **no existe**: ni `/run/secrets` ni gestor de secretos, y los ficheros del espacio de trabajo se guardan en instantáneas y se ven en el explorador |
+| ¿Basta `.gitignore`? | **no**: protege el repositorio, no la instantánea del espacio de trabajo |
+
+Los cuatro valores **no son secretos** (viajan en el bundle de cualquier
+despliegue; la seguridad la dan las reglas de Firestore y la verificación del
+token en el servidor). Aun así, el entorno **no permite mantener el fichero en
+privado**, así que no se han escrito: se han tratado como datos que solo deben
+vivir en el entorno de ejecución.
+
+**Consecuencia práctica:** `npm run check:web` y `npm run check:setup` siguen en
+**FAILED (exit 2)** en este entorno. No es un error de los valores: es que no
+están puestos donde la aplicación los lee.
+
+**Dónde ponerlos (dos vías, ninguna en este espacio de trabajo sin permiso
+explícito):**
+
+1. **Producción / despliegue (la buena).** Las cinco `NEXT_PUBLIC_*` (más
+   `FIREBASE_PROJECT_ID`, público) se definen como variables de entorno del
+   proveedor (Vercel, etc.). Se inyectan en **tiempo de compilación**: si se
+   cambian, hay que volver a construir. Ahí quedan cifradas y fuera del
+   repositorio.
+2. **Tu máquina, en local.** `.env.local` en tu clon (ignorado por Git), y
+   `npm run check:web`. Ese fichero no sale de tu equipo.
+
+La plantilla vacía es **`.env.example`**: tiene los seis nombres exactos con los
+valores vacíos. Se copia, se rellena en la copia y **nunca** se rellena el
+ejemplo (se versiona).
+
+Si en algún momento se quiere arrancar la aplicación **en este espacio de
+trabajo** con la configuración real, hay que aceptarlo de forma explícita: los
+valores quedarían en un fichero visible en el explorador y en las instantáneas
+del proyecto. Son públicos, así que el riesgo es bajo, pero no es una decisión
+que corresponda tomar al agente.
+
 ## 5. Qué NO se puede afirmar todavía
 
 - Que la conexión funcione: no se ha ejecutado con credenciales reales.
