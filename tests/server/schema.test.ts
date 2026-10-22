@@ -7,6 +7,7 @@ import {
   validateAttemptDocument,
   validateCourseDocument,
   validateProgressDocument,
+  validateProgressHistoryDocument,
   versionPath,
 } from "@/server/db/schema";
 import {
@@ -130,6 +131,60 @@ describe("validación de documentos", () => {
       validateAttemptDocument({ ...attempt, correctCount: 6, totalQuestions: 5 }),
     ).toThrow(DomainError);
     expect(() => validateAttemptDocument({ ...attempt, passed: "sí" })).toThrow(DomainError);
+  });
+});
+
+describe("validación del histórico", () => {
+  const archived = {
+    uid: UID,
+    courseId: "curso-a",
+    version: 1,
+    mandatoryTopicIds: ["tema-1"],
+    topics: {},
+    documents: {},
+    finalExam: { passed: true, attempts: 1, bestScore: 100 },
+    completedAt: "2026-01-11T09:00:00.000Z",
+    updatedAt: "2026-01-11T09:00:00.000Z",
+    archivedAt: "2026-02-01T10:00:00.000Z",
+  };
+
+  it("acepta un histórico con archivedAt ISO", () => {
+    expect(() => validateProgressHistoryDocument(archived)).not.toThrow();
+  });
+
+  it("rechaza que falte archivedAt", () => {
+    const withoutDate: Record<string, unknown> = { ...archived };
+    delete withoutDate.archivedAt;
+
+    expect(() => validateProgressHistoryDocument(withoutDate)).toThrow(
+      expect.objectContaining({ code: "SCHEMA_PROGRESS_HISTORY_INVALID" }),
+    );
+  });
+
+  it("rechaza un Timestamp u otro objeto como archivedAt", () => {
+    // Era el defecto: `saveProgress` escribía `serverTimestamp()` y la misma
+    // colección guardaba cadenas y Timestamp mezclados.
+    expect(() =>
+      validateProgressHistoryDocument({ ...archived, archivedAt: { seconds: 1, nanoseconds: 0 } }),
+    ).toThrow(expect.objectContaining({ code: "SCHEMA_PROGRESS_HISTORY_INVALID" }));
+    expect(() =>
+      validateProgressHistoryDocument({ ...archived, archivedAt: null }),
+    ).toThrow(expect.objectContaining({ code: "SCHEMA_PROGRESS_HISTORY_INVALID" }));
+  });
+
+  it("rechaza una fecha que no se puede interpretar", () => {
+    expect(() =>
+      validateProgressHistoryDocument({ ...archived, archivedAt: "ayer por la tarde" }),
+    ).toThrow(expect.objectContaining({ code: "SCHEMA_PROGRESS_HISTORY_INVALID" }));
+  });
+
+  it("sigue exigiendo que el progreso archivado sea válido", () => {
+    expect(() => validateProgressHistoryDocument({ ...archived, version: 0 })).toThrow(
+      expect.objectContaining({ code: "SCHEMA_PROGRESS_INVALID" }),
+    );
+    expect(() =>
+      validateProgressHistoryDocument({ ...archived, mandatoryTopicIds: undefined }),
+    ).toThrow(expect.objectContaining({ code: "SCHEMA_PROGRESS_INVALID" }));
   });
 });
 

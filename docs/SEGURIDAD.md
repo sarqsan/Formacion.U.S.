@@ -288,7 +288,8 @@ Mitigación aplicada: el código de la aplicación **no lee Firestore desde el
 navegador** (todo pasa por el servidor con Admin SDK, que no está sujeto a
 reglas), así que un fallo en las reglas no rompe la app ni abre el acceso vía
 servidor; pero sí podría dejar datos expuestos a un cliente manipulado.
-Primera acción pendiente: `npm run test:rules` en un entorno con JDK 11+.
+Primera acción pendiente: `npm run test:rules` en un entorno con JDK 11+ y el jar
+del emulador. Revisión completa de la fase 1 de Firebase en §5.9.
 
 ### 5.7c (cerrado en el bloque 03) Metadatos de documentos visibles para el cliente
 La regla de `documents` permitía leer metadatos a cualquier cuenta activa
@@ -309,6 +310,101 @@ datos. El presupuesto por defecto (512 MiB) y la reserva de 128 MiB evitan
 llenarla, pero **si se agota el presupuesto, las subidas fallan con 507** en
 lugar de aceptar datos a medias. La contrapartida: el sistema depende de una
 cuota gratuita que Google puede cambiar; `db:check` avisa al 90 % de uso.
+
+### 5.9 Reglas de seguridad revisadas contra los servicios (fase 1 de Firebase)
+
+Revisión hecha el 22/10/2026 sobre las reglas de `firestore.rules` contrastadas
+con el código que de verdad escribe y lee cada colección. **Nada se ha publicado
+en Firebase**: ni reglas, ni índices, ni datos.
+
+**Punto de partida que conviene no olvidar:** la aplicación **no lee Firestore
+desde el navegador**. El SDK de cliente solo se usa para autenticarse
+(`src/lib/firebase/client.ts` usa `firebase/auth`); todas las lecturas y
+escrituras de datos pasan por el servidor con el Admin SDK, que no está sujeto a
+reglas. Por tanto:
+
+- un fallo en las reglas **no** rompe la aplicación;
+- pero sí podría dejar datos expuestos a quien consiga un ID token válido
+  (usuario y contraseña) y llame a Firestore directamente desde la consola;
+- la autorización real de negocio vive en los servicios (`assertCourseAccess`,
+  `assertCanReadProgress`, `assertAdmin`…), no en las reglas.
+
+#### Qué colección, quién la lee y con qué respaldo
+
+| Colección | Lectura de cliente permitida | Quién la escribe | Respaldo en el servidor |
+| --- | --- | --- | --- |
+| `accounts` | la propia, o todas si administración | solo servidor (`repositories.ts`, `account-admin-store.ts`) | `resolveSession` + `assertActiveAccount`; estado y `claimsVersion` mandan |
+| `usernames`, `activationTokens` | nadie | solo servidor | el código de activación viaja una vez y en la base solo queda su hash |
+| `audits` | administración | solo servidor | la auditoría se escribe tras cada operación y nunca con secretos |
+| `courses` | cuenta activa + `publishedVersion != null` | solo servidor | publicar exige `assertPublishable` y PDFs completos (ADR-027) |
+| `courses/{id}/versions` | matrícula activa **y** versión publicada | solo servidor | `assertCourseAccess` en cada lectura de contenido |
+| `enrollments` | la propia, o todas si administración | solo servidor | `assertCourseAccess`: sin matrícula activa no hay contenido |
+| `answerKeys` | **nadie** (ni administración) | solo servidor | la corrección ocurre en servidor; el cliente nunca recibe claves |
+| `progress` | la propia, o todas si administración | solo servidor | la corrección y el desbloqueo del examen se calculan en servidor |
+| `progressHistory` | la propia, o todas si administración | solo servidor | `assertCanReadProgress` (B10); se lee con Admin SDK |
+| `attempts` | administración | solo servidor | registro inmutable de qué se contestó y cómo se corrigió |
+| `documents`, `pdfChunks` | **nadie** | solo servidor | el binario se sirve por `/api/documents/{id}/file` tras comprobar cuenta, matrícula, publicación y SHA-256 |
+| `meta` | nadie | solo servidor | contador de cuota y versión de esquema |
+| cualquier otra ruta | **nadie** | — | comodín final `allow read, write: if false` |
+
+Reglas transversales: ninguna regla permite escribir desde el cliente (todas las
+de escritura son `if false`); `isActive()` cruza tres fuentes (claim de estado,
+ficha de cuenta y `claimsVersion`) para que una cuenta deshabilitada o degradada
+pierda el acceso **antes** de que caduque su token; `isAdmin()` exige el rol en
+el token **y** en la ficha; y `get()` de una cuenta inexistente hace fallar la
+evaluación, de modo que una identidad de Authentication sin alta no accede.
+
+#### Defectos encontrados y corregidos en esta revisión
+
+1. **`progressHistory.archivedAt` se escribía con dos tipos distintos.**
+   `commitAttempt` guardaba una cadena ISO y `saveProgress` un
+   `serverTimestamp()`, así que la misma colección mezclaba `string` y
+   `Timestamp` según el camino. La lectura lo toleraba (`toIsoString`), pero
+   cualquier consumidor futuro —copias de seguridad, consultas, índices— habría
+   tenido que adivinar. Ahora ambos caminos escriben ISO y
+   `validateProgressHistoryDocument` lo impone en la escritura (el lector sigue
+   aceptando lo antiguo).
+2. **`db:check` ejecutaba una consulta que ningún código hace**
+   (`accounts` con `status` + `orderBy(createdAt)`) sin índice declarado: en el
+   proyecto real habría salido `MISSING_INDEXES` y habría empujado a desplegar un
+   índice especulativo. Se ha retirado y en su lugar se comprueba la consulta
+   real del histórico (`progressHistory` por `uid`, `limit(200)`, sin `orderBy`),
+   que **no** necesita índice compuesto.
+3. **No había ninguna prueba de reglas sobre `progressHistory`**, aunque desde
+   B10 la aplicación ya lee esa colección (por el servidor). Añadidas 16 pruebas
+   (ver `PRUEBAS.md` §23).
+
+#### «Sin registro público»
+
+La aplicación no expone ningún formulario de alta: la única llamada de cliente es
+`signInWithEmailAndPassword`. Pero Firebase Authentication **sí permite** crear
+cuentas con la clave pública del proyecto si alguien llama al SDK por su cuenta.
+La defensa no es la interfaz, es la ficha: un usuario así no tiene documento en
+`accounts/{uid}`, `account()` provoca un error de evaluación y la regla deniega
+todo (fallar cerrado). Hay dos pruebas para ello: una cuenta de Authentication
+sin alta no lee nada, y ni siquiera un token con `role: "admin"` abre la
+auditoría si no existe su ficha.
+
+Lo que **no** se puede hacer desde las reglas y queda pendiente en consola:
+desactivar los proveedores que no se usan, activar la protección de enumeración
+de correo y revisar quién puede crear cuentas. Nada de esto se ha tocado.
+
+#### Qué está verificado y qué no
+
+| Afirmación | Cómo se ha comprobado | Estado |
+| --- | --- | --- |
+| Ninguna regla permite escritura de cliente | 22 comprobaciones estáticas sobre el texto de `firestore.rules`, en `npm test` | **verificado** |
+| Toda colección legible exige cuenta activa o administración | ídem | **verificado** |
+| `answerKeys`, `documents`, `pdfChunks`, `meta`, `usernames` y `activationTokens` están cerradas | ídem | **verificado** |
+| El histórico y el progreso comparan `resource.data.uid` | ídem | **verificado** |
+| Las reglas **compilan** y el motor permite/deniega lo previsto | `npm run test:rules` (57 casos) | **BLOQUEADO**: el jar del emulador no se puede descargar (Java ya se resuelve con `jdk4py`; ver `ENTORNO-PRUEBAS.md` §2 bis) |
+| Las consultas reales no exigen índices nuevos | `npm run db:check` contra el proyecto real | **BLOQUEADO**: sin credenciales y con TLS a Google cortado |
+| `progressHistory` devuelve `archivedAt` normalizado desde Firestore | prueba de integración escrita (5 casos) | **BLOQUEADO**: requiere emulador |
+
+Las 22 comprobaciones estáticas **no** son una prueba del motor de reglas: leen
+el fichero y verifican que sigue diciendo lo que el diseño exige. Sirven para
+detectar que alguien afloje una regla sin darse cuenta, no para afirmar que
+Firestore acepta o rechaza una petición concreta.
 
 ### 5.7 Sin revisión externa
 No hay auditoría de seguridad externa ni pruebas de penetración. Las pruebas

@@ -3,8 +3,8 @@
  * PRUEBAS QUE NECESITAN EL EMULADOR DE FIRESTORE
  * ==============================================
  *
- *   npm run test:rules       # 41 pruebas de reglas
- *   npm run test:firestore   # 4 pruebas de integración (transacción real)
+ *   npm run test:rules       # 57 pruebas de reglas
+ *   npm run test:firestore   # 9 pruebas de integración (transacción real y histórico)
  *   npm run test:emulator    # las dos cosas en la misma sesión del emulador
  *
  * Este envoltorio **nunca deja que una prueba se omita en silencio**:

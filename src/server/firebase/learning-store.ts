@@ -6,6 +6,7 @@ import {
   progressHistoryDocId,
   validateAttemptDocument,
   validateProgressDocument,
+  validateProgressHistoryDocument,
 } from "@/server/db/schema";
 import type {
   ArchivedProgress,
@@ -54,6 +55,23 @@ function serializeProgress(progress: StoredProgress): Record<string, unknown> {
     completedAt: progress.completedAt,
     updatedAt: progress.updatedAt,
   };
+}
+
+/**
+ * Registro del histórico.
+ *
+ * `archivedAt` va como **cadena ISO**, igual que el resto de fechas del
+ * esquema. La variante con `serverTimestamp()` que usaba `saveProgress` queda
+ * descartada: obligaba a que cada lector normalizara el tipo y hacía que la
+ * misma colección guardara dos representaciones de la misma fecha.
+ */
+function serializeArchivedProgress(
+  archive: StoredProgress,
+  archivedAt: string,
+): Record<string, unknown> {
+  const record = { ...serializeProgress(archive), archivedAt };
+  validateProgressHistoryDocument(record as unknown as Record<string, unknown>);
+  return record;
 }
 
 function serializeAttempt(attempt: AttemptRecord): Record<string, unknown> {
@@ -105,14 +123,13 @@ export class FirestoreLearningStore implements LearningStore {
 
       await db.runTransaction(async (transaction) => {
         if (input.archive) {
-          const archived = { ...input.archive, archivedAt: input.progress.updatedAt };
           transaction.set(
             db
               .collection(COLLECTIONS.progressHistory)
               .doc(
                 progressHistoryDocId(input.archive.uid, input.archive.courseId, input.archive.version),
               ),
-            archived,
+            serializeArchivedProgress(input.archive, input.progress.updatedAt),
             { merge: true },
           );
         }
@@ -159,10 +176,7 @@ export class FirestoreLearningStore implements LearningStore {
         .doc(progressHistoryDocId(archive.uid, archive.courseId, archive.version));
 
       await db.runTransaction(async (transaction) => {
-        transaction.set(archiveRef, {
-          ...serializeProgress(archive),
-          archivedAt: FieldValue.serverTimestamp(),
-        });
+        transaction.set(archiveRef, serializeArchivedProgress(archive, progress.updatedAt));
         transaction.set(progressRef, {
           ...serializeProgress(progress),
           serverUpdatedAt: FieldValue.serverTimestamp(),

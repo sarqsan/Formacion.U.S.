@@ -307,7 +307,13 @@ servidor (`src/server/learning/history.ts`) lo resume con
 - un archivo cuyo curso ya no existe se cuenta (`unresolved`) y no rompe la
   página;
 - quién puede leerlo lo decide `assertCanReadProgress`: cada persona ve el suyo
-  y administración ve el de cualquiera.
+  y administración ve el de cualquiera;
+- **`archivedAt` es siempre una cadena ISO** en las escrituras nuevas. Hasta la
+  revisión de la fase 1 de Firebase, `saveProgress` guardaba un
+  `serverTimestamp()` mientras `commitAttempt` guardaba una cadena, así que la
+  colección mezclaba `Timestamp` y `string`. La escritura se valida
+  (`validateProgressHistoryDocument`) y la lectura sigue aceptando los
+  documentos antiguos con `Timestamp` (`toIsoString`).
 
 ### `meta/storage` — contadores de cuota de PDF
 

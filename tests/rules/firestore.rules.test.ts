@@ -7,7 +7,17 @@ import {
   initializeTestEnvironment,
   type RulesTestEnvironment,
 } from "@firebase/rules-unit-testing";
-import { doc, getDoc, setDoc, updateDoc, deleteDoc, collection, getDocs } from "firebase/firestore";
+import {
+  collection,
+  deleteDoc,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  setDoc,
+  updateDoc,
+  where,
+} from "firebase/firestore";
 
 /**
  * PRUEBAS DE REGLAS DE FIRESTORE
@@ -186,6 +196,44 @@ async function seed(): Promise<void> {
       updatedAt: "2026-01-02T00:00:00.000Z",
     });
 
+    // Histórico de versiones anteriores (bloque 10). Tiene la misma forma que
+    // escribe el servidor: `archivedAt` es una cadena ISO.
+    await setDoc(doc(db, "progressHistory", `${LEARNER.uid}_curso-a_v1`), {
+      uid: LEARNER.uid,
+      courseId: "curso-a",
+      version: 1,
+      mandatoryTopicIds: ["tema-1"],
+      topics: {},
+      documents: {},
+      completedAt: "2026-01-20T09:00:00.000Z",
+      archivedAt: "2026-02-01T10:00:00.000Z",
+    });
+    await setDoc(doc(db, "progressHistory", `${OTHER_LEARNER.uid}_curso-a_v1`), {
+      uid: OTHER_LEARNER.uid,
+      courseId: "curso-a",
+      version: 1,
+      mandatoryTopicIds: ["tema-1"],
+      topics: {},
+      documents: {},
+      completedAt: null,
+      archivedAt: "2026-02-02T10:00:00.000Z",
+    });
+
+    // También para las cuentas que no deben poder leer nada: así la denegación
+    // no se confunde con «el documento no existe».
+    for (const uid of [PENDING.uid, DISABLED.uid]) {
+      await setDoc(doc(db, "progressHistory", `${uid}_curso-a_v1`), {
+        uid,
+        courseId: "curso-a",
+        version: 1,
+        mandatoryTopicIds: [],
+        topics: {},
+        documents: {},
+        completedAt: null,
+        archivedAt: "2026-02-03T10:00:00.000Z",
+      });
+    }
+
     await setDoc(doc(db, "attempts", "intento-1"), {
       uid: LEARNER.uid,
       passed: true,
@@ -194,6 +242,14 @@ async function seed(): Promise<void> {
       courseId: "curso-a",
       pageCount: 10,
     });
+    // Fragmento real: sin sembrarlo, «no se puede leer» sería indistinguible de
+    // «no existe».
+    await setDoc(doc(db, "pdfChunks", "doc-1_0"), {
+      documentId: "doc-1",
+      index: 0,
+      data: new Uint8Array([1, 2, 3]),
+    });
+    await setDoc(doc(db, "meta", "storage"), { usedBytes: 0, reservedBytes: 0 });
     await setDoc(doc(db, "usernames", "rol1.garcia"), { uid: LEARNER.uid });
     await setDoc(doc(db, "activationTokens", "hash"), { uid: PENDING.uid });
     await setDoc(doc(db, "audits", "a1"), { type: "people_import" });
@@ -534,5 +590,123 @@ describe("10. rutas no declaradas", () => {
     await assertFails(getDoc(doc(db, "coleccion-inexistente", "doc")));
     await assertFails(setDoc(doc(db, "coleccion-inexistente", "doc"), { x: 1 }));
     await assertFails(setDoc(doc(adminDb(), "coleccion-inexistente", "doc"), { x: 1 }));
+  });
+});
+
+describe("11. historial de progreso (progressHistory)", () => {
+  beforeEach(seed);
+
+  it("el alumno lee su propio histórico", async () => {
+    await assertSucceeds(getDoc(doc(learnerDb(), "progressHistory", `${LEARNER.uid}_curso-a_v1`)));
+  });
+
+  it("no lee el histórico de otra persona", async () => {
+    await assertFails(
+      getDoc(doc(learnerDb(), "progressHistory", `${OTHER_LEARNER.uid}_curso-a_v1`)),
+    );
+  });
+
+  it("no puede listar el histórico de todo el mundo", async () => {
+    await assertFails(getDocs(collection(learnerDb(), "progressHistory")));
+  });
+
+  it("puede consultar solo sus registros filtrando por uid", async () => {
+    // La consulta real de la aplicación la hace el servidor con Admin SDK, pero
+    // si algún día el cliente la repitiera debe funcionar con este filtro y no
+    // sin él (la prueba anterior).
+    await assertSucceeds(
+      getDocs(query(collection(learnerDb(), "progressHistory"), where("uid", "==", LEARNER.uid))),
+    );
+  });
+
+  it("no puede escribir ni borrar su histórico (es inmutable)", async () => {
+    const db = learnerDb();
+    const path = `progressHistory/${LEARNER.uid}_curso-a_v1`;
+    await assertFails(updateDoc(doc(db, path), { completedAt: "2026-03-01T00:00:00.000Z" }));
+    await assertFails(setDoc(doc(db, "progressHistory", `${LEARNER.uid}_curso-b_v1`), { uid: LEARNER.uid }));
+    await assertFails(deleteDoc(doc(db, path)));
+  });
+
+  it("administración lee el de cualquiera y puede listarlo", async () => {
+    await assertSucceeds(
+      getDoc(doc(adminDb(), "progressHistory", `${OTHER_LEARNER.uid}_curso-a_v1`)),
+    );
+    await assertSucceeds(getDocs(collection(adminDb(), "progressHistory")));
+  });
+
+  it("administración tampoco escribe el histórico desde el cliente", async () => {
+    await assertFails(
+      updateDoc(doc(adminDb(), "progressHistory", `${LEARNER.uid}_curso-a_v1`), {
+        completedAt: null,
+      }),
+    );
+  });
+
+  it("una cuenta pendiente o deshabilitada no lee ni su propio histórico", async () => {
+    await assertFails(getDoc(doc(pendingDb(), "progressHistory", `${PENDING.uid}_curso-a_v1`)));
+    await assertFails(getDoc(doc(disabledDb(), "progressHistory", `${DISABLED.uid}_curso-a_v1`)));
+  });
+
+  it("con la versión de claims desfasada, el histórico deja de leerse", async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await updateDoc(doc(context.firestore(), "accounts", LEARNER.uid), { claimsVersion: 5 });
+    });
+    await assertFails(getDoc(doc(learnerDb(), "progressHistory", `${LEARNER.uid}_curso-a_v1`)));
+  });
+});
+
+describe("12. auditoría y registros administrativos", () => {
+  beforeEach(seed);
+
+  it("el alumno no lee auditoría ni intentos", async () => {
+    await assertFails(getDoc(doc(learnerDb(), "audits", "a1")));
+    await assertFails(getDocs(collection(learnerDb(), "audits")));
+    await assertFails(getDoc(doc(learnerDb(), "attempts", "intento-1")));
+  });
+
+  it("una cuenta deshabilitada tampoco los lee", async () => {
+    await assertFails(getDoc(doc(disabledDb(), "audits", "a1")));
+    await assertFails(getDoc(doc(disabledDb(), "attempts", "intento-1")));
+  });
+
+  it("administración lee y lista auditoría e intentos", async () => {
+    await assertSucceeds(getDocs(collection(adminDb(), "audits")));
+    await assertSucceeds(getDocs(collection(adminDb(), "attempts")));
+  });
+
+  it("nadie modifica ni borra la auditoría (ni administración)", async () => {
+    await assertFails(updateDoc(doc(adminDb(), "audits", "a1"), { type: "otra_cosa" }));
+    await assertFails(deleteDoc(doc(adminDb(), "audits", "a1")));
+    await assertFails(deleteDoc(doc(adminDb(), "attempts", "intento-1")));
+  });
+
+  it("sin ficha de cuenta, ni siquiera un token de administrador abre la auditoría", async () => {
+    const ghostAdmin = testEnv
+      .authenticatedContext("admin-sin-ficha", {
+        role: "admin",
+        status: "active",
+        claimsVersion: 1,
+      })
+      .firestore();
+    await assertFails(getDoc(doc(ghostAdmin, "audits", "a1")));
+  });
+});
+
+describe("13. documentos privados con contenido real", () => {
+  beforeEach(seed);
+
+  it("nadie lee fragmentos de PDF aunque el documento exista", async () => {
+    // Sembrados en `seed()`: la denegación es de las reglas, no del «no existe».
+    await assertFails(getDoc(doc(learnerDb(), "pdfChunks", "doc-1_0")));
+    await assertFails(getDoc(doc(adminDb(), "pdfChunks", "doc-1_0")));
+    await assertFails(getDocs(collection(learnerDb(), "pdfChunks")));
+  });
+
+  it("el contador de cuota no se lee ni se escribe desde el cliente", async () => {
+    await assertFails(getDoc(doc(adminDb(), "meta", "storage")));
+    await assertFails(setDoc(doc(adminDb(), "meta", "storage"), { usedBytes: 0 }));
+    await assertFails(
+      setDoc(doc(learnerDb(), "meta", "storage"), { usedBytes: 1024 * 1024 * 1024 }),
+    );
   });
 });

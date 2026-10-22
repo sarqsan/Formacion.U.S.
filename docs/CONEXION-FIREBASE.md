@@ -382,7 +382,56 @@ git ls-files --error-unmatch .env.local   # debe fallar: «did not match any fil
   `formacionus-63555` está confirmado y ya escrito en el código, pero `apiKey` y
   `appId` aún no existen en este entorno porque no se ha registrado (o no se ha
   copiado) la app web.
-- Que las reglas de seguridad sean correctas: 0 de 41 ejecutadas.
+- Que las reglas de seguridad sean correctas: 0 de 57 ejecutadas. Lo que sí se
+  ha comprobado es que el texto de las reglas sigue la política prevista (22
+  comprobaciones estáticas en `npm test`); el motor no se ha ejecutado (ver
+  `SEGURIDAD.md` §5.9 y `ENTORNO-PRUEBAS.md` §2 bis).
 - Que la lectura de PDF se vea en pantalla con datos reales: la ruta que entrega
   el PDF completo está escrita y probada con dobles y en la demostración, pero no
   se ha ejecutado contra Firestore ni con documentos reales.
+
+---
+
+## 6. Validación pendiente de las reglas (fase 1)
+
+Estado tras la revisión del 22/10/2026: las reglas están **revisadas y
+corregidas** en el repositorio, con 57 pruebas escritas y 22 comprobaciones
+estáticas ejecutándose en cada `verify`, pero **no se han ejecutado contra el
+motor** ni se han publicado.
+
+### 6.1 Con el emulador (máquina con red hacia `storage.googleapis.com`)
+
+1. Java: `pip download jdk4py -d /tmp/jdkpkg --no-deps && cd /tmp/jdkpkg &&
+   unzip -q jdk4py-*.whl && export JAVA_HOME=/tmp/jdkpkg/jdk4py/java-runtime &&
+   export PATH="$JAVA_HOME/bin:$PATH" && java -version`. Comprobado aquí: deja
+   OpenJDK 25 funcional.
+2. `npm ci` y `npm run check:env`: debe quedar en **PASSED** (hoy se detiene en
+   el jar).
+3. `npm run test:rules` → esperado **PASSED, 57 pruebas**. Si algo falla, el
+   fallo es real: **no se toca `firestore.rules` para que pase** (ADR-017), se
+   documenta y se decide.
+4. `npm run test:firestore` → esperado **PASSED, 9 pruebas**, incluidas las 5 del
+   histórico (normalización de `archivedAt` y filtro por `uid`).
+5. `npm run db:check` con `FIRESTORE_EMULATOR_HOST` apuntando al emulador: debe
+   informar `INDEXES_OK`, incluida la consulta `progressHistory(uid)` sin
+   `orderBy`.
+
+Lo que el emulador **no** puede demostrar: que el proyecto real no necesite
+índices compuestos (el emulador los crea solo) ni que las reglas publicadas sean
+las del fichero.
+
+### 6.2 Con Firebase real (requiere autorización expresa; nada de esto se ha hecho)
+
+1. Registrar la app web (`formacion-web`) y copiar `apiKey`/`appId`/`authDomain`.
+2. Credenciales de servicio en `.env.local` (nunca en el repositorio) y
+   `DB_ALLOW_PROD=yes` para los diagnósticos de solo lectura.
+3. `npm run check:firebase` → debe encender todas las comprobaciones.
+4. `npm run db:init` (simulación) y `npm run db:check`: comprobar `INDEXES_OK` con
+   las consultas reales. **No añadir índices** salvo que `db:check` señale una
+   consulta que el código ejecuta de verdad.
+5. Publicar reglas e índices **solo después** de que el emulador pase:
+   `firebase deploy --only firestore:rules,firestore:indexes` (acción reservada;
+   no ejecutada desde aquí).
+6. Repetir la batería negativa contra el proyecto real con una cuenta de prueba
+   (lectura anónima, lectura de otro alumno, cuenta deshabilitada) y borrarla al
+   terminar.

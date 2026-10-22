@@ -6,8 +6,14 @@ emulador oficial de Firestore para terminar las comprobaciones que aquí están
 ejecuta en cualquier máquina con Node.
 
 > Situación de partida: ver [`INFORME-FASE-7.md`](./INFORME-FASE-7.md) y
-> [`ESTADO-FINAL.md`](./ESTADO-FINAL.md). Resumen: **0 de 41** pruebas de reglas
-> y **0 de 4** pruebas de integración ejecutadas hasta la fecha.
+> [`ESTADO-FINAL.md`](./ESTADO-FINAL.md). Resumen: **0 de 57** pruebas de reglas
+> y **0 de 9** pruebas de integración ejecutadas hasta la fecha.
+>
+> **Actualización (fase 1 de integración de Firebase, 22/10/2026):** la falta de
+> Java **ya no bloquea**: se ha verificado aquí que `pip download jdk4py` deja una
+> JVM 25 funcional sin privilegios de administrador. El bloqueo que queda es solo
+> de red: el jar del emulador se descarga de `storage.googleapis.com`, que este
+> entorno no alcanza (ver §2 bis).
 
 ---
 
@@ -136,7 +142,34 @@ Comprueba: Node ≥ 22, dependencias (`firebase-tools`, `@firebase/rules-unit-te
 
 ---
 
-## 4. Pruebas de reglas (41 casos)
+## 2 bis. Estado real del bloqueo (comprobado el 22/10/2026)
+
+| Paso | Estado | Evidencia |
+| --- | --- | --- |
+| JVM ≥ 17 | **RESUELTO** | `pip download jdk4py` + `unzip` deja `openjdk 25.0.2` en `/tmp/jdkpkg/x/jdk4py/java-runtime`; con `JAVA_HOME` y `PATH` apuntando ahí, `npm run test:rules` ya no se queja de Java |
+| Firebase CLI | **RESUELTO** | `firebase-tools` 15.x instalado con `npm ci` |
+| Jar del emulador | **BLOQUEADO** | `firebase emulators:exec` falla con `Error: Failed to make request to https://storage.googleapis.com/firebase-preview-drop/emulator/cloud-firestore-emulator-v1.22.0.jar` |
+
+Salida literal del intento:
+
+```
+i  firestore: downloading cloud-firestore-emulator-v1.22.0.jar...
+⚠  Unable to fetch the CLI MOTD and remote config. ...
+Error: Failed to make request to https://storage.googleapis.com/firebase-preview-drop/emulator/cloud-firestore-emulator-v1.22.0.jar
+
+RESULTADO: BLOCKED
+El emulador no pudo arrancar: no se ha ejecutado ninguna prueba.
+```
+
+Consecuencia: sigue siendo **imposible** ejecutar reglas e integración aquí. La
+diferencia con respecto a la situación anterior es que el bloqueo está aislado:
+es **solo** la descarga del jar. Llevar ese fichero a
+`~/.cache/firebase/emulators/` (o definir `FIRESTORE_EMULATORS_PATH`) es lo único
+que falta para que esta máquina pueda ejecutarlo todo.
+
+---
+
+## 4. Pruebas de reglas (57 casos)
 
 Las reglas son `firestore.rules`; las pruebas, `tests/rules/firestore.rules.test.ts`
 con `@firebase/rules-unit-testing` sobre el emulador.
@@ -148,7 +181,7 @@ npm run test:rules
 Equivale a ejecutar `firebase emulators:start --only firestore --project
 demo-formacion` y lanzar Vitest con `vitest.rules.config.mts`.
 
-Resultado esperado si funciona: **41 pruebas en verde**. Si las reglas deniegan
+Resultado esperado si funciona: **57 pruebas en verde**. Si las reglas deniegan
 algo que deberían permitir (o al contrario), aparece un `FAILED` con el caso
 concreto: **no se debe tocar `firestore.rules` para que pasen**; el fallo se
 documenta y se corrige, o se justifica el cambio con la prueba delante
@@ -156,7 +189,7 @@ documenta y se corrige, o se justifica el cambio con la prueba delante
 
 ---
 
-## 5. Pruebas de integración con Firestore (4 casos)
+## 5. Pruebas de integración con Firestore (9 casos)
 
 `tests/integration/firestore-emulator.test.ts` recorre el camino real:
 subida por fragmentos, transacción de matrícula/cuota y recuento de escrituras
@@ -274,7 +307,7 @@ Ejecutar en este orden y anotar el resultado de cada punto:
 1. `npm ci`
 2. `npm run check:env` → los 4 primeros deben ser **PASSED**; los dos del
    emulador pasan a PASSED tras el punto 3 (o tras arrancarlo).
-3. `npm run test:rules` → **PASSED**, 41 pruebas.
+3. `npm run test:rules` → **PASSED**, 57 pruebas.
 4. `npm run test:firestore` → **PASSED**, 4 pruebas (ya no omitidas).
 5. `npm run test:emulator` → **PASSED** (reglas + integración juntas).
 6. `npm run seed:synthetic -- --reset` → 15 documentos sintéticos.

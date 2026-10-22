@@ -85,6 +85,14 @@ describe("índices", () => {
     }
   });
 
+  it("no declara índices para el histórico: filtra solo por uid", () => {
+    // `listArchivedProgress` hace `where("uid", "==", uid).limit(200)`, sin
+    // orderBy: un campo suelto lo indexa Firestore solo. Añadir aquí un índice
+    // sería especulativo (y publicarlo, una operación que no toca esta fase).
+    const groups = indexes.indexes.map((index) => index.collectionGroup);
+    expect(groups).not.toContain("progressHistory");
+  });
+
   it("los índices de progreso e intentos cubren las consultas del código", () => {
     const signature = (group: string) =>
       indexes.indexes

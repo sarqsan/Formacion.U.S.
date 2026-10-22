@@ -965,3 +965,56 @@ Recorrido HTTP añadido a `scripts/demo-smoke.mjs` (8 comprobaciones nuevas):
   de `progressHistory` en el formato esperado ni el comportamiento del
   `limit(200)`. La batería usa dobles y la demostración; el bloqueo de B02–B09
   (reglas, emulador, Firebase real) sigue declarado en `/estado`.
+
+## 23. Fase 1 de integración de Firebase — reglas de seguridad (22/10/2026)
+
+Alcance ejecutado: **revisión** de `firestore.rules` contra el código que escribe
+y lee cada colección, **corrección** de dos defectos encontrados, **16 pruebas de
+reglas nuevas** (BLOQUEADAS sin emulador), **5 pruebas de integración nuevas**
+(BLOQUEADAS), **22 comprobaciones estáticas de la política** que sí se ejecutan en
+cada `verify`, y documentación. No se ha publicado nada en Firebase, no se ha
+escrito ni borrado ningún dato, no se ha tocado Authentication, ni índices, ni
+variables de entorno.
+
+| Comprobación | Comando | Resultado |
+| --- | --- | --- |
+| Cadena completa | `npm run verify` | **exit 0**: tipado 0 errores, lint 0 avisos, **852 pruebas en verde**, build OK |
+| Pruebas totales | `npm test` | **852 pasan**, 9 omitidas (4 + 5 de emulador), 52 ficheros + 1 omitido (53) |
+| Política de las reglas (sin Firebase) | incluida en `npm test` | **22 pruebas en verde** (`tests/server/rules-policy.test.ts`) |
+| Reglas en el emulador | `npm run test:rules` | **BLOQUEADO**: `Failed to make request to https://storage.googleapis.com/.../cloud-firestore-emulator-v1.22.0.jar` (la JVM ya se resuelve con `jdk4py`) |
+| Integración con emulador | `npm run test:firestore` | **BLOQUEADO**: mismo motivo |
+| Índices contra el proyecto real | `npm run db:check` | **BLOQUEADO**: sin credenciales y con TLS a Google cortado (no ejecutado) |
+| Conexión real | `npm run check:firebase` | **BLOQUEADO** (no ejecutado) |
+
+Pruebas nuevas:
+
+| Fichero | Cuántas | Qué fija |
+| --- | --- | --- |
+| `tests/rules/firestore.rules.test.ts` | **16** | `progressHistory`: el alumno lee el suyo, **no** el de otra persona, no puede listar el archivo entero, sí puede consultar filtrando por `uid`, no escribe ni borra (es inmutable) y administración lee y lista sin poder modificarlo; cuenta pendiente, deshabilitada y claims desfasadas **no** leen ni el propio histórico. Auditoría e intentos: el alumno no los lee, administración sí, nadie los modifica ni borra, y un token de administrador sin ficha tampoco abre la auditoría. Documentos privados: los fragmentos y el contador de cuota se deniegan **con el documento sembrado** (la denegación es de las reglas, no del «no existe») |
+| `tests/server/rules-policy.test.ts` | **22** | Estático, sin Firebase: comodín final, escrituras siempre `if false`, colecciones de servidor cerradas, claves de corrección ilegibles incluso para administración, PDF y fragmentos cerrados, datos personales con `resource.data.uid == request.auth.uid` **y** `isActive()`, matrícula por documento/estado/uid, versión publicada, `isActive`/`isAdmin`/`claimsMatchAccount` cruzando token y ficha, y que el histórico no dependa de `archivedAt` (no se puede ordenar desde el cliente) |
+| `tests/integration/firestore-emulator.test.ts` | **5** | Contra el emulador: `listArchivedProgress` devuelve solo el `uid` pedido, normaliza un `archivedAt` antiguo guardado como `Timestamp`, lo que escribe el servidor vuelve a leerse como cadena ISO (los dos caminos: `saveProgress` y `commitAttempt`), y un archivo inválido no deja histórico suelto |
+| `tests/server/schema.test.ts` | **5** | `validateProgressHistoryDocument`: acepta ISO, rechaza `archivedAt` ausente, objeto/`Timestamp` o fecha ilegible, y sigue exigiendo un progreso válido |
+
+### Defectos corregidos
+
+1. **`archivedAt` con dos tipos.** `saveProgress` escribía `serverTimestamp()` y
+   `commitAttempt` una cadena ISO: la misma colección guardaba `Timestamp` y
+   `string`. Ahora ambos escriben ISO con validación en la escritura; la lectura
+   tolera lo antiguo.
+2. **Sonda de índices especulativa en `db:check`.** Consultaba `accounts` por
+   `status` + `orderBy(createdAt)`, que ningún código ejecuta y que no tiene
+   índice declarado: habría dado `MISSING_INDEXES` y empujado a desplegar un
+   índice innecesario. Retirada; en su lugar se comprueba la consulta real de
+   `progressHistory` (`uid` + `limit(200)`, sin `orderBy`), que no necesita
+   índice compuesto.
+
+### Lo que NO demuestra esta batería
+
+- Que las reglas **compilen** y que el motor permita o deniegue lo previsto: eso
+  es `npm run test:rules`, bloqueado por la descarga del jar.
+- Que el proyecto real no necesite índices nuevos: el emulador los crea solo, así
+  que una prueba verde allí no lo probaría. Se comprueba con `db:check` contra el
+  proyecto real o leyendo la consola.
+- Que Firebase Auth deshabilite de verdad una cuenta (eso es `disabled` en
+  Authentication, no una regla). Aquí solo se demuestra que, deshabilitada en
+  Firestore, las reglas dejan de dar acceso.

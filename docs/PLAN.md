@@ -6,7 +6,9 @@
 > claves separadas), B06 (subida de PDF por partes y cuota), B07 (visor PDF
 > privado), B08 (publicación como puerta del servidor), B09 funcional
 > (administración de cuentas: deshabilitar, reactivar y reemitir códigos) y B10
-> (historial de formación: leer el progreso archivado). Lo que queda pendiente de
+> (historial de formación: leer el progreso archivado), más la **revisión de las
+> reglas de seguridad** (fase 1 de integración de Firebase: reglas revisadas,
+> 57 pruebas escritas y 22 comprobaciones estáticas, motor sin ejecutar). Lo que queda pendiente de
 > este plan es, sobre todo, el **bloque 2** (emulador y reglas) y todo lo que
 > dependa de Firebase real: siguen **bloqueados** en este entorno por falta de
 > JVM y de acceso a los servicios de Google. Ver `PRUEBAS.md` §22 y

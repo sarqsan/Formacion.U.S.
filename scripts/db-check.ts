@@ -107,11 +107,6 @@ async function main() {
   const indexProblems: string[] = [];
   const indexQueries: Array<{ label: string; run: () => Promise<unknown> }> = [
     {
-      label: "accounts(status, createdAt)",
-      run: () =>
-        db.collection(COLLECTIONS.accounts).where("status", "==", "active").orderBy("createdAt", "desc").limit(1).get(),
-    },
-    {
       label: "accounts(role, status)",
       run: () =>
         db.collection(COLLECTIONS.accounts).where("role", "==", "admin").where("status", "==", "active").limit(1).get(),
@@ -158,6 +153,14 @@ async function main() {
           .where("topicId", "==", "sin-uso")
           .limit(1)
           .get(),
+    },
+    {
+      // Histórico (bloque 10): la consulta real filtra SOLO por uid y limita a
+      // 200, sin orderBy. Debe responder sin índice compuesto; si algún día
+      // exigiera uno, esta comprobación lo delata antes de que falle en la app.
+      label: "progressHistory(uid) [sin índice compuesto]",
+      run: () =>
+        db.collection(COLLECTIONS.progressHistory).where("uid", "==", "sin-uso").limit(200).get(),
     },
     {
       label: "documents(archived) [cuota de PDF]",

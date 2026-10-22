@@ -93,7 +93,7 @@ const ROWS: Row[] = [
     feature: "Reglas de Firestore",
     state: "pending",
     detail:
-      "41 pruebas escritas, 0 ejecutadas: el emulador oficial no se pudo descargar en este entorno. Ver docs/ENTORNO-PRUEBAS.md.",
+      "57 pruebas escritas, 0 ejecutadas: la JVM ya se puede preparar, pero el emulador oficial no se puede descargar en este entorno (storage.googleapis.com bloqueado). 22 comprobaciones estáticas de la política de las reglas sí se ejecutan en cada verify. Ver docs/ENTORNO-PRUEBAS.md.",
   },
   {
     feature: "Copia de seguridad cifrada",
