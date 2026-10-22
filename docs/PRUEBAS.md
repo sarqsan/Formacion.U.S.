@@ -1231,7 +1231,7 @@ por el chat, el repositorio ni un fichero compartido.
 | `npm run check:web` | **PASSED (exit 0)** |
 | `npm run check:setup` | **FAILED (exit 2)**: una sola acción, `[SECRETA]` (credenciales) |
 | `check:firebase` con credenciales **sintéticas** (`/tmp`, generadas y borradas en la misma sesión) | configuración entera en `✓` (proyecto, credenciales, PEM RSA y los cinco valores web) y **`BLOCKED` (exit 3)** al leer Firestore: `tiempo de espera agotado (listCollections)`. Confirma que el procedimiento funciona hasta el límite de red del sandbox |
-| `npm run verify` | **exit 0**: 903 pasan / 9 omitidas, lint sin avisos, build OK |
+| `npm run verify` | **exit 0**: 903 pasan / 9 omitidas (54 ficheros + 1 omitido), lint sin avisos, build OK |
 | `npm run check:demo` | **PASSED**, 140 comprobaciones |
 | Fuga de valores en la salida del diagnóstico | ninguna: el `apiKey` solo como longitud, el correo solo por dominio, la clave solo «PEM correcto» |
 
