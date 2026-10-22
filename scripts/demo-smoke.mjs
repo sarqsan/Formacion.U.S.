@@ -16,6 +16,17 @@ function cookieFor(uid) {
   return { cookie: `formacion_demo=${uid}`, origin: BASE };
 }
 
+/** Deshace las entidades HTML que un navegador interpretaría al enviar. */
+function decodeEntities(value) {
+  return value
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
 /**
  * Extrae los campos de cada formulario del HTML, incluido el input oculto
  * `$ACTION_ID_…` que Next usa para las acciones de servidor sin JavaScript.
@@ -44,8 +55,11 @@ function forms(html) {
         continue;
       }
 
-      const value = /value="([^"]*)"/.exec(tag)?.[1] ?? "";
-      fields[name] = value;
+      // Un navegador **descodifica** las entidades del HTML antes de enviar el
+      // campo. Hace falta para los formularios con estado (`useActionState`),
+      // cuyos campos ocultos llevan JSON con comillas escapadas; sin esto el
+      // servidor recibe `&quot;` y responde 400.
+      fields[name] = decodeEntities(/value="([^"]*)"/.exec(tag)?.[1] ?? "");
     }
 
     // Los desplegables también viajan en el formulario: se envía la opción
@@ -855,6 +869,132 @@ if (publishForm) {
     );
   }
 }
+
+// ---------------------------------------------------------------------------
+// 4 bis. Personas y cuentas (bloque 09)
+// ---------------------------------------------------------------------------
+
+const people = await get("/admin/personas", admin);
+assert(people.status === 200, `administración abre la lista de personas (HTTP ${people.status})`);
+assert(
+  people.html.includes("demo-pendiente") && people.html.includes("Pendiente de activación"),
+  "la lista muestra el estado real de las cuentas",
+);
+
+const learnerPeople = await get("/admin/personas", learner);
+assert(learnerPeople.status === 307, `un alumno no entra en personas (HTTP ${learnerPeople.status})`);
+
+const missingPerson = await get("/admin/personas/no-existe", admin);
+assert(missingPerson.status === 404, `una cuenta inexistente da 404 (HTTP ${missingPerson.status})`);
+
+const lastAdmin = await get("/admin/personas/demo-admin", admin);
+assert(
+  lastAdmin.html.includes("único administrador activo"),
+  "la ficha avisa de que no se puede deshabilitar al último administrador",
+);
+assert(
+  !lastAdmin.html.includes("Deshabilitar cuenta"),
+  "el único administrador no ofrece el botón de deshabilitar",
+);
+
+// Deshabilitar a la segunda alumna desde su ficha.
+const personBefore = await get("/admin/personas/demo-alumno-2", admin);
+const disableForm = forms(personBefore.html).find((form) =>
+  form.inner.includes("Deshabilitar cuenta"),
+);
+assert(Boolean(disableForm), "la ficha ofrece deshabilitar la cuenta");
+
+if (disableForm) {
+  const disabled = await postForm("/admin/personas/demo-alumno-2", admin, {
+    ...disableForm.fields,
+    reason: "Recorrido automático",
+  });
+  assert(
+    Boolean(disabled.location?.includes("ok=deshabilitada")),
+    `la cuenta queda deshabilitada (${disabled.location})`,
+  );
+
+  const afterDisable = await get("/admin/personas/demo-alumno-2", admin);
+  assert(afterDisable.html.includes("Deshabilitada"), "la ficha muestra el estado deshabilitado");
+
+  // La sesión de esa persona muere en la petición siguiente.
+  const closed = await get("/panel", cookieFor("demo-alumno-2"));
+  assert(closed.status === 307, `una cuenta deshabilitada pierde la sesión (HTTP ${closed.status})`);
+
+  const disabledList = await get("/admin/personas?estado=disabled", admin);
+  assert(
+    disabledList.html.includes("demo-alumno-2") && !disabledList.html.includes("demo-alumno-1"),
+    "el filtro por estado separa las cuentas deshabilitadas",
+  );
+
+  // Y se puede reactivar.
+  const reopen = await get("/admin/personas/demo-alumno-2", admin);
+  const enableForm = forms(reopen.html).find((form) => form.inner.includes("Reactivar cuenta"));
+  assert(Boolean(enableForm), "la ficha ofrece reactivar la cuenta");
+
+  if (enableForm) {
+    const enabled = await postForm("/admin/personas/demo-alumno-2", admin, enableForm.fields);
+    assert(
+      Boolean(enabled.location?.includes("ok=reactivada")),
+      `la cuenta vuelve a estar activa (${enabled.location})`,
+    );
+    const back = await get("/panel", cookieFor("demo-alumno-2"));
+    assert(back.status === 200, `la alumna reactivada vuelve a entrar (HTTP ${back.status})`);
+  }
+}
+
+// Reemitir el código de la cuenta pendiente: el token se ve una sola vez.
+const pendingPage = await get("/admin/personas/demo-pendiente", admin);
+const reissueForm = forms(pendingPage.html).find((form) =>
+  form.inner.includes("Reemitir código"),
+);
+assert(Boolean(reissueForm), "la ficha de la cuenta pendiente ofrece reemitir el código");
+
+const activationTokens = (html) =>
+  new Set(html.match(/[A-Za-z0-9_-]{43}/g) ?? []);
+
+if (reissueForm) {
+  const first = await postForm("/admin/personas/demo-pendiente", admin, reissueForm.fields);
+  assert(first.status === 200, `emite un código nuevo (HTTP ${first.status})`);
+  assert(
+    first.html.includes("Código nuevo emitido") && first.html.includes("activation-token"),
+    "el código se muestra una sola vez en la respuesta",
+  );
+  assert(
+    !first.location,
+    "el código no viaja en la URL (no queda en el historial)",
+  );
+
+  const second = await postForm("/admin/personas/demo-pendiente", admin, reissueForm.fields);
+  assert(
+    second.html.includes("se anularon 1 anterior"),
+    "reemitir anula el código anterior",
+  );
+  const firstTokens = activationTokens(first.html);
+  const secondTokens = activationTokens(second.html);
+  assert(
+    firstTokens.size > 0 && secondTokens.size > 0,
+    "cada emisión devuelve un código utilizable",
+  );
+  assert(
+    [...secondTokens].some((token) => !firstTokens.has(token)),
+    "el código nuevo es distinto del anterior",
+  );
+
+  const stillPending = await get("/admin/personas/demo-pendiente", admin);
+  assert(
+    stillPending.html.includes("Pendiente de activación"),
+    "reemitir no activa la cuenta por su cuenta",
+  );
+}
+
+// Una cuenta activa no necesita código y una deshabilitada tampoco lo admite.
+const activePerson = await get("/admin/personas/demo-alumno-1", admin);
+assert(
+  activePerson.html.includes("La cuenta ya está activa") &&
+    !activePerson.html.includes("Reemitir código de activación"),
+  "una cuenta activa no ofrece reemitir el código",
+);
 
 // ---------------------------------------------------------------------------
 // 5. Acceso de administración y cierre

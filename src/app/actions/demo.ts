@@ -15,9 +15,12 @@ import { DEMO_COOKIE, getUiSession } from "@/demo/session";
 import { demoAccountByUid, resetDemoState } from "@/demo/store";
 import {
   adminCreateCourse,
+  adminDisableAccount,
   adminDraftEditor,
+  adminEnableAccount,
   adminEnroll,
   adminPublish,
+  adminReissueActivationCode,
   adminRevokeEnrollment,
   adminSaveDraftAssessments,
   adminSaveDraftStructure,
@@ -499,6 +502,101 @@ export async function importPreviewAction(
       preview,
       skippedEmptyRows,
       message: `${preview.summary.totalRows} filas leídas.`,
+    };
+  } catch (error) {
+    return { status: "error", message: errorMessage(error) };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Administración de cuentas (bloque 09)
+// ---------------------------------------------------------------------------
+
+/**
+ * Deshabilitar o reactivar una cuenta.
+ *
+ * Redirección con mensaje en lugar de estado: son operaciones de una sola vez y
+ * la página tiene que volver a leer la ficha. El motivo es opcional y se guarda
+ * en la auditoría; nunca se pide ni se muestra nada del código de activación.
+ */
+async function changeAccountStatus(
+  formData: FormData,
+  operation: "disable" | "enable",
+): Promise<never> {
+  const actor = await actorOrNull();
+  if (!actor) redirect("/login");
+
+  const uid = String(formData.get("uid") ?? "").trim();
+  const target = `/admin/personas/${encodeURIComponent(uid)}`;
+
+  try {
+    if (operation === "disable") {
+      const reason = String(formData.get("reason") ?? "").trim();
+      await adminDisableAccount(actor, uid, reason || null);
+    } else {
+      await adminEnableAccount(actor, uid);
+    }
+  } catch (error) {
+    revalidatePath("/admin");
+    revalidatePath("/admin/personas");
+    redirect(`${target}?error=${encodeURIComponent(errorMessage(error))}`);
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/admin/personas");
+  revalidatePath(target);
+  redirect(`${target}?ok=${operation === "disable" ? "deshabilitada" : "reactivada"}`);
+}
+
+export async function disableAccountAction(formData: FormData): Promise<void> {
+  await changeAccountStatus(formData, "disable");
+}
+
+export async function enableAccountAction(formData: FormData): Promise<void> {
+  await changeAccountStatus(formData, "enable");
+}
+
+export interface ReissueActivationState extends ActionResult {
+  username?: string;
+  /** El código, una sola vez. Se muestra aquí y no viaja en la URL. */
+  token?: string;
+  expiresAt?: string;
+  revokedPrevious?: number;
+}
+
+/**
+ * Reemite el código de activación de una cuenta pendiente.
+ *
+ * Devuelve el token en el estado de la acción (no en la URL ni en una cookie):
+ * así no queda en el historial del navegador, en los registros del servidor ni
+ * en un enlace que alguien pueda reenviar sin querer. El servicio guarda solo
+ * el hash.
+ */
+export async function reissueActivationAction(
+  _previous: ReissueActivationState,
+  formData: FormData,
+): Promise<ReissueActivationState> {
+  const actor = await actorOrNull();
+  if (!actor) {
+    return { status: "error", message: "La sesión ha caducado. Vuelve a entrar." };
+  }
+
+  const uid = String(formData.get("uid") ?? "").trim();
+
+  try {
+    const reissued = await adminReissueActivationCode(actor, uid);
+    revalidatePath("/admin");
+    revalidatePath(`/admin/personas/${encodeURIComponent(uid)}`);
+    return {
+      status: "ok",
+      username: reissued.username,
+      token: reissued.token,
+      expiresAt: reissued.expiresAt,
+      revokedPrevious: reissued.revokedPrevious,
+      message:
+        reissued.revokedPrevious > 0
+          ? `Código nuevo emitido; se anularon ${reissued.revokedPrevious} anterior(es).`
+          : "Código nuevo emitido.",
     };
   } catch (error) {
     return { status: "error", message: errorMessage(error) };

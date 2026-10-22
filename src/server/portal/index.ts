@@ -219,6 +219,34 @@ export async function adminEnrollments(actor: Actor) {
   return portalMode() === "demo" ? demo.adminEnrollments() : firebase.adminEnrollments(actor);
 }
 
+/**
+ * Administración de cuentas (bloque 09). El servicio es el mismo en las dos
+ * persistencias; solo cambia el almacén que hay debajo.
+ */
+export async function adminDisableAccount(actor: Actor, uid: string, reason?: string | null) {
+  return portalMode() === "demo"
+    ? demo.adminDisableAccount(actor, uid, reason)
+    : firebase.adminDisableAccount(actor, uid, reason);
+}
+
+export async function adminEnableAccount(actor: Actor, uid: string) {
+  return portalMode() === "demo"
+    ? demo.adminEnableAccount(actor, uid)
+    : firebase.adminEnableAccount(actor, uid);
+}
+
+export async function adminReissueActivationCode(actor: Actor, uid: string) {
+  return portalMode() === "demo"
+    ? demo.adminReissueActivationCode(actor, uid)
+    : firebase.adminReissueActivationCode(actor, uid);
+}
+
+export async function adminActivationSummary(actor: Actor, uid: string) {
+  return portalMode() === "demo"
+    ? demo.adminActivationSummary(actor, uid)
+    : firebase.adminActivationSummary(actor, uid);
+}
+
 export async function adminProgress(actor: Actor) {
   assertAdmin(actor);
   return portalMode() === "demo" ? demo.adminProgress() : firebase.adminProgress(actor);

@@ -14,11 +14,18 @@ import { submitAssessment } from "@/server/assessments/service";
 import { parsePeopleWorkbook } from "@/server/import/excel";
 import { buildImportPreview } from "@/server/import/service";
 import {
+  accountAdminDependencies,
   courseEditorDependencies,
   documentDependencies,
   documentFileDependencies,
   importDependencies,
 } from "@/server/deps";
+import {
+  activationSummary,
+  disableAccount,
+  enableAccount,
+  reissueActivationCode,
+} from "@/server/accounts/service";
 import {
   documentFileSummary as documentFileSummaryFor,
   isDocumentFileAvailable,
@@ -792,6 +799,30 @@ export async function adminPublish(actor: Actor, courseId: string, version: numb
     { actor, courseId, version },
     { store: deps.catalog, documents: deps.documents },
   );
+}
+
+// ---------------------------------------------------------------------------
+// Administración de cuentas (bloque 09)
+// ---------------------------------------------------------------------------
+
+/** Deshabilita una cuenta. El servicio comprueba rol, transición y último admin. */
+export async function adminDisableAccount(actor: Actor, uid: string, reason?: string | null) {
+  return disableAccount({ actor, uid, reason }, accountAdminDependencies());
+}
+
+/** Reactiva una cuenta deshabilitada (nunca una pendiente de activar). */
+export async function adminEnableAccount(actor: Actor, uid: string) {
+  return enableAccount({ actor, uid }, accountAdminDependencies());
+}
+
+/** Emite un código de activación nuevo y anula los anteriores. */
+export async function adminReissueActivationCode(actor: Actor, uid: string) {
+  return reissueActivationCode({ actor, uid }, accountAdminDependencies());
+}
+
+/** Resumen de códigos (pendiente, usado, revocado) para la ficha. */
+export async function adminActivationSummary(actor: Actor, uid: string) {
+  return activationSummary({ actor, uid }, accountAdminDependencies());
 }
 
 // ---------------------------------------------------------------------------

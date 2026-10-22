@@ -220,6 +220,46 @@ es una transacción), no incluye usuarios de Firebase Authentication y la
 restauración escribe por lotes (un fallo a mitad deja estado parcial). Ver
 `docs/INFORME-FASE-7.md` §3.5.
 
+### 5.3 quinquies Ciclo de vida de la cuenta: deshabilitar cierra de verdad
+
+Hasta el bloque 09 una cuenta solo cambiaba de estado al activarse. Ahora
+administración puede **deshabilitarla**, **reactivarla** y **reemitir su código
+de activación**, con estas garantías:
+
+| Operación | Qué se comprueba en el servidor | Efecto |
+| --- | --- | --- |
+| Deshabilitar | rol admin · la cuenta existe · transición válida (`pending_activation`/`active` → `disabled`) · no es el último administrador activo | `status = disabled`, `claimsVersion + 1`, claims nuevas, **revocación de refresh tokens**, códigos pendientes anulados, auditoría con el motivo |
+| Reactivar | rol admin · la cuenta existe · solo `disabled → active` | `status = active`, `claimsVersion + 1`, claims nuevas, revocación de refresh tokens, auditoría |
+| Reemitir código | rol admin · la cuenta existe · solo `pending_activation` | los códigos vivos se revocan **antes** de emitir; el nuevo se guarda **solo como hash** (72 h), se muestra una vez y la auditoría no lo contiene |
+
+Por qué importa el orden y qué se evita:
+
+- **`claimsVersion` sube en la misma escritura que el estado.** Si fueran dos
+  escrituras, una petición podría leer el estado nuevo con la versión vieja y
+  aceptar un token que debería estar muerto.
+- **La sesión muere en la siguiente petición**, no cuando caduque la cookie: el
+  servidor relee `accounts/{uid}` en cada petición y exige `status === "active"`
+  y `claimsVersion` coincidente.
+- **Reemitir no activa ni reactiva.** Un código nuevo solo sirve para una cuenta
+  `pending_activation`; reactivar es otra operación explícita. Así la reemisión
+  no se convierte en una forma de saltarse la contraseña ni la decisión de
+  deshabilitar.
+- **Deshabilitar no borra**: progreso, intentos e histórico se conservan. La
+  alternativa (borrar la cuenta) destruiría la trazabilidad y además dejaría el
+  nombre de usuario reservado sin dueño.
+- **El último administrador activo no se puede deshabilitar** (409 `LAST_ADMIN`),
+  tampoco uno mismo: sin consola, quedaría un sistema irreversible.
+- **El código no viaja en la URL**: se devuelve en el resultado de la acción de
+  servidor, así que no queda en el historial del navegador, en `Referer` ni en
+  los registros de acceso. La auditoría guarda que se emitió, con su caducidad,
+  nunca el secreto.
+
+Lo que **no** está demostrado: que Firebase Auth revoque de verdad los refresh
+tokens ni que las claims nuevas invaliden los tokens ya emitidos. Eso exige el
+proyecto real; el emulador sigue bloqueado (sin JVM). En la demostración la
+propiedad que sí se prueba es la que depende del servidor: cada petición relee
+la ficha y una cuenta deshabilitada deja de entrar.
+
 ### 5.4 Sin límite de intentos propio
 La activación está protegida por entropía del token, pero no hay *rate limit*
 en `/api/activate`. Firebase limita intentos de login, no de activación.

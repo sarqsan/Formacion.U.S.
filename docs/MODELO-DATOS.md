@@ -35,9 +35,13 @@ generen el mismo usuario.
 | `uid` | string |
 | `createdAt`, `expiresAt` | ISO string (72 h) |
 | `usedAt`, `revokedAt` | ISO string \| null |
+| `revokedReason` | `"reissued"` \| `"account_disabled"` \| null |
+| `createdBy`, `createdFrom` | string \| null (`"admin_reissue"` en los reemitidos) |
 
 El token en claro **no se almacena** (256 bits, base64url). El id del documento
-es su hash.
+es su hash. Reemitir un código revoca los vivos **antes** de crear el nuevo, así
+que nunca hay dos válidos a la vez; deshabilitar la cuenta también los anula
+(bloque 09).
 
 ### `courses/{courseId}` — curso
 
@@ -268,8 +272,11 @@ Storage** (requiere Blaze). Detalles que importan:
 
 ### `audits/{autoId}` — auditoría administrativa
 
-`{ type: "people_import" | "bootstrap_admins" | "account_rollback", actorUid, at, ... }`
-Sin tokens, sin contraseñas, sin PDF.
+`{ type: "people_import" | "bootstrap_admins" | "account_rollback" | "account_disabled" | "account_enabled" | "activation_reissued", actorUid, at, ... }`
+Sin tokens, sin contraseñas, sin PDF. En las acciones de cuentas se guarda el
+`targetUid`, la `claimsVersion` resultante y —al deshabilitar— el motivo escrito
+por quien administra (máx. 200 caracteres). La emisión de un código se registra
+con su caducidad y cuántos se anularon, **nunca con el código**.
 
 ### `progressHistory/{uid}_{courseId}_v{n}` — progreso archivado
 

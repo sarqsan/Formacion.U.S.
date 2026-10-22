@@ -63,6 +63,31 @@ export interface DemoState {
    * reiniciar, como todo lo demás.
    */
   pdf: PdfMemoryState;
+  /**
+   * Códigos de activación, por **hash** (nunca en claro). Mismo contrato que
+   * `activationTokens/{hash}` en Firestore: un código usado, caducado o
+   * revocado no sirve. Se siembra uno para la cuenta pendiente, para que el
+   * recorrido de activación sea realista.
+   */
+  activationTokens: Map<string, DemoActivationToken>;
+  /** Auditoría de las acciones de administración de cuentas. */
+  audits: DemoAuditEntry[];
+}
+
+export interface DemoActivationToken {
+  uid: string;
+  createdAt: string;
+  expiresAt: string;
+  usedAt: string | null;
+  revokedAt: string | null;
+}
+
+export interface DemoAuditEntry {
+  type: "account_disabled" | "account_enabled" | "activation_reissued";
+  actorUid: string;
+  targetUid: string;
+  at: string;
+  [extra: string]: unknown;
 }
 
 const SEED_NOW = "2026-01-08T09:00:00.000Z";
@@ -83,6 +108,8 @@ function seedState(): DemoState {
     progress: new Map(),
     attempts: [],
     pdf: createPdfMemoryState(),
+    activationTokens: new Map(),
+    audits: [],
   };
 
   for (const { definition, published } of DEMO_COURSES) {
