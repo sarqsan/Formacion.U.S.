@@ -560,3 +560,45 @@ concurrencia con un `set()` optimista, que perdería el trabajo de otra pestaña
 - El límite de 800 KiB por definición se comprueba en el servicio con el tamaño
   UTF-8 real, antes de acercarse al 1 MiB por documento de Firestore; no se
   duplica la regla en la interfaz.
+
+## ADR-024 · Los cuestionarios del borrador se editan con su clave en una sola escritura
+
+**Contexto.** El bloque 04 dejó el editor de estructura: títulos, descripción y
+temas. Faltaban las preguntas, y sin ellas ningún curso puede publicarse
+(`validateCourseVersion` exige cuestionario en los temas obligatorios y examen
+final). El modelo separa contenido público (`versions/{n}`, sin respuestas) y
+claves (`answerKeys`, solo servidor), así que editar preguntas toca **dos**
+documentos.
+
+**Decisión.**
+
+1. **Una operación, dos documentos.** `replaceDraftContent` escribe la
+   versión y sus claves en la misma transacción. Hacerlo en dos pasos dejaría
+   una ventana en la que la versión tiene preguntas cuya respuesta correcta
+   todavía no existe: un intento entregado en ese instante sería incobrable y el
+   alumno vería un fallo imposible de explicar.
+2. **Las claves se recalculan, no se parchean.** Se derivan del contenido
+   (`toAnswerKeys`) en cada guardado. Así una pregunta eliminada no deja su
+   clave huérfana y no hay forma de que contenido y clave se desincronicen.
+3. **El formulario no manda las preguntas existentes.** La acción relee la
+   versión y fusiona los cambios por identificador: lo que no llega se elimina,
+   y un campo manipulado no puede inventar una pregunta. Los identificadores de
+   pregunta y opción son estables; renombrar la opción no la cambia.
+4. **Misma concurrencia que el resto del borrador.** Se exige `revision`; un
+   guardado con la revisión vieja devuelve `DRAFT_STALE` sin escribir.
+5. **Nada de esto publica ni relaja la puerta.** Un cuestionario vacío se
+   guarda; `validateCourseVersion` sigue siendo quien decide si algo es
+   publicable. `optionLabels` sin texto es un **aviso** (el alumnado vería el
+   identificador), no un error: el contenido anterior al editor no tiene
+   etiquetas y bloquearlo obligaría a reescribir cursos ya publicados.
+
+**Consecuencias.**
+
+- Editar preguntas de una versión publicada es imposible por contrato
+  (`VERSION_NOT_EDITABLE`, 409); hay que crear la siguiente versión.
+- El documento de claves conserva su `createdAt` original al editarse.
+- La vista del editor incluye las respuestas correctas porque solo la consumen
+  pantallas de administración; el alumnado sigue recibiendo `PublicQuestion`.
+- Las pruebas fijan: contenido sin claves, claves sin restos, atomicidad ante
+  fallo del almacén, publicación intacta y ausencia de respuestas en la vista
+  del alumno.

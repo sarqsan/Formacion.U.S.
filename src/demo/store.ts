@@ -407,6 +407,57 @@ export class DemoCatalogStore implements CourseCatalogStore {
     record.summary.lastDraftVersion = null;
   }
 
+  /**
+   * Guarda contenido y claves del borrador a la vez (mismo contrato que la
+   * transacción de Firestore): revisión esperada, versión en borrador y
+   * sustitución completa de las claves. Así no quedan preguntas sin respuesta
+   * ni claves de temas eliminados.
+   */
+  async replaceDraftContent(input: {
+    versionDoc: CourseVersionDocument;
+    answerKeys: AnswerKeysDocument;
+    expectedRevision: number;
+  }): Promise<void> {
+    const record = demoState().courses.get(input.versionDoc.courseId);
+    const current = record?.versions.get(input.versionDoc.version);
+    if (!record || !current) {
+      throw new DomainError("VERSION_NOT_FOUND", "El borrador no existe.", 404);
+    }
+    if (current.version.status !== "draft") {
+      throw new DomainError(
+        "VERSION_NOT_EDITABLE",
+        "Solo se puede editar un borrador. Una versión publicada no se modifica.",
+        409,
+      );
+    }
+
+    const revision = current.version.revision ?? 0;
+    if (revision !== input.expectedRevision) {
+      throw new DomainError(
+        "DRAFT_STALE",
+        "El borrador se ha modificado desde que abriste el editor. Recarga la página antes de guardar.",
+        409,
+      );
+    }
+
+    demoState().courses.set(input.versionDoc.courseId, {
+      summary: record.summary,
+      versions: new Map(record.versions).set(input.versionDoc.version, {
+        version: {
+          ...structuredClone(input.versionDoc),
+          revision: revision + 1,
+          createdAt: current.version.createdAt,
+          createdBy: current.version.createdBy,
+          publishedAt: null,
+          publishedBy: null,
+        },
+        // Las claves se sustituyen enteras: no quedan restos de preguntas
+        // eliminadas.
+        keys: structuredClone(input.answerKeys),
+      }),
+    });
+  }
+
   async listDocuments(courseId: string, version: number, topicId: string): Promise<PublicDocument[]> {
     const document = await this.getVersion(courseId, version);
     return document?.topics.find((topic) => topic.id === topicId)?.documents ?? [];
@@ -468,49 +519,6 @@ export class DemoCatalogStore implements CourseCatalogStore {
     return { adopted: false };
   }
 
-  /** Guardado de estructura con la misma comprobación de revisión. */
-  async replaceDraftContent(input: {
-    versionDoc: CourseVersionDocument;
-    expectedRevision: number;
-  }): Promise<void> {
-    const record = demoState().courses.get(input.versionDoc.courseId);
-    const current = record?.versions.get(input.versionDoc.version);
-    if (!record || !current) {
-      throw new DomainError("VERSION_NOT_FOUND", "El borrador no existe.", 404);
-    }
-    if (current.version.status !== "draft") {
-      throw new DomainError(
-        "VERSION_NOT_EDITABLE",
-        "Solo se puede editar un borrador. Una versión publicada no se modifica.",
-        409,
-      );
-    }
-
-    const revision = current.version.revision ?? 0;
-    if (revision !== input.expectedRevision) {
-      throw new DomainError(
-        "DRAFT_STALE",
-        "El borrador se ha modificado desde que abriste el editor. Recarga la página antes de guardar.",
-        409,
-      );
-    }
-
-    demoState().courses.set(input.versionDoc.courseId, {
-      summary: record.summary,
-      versions: new Map(record.versions).set(input.versionDoc.version, {
-        // Se conservan fecha y autoría originales; las claves no se tocan.
-        version: {
-          ...structuredClone(input.versionDoc),
-          revision: revision + 1,
-          createdAt: current.version.createdAt,
-          createdBy: current.version.createdBy,
-          publishedAt: null,
-          publishedBy: null,
-        },
-        keys: current.keys ? structuredClone(current.keys) : null,
-      }),
-    });
-  }
 }
 
 // ---------------------------------------------------------------------------

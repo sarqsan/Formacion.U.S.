@@ -9,6 +9,7 @@ import {
   draftStartedRedirect,
   parseDraftStructureForm,
 } from "@/server/courses/draft-form";
+import { parseDraftQuizForm, quizSavedRedirect } from "@/server/courses/quiz-form";
 import type { ImportPreview } from "@/domain/people/import-rows";
 import { DEMO_COOKIE, getUiSession } from "@/demo/session";
 import { demoAccountByUid, resetDemoState } from "@/demo/store";
@@ -18,6 +19,7 @@ import {
   adminEnroll,
   adminPublish,
   adminRevokeEnrollment,
+  adminSaveDraftAssessments,
   adminSaveDraftStructure,
   adminStartDraft,
   previewImport,
@@ -404,6 +406,57 @@ export async function saveDraftAction(formData: FormData): Promise<void> {
 
   // Un único punto de salida: sin confirmación del servicio, nunca hay «ok».
   redirect(draftSavedRedirect({ courseId, version, failure }));
+}
+
+/**
+ * Guarda los cuestionarios de los temas y el examen final del borrador.
+ *
+ * Las preguntas se leen del almacén (no del formulario) y el formulario solo
+ * aporta los cambios: así un campo manipulado no puede introducir una pregunta
+ * que no existe. Las claves de corrección no viajan al navegador del alumnado,
+ * pero sí a este formulario de administración, que es la única vía de edición.
+ */
+export async function saveQuizAction(formData: FormData): Promise<void> {
+  const actor = await actorOrNull();
+  if (!actor) redirect("/login");
+
+  const courseId = String(formData.get("courseId") ?? "").trim();
+  const version = Number(formData.get("version") ?? "0");
+  const expectedRevision = Number(formData.get("expectedRevision") ?? "0");
+  const coursePath = `/admin/cursos/${encodeURIComponent(courseId)}`;
+
+  if (!Number.isInteger(version) || version < 1) {
+    redirect(`${coursePath}?error=${encodeURIComponent("No se indicó qué borrador guardar.")}`);
+  }
+
+  let failure: string | null = null;
+  try {
+    const view = await adminDraftEditor(actor, courseId, version);
+    if (!view) {
+      throw new DomainError("VERSION_NOT_FOUND", "El borrador no existe.", 404);
+    }
+
+    const parsed = parseDraftQuizForm(formData, {
+      topics: view.topics.map((topic) => ({ id: topic.id, quiz: topic.quiz })),
+      finalExam: view.finalExam,
+    });
+
+    await adminSaveDraftAssessments(actor, {
+      courseId,
+      version,
+      expectedRevision: Number.isFinite(expectedRevision) ? expectedRevision : 0,
+      topicQuizzes: parsed.topicQuizzes,
+      finalExam: parsed.finalExam,
+    });
+  } catch (error) {
+    failure = errorMessage(error);
+  }
+
+  revalidatePath(`/admin/cursos/${encodeURIComponent(courseId)}/editar`);
+  revalidatePath(coursePath);
+  revalidatePath("/admin/cursos");
+
+  redirect(quizSavedRedirect({ courseId, version, failure }));
 }
 
 // ---------------------------------------------------------------------------

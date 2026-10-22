@@ -150,15 +150,24 @@ export interface CourseCatalogStore {
   }): Promise<{ adopted: boolean }>;
 
   /**
-   * Guarda la estructura de un borrador existente **sin tocar las claves de
-   * corrección** (este bloque no edita cuestionarios).
+   * Guarda el contenido del borrador **y sus claves de corrección** en una
+   * sola operación.
+   *
+   * Siempre escribe los dos documentos, aunque solo cambien los títulos: es la
+   * única forma de que las claves no se queden atrás. Si se editaran por
+   * separado, habría un instante con preguntas cuya respuesta correcta no
+   * existe (un intento entregado ahí sería incobrable) y, al eliminar un tema,
+   * sus claves se quedarían huérfanas en la base.
    *
    *   - la versión debe existir, estar en borrador y tener la revisión
    *     esperada; si no, `VERSION_NOT_EDITABLE` o `DRAFT_STALE`, sin escribir;
-   *   - la revisión guardada es `expectedRevision + 1`.
+   *   - la revisión guardada es `expectedRevision + 1`;
+   *   - las claves se **sustituyen** por completo; el `createdAt` del documento
+   *     de claves lo aporta el llamador para conservar el original.
    */
   replaceDraftContent(input: {
     versionDoc: CourseVersionDocument;
+    answerKeys: AnswerKeysDocument;
     expectedRevision: number;
   }): Promise<void>;
 

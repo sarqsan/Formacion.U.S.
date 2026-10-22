@@ -23,12 +23,15 @@ import {
   createCourse,
   draftEditorView,
   resolveEditorVersion,
+  saveDraftAssessments,
   saveDraftStructure,
   startDraft,
   type CourseEditorDependencies,
   type DraftEditorView,
   type DraftStructure,
+  type SaveAssessmentsResult,
 } from "@/server/courses/editor";
+import type { QuizQuestionDefinition } from "@/domain/assessments/scoring";
 import { definitionFromDocuments } from "@/server/courses/definition";
 import type { AttemptRecord, StoredProgress } from "@/server/learning/store";
 import { screensForDocument, type DemoScreen } from "@/demo/content";
@@ -474,6 +477,20 @@ export async function adminSaveDraftStructure(
   input: { courseId: string; version: number; expectedRevision: number; structure: DraftStructure },
 ) {
   return saveDraftStructure({ actor, ...input }, demoDeps());
+}
+
+/** Guarda cuestionarios y examen final del borrador, con sus claves aparte. */
+export async function adminSaveDraftAssessments(
+  actor: Actor,
+  input: {
+    courseId: string;
+    version: number;
+    expectedRevision: number;
+    topicQuizzes?: Record<string, QuizQuestionDefinition[]>;
+    finalExam?: QuizQuestionDefinition[];
+  },
+): Promise<SaveAssessmentsResult> {
+  return saveDraftAssessments({ actor, ...input }, demoDeps());
 }
 
 /** Vista del editor de estructura, o `null` si el curso o la versión no existen. */

@@ -200,7 +200,43 @@ de modo que un reintento reanuda en vez de duplicar. La pantalla solo muestra
 «guardado» cuando el servicio ha confirmado; si falla, vuelve al editor con el
 mensaje real.
 
-### 4.7 Persistencia de contenido y progreso
+### 4.7 Cuestionarios del borrador: contenido y claves en una sola escritura
+
+```
+/admin/cursos/{id}/editar?v=n   dos formularios, la misma revisión
+    «Guardar borrador»                    → estructura (bloque 04)
+    «Guardar cuestionarios y examen final» → preguntas y claves (bloque 05)
+```
+
+```
+FormData ─► parseDraftQuizForm ─► saveDraftAssessments
+     las preguntas actuales se leen del ALMACÉN (no del formulario)
+     se fusionan los cambios por identificador
+     checkDraftQuizzes (estructura) → reviewDraft (avisos) → transacción
+          versions/{n}      sin correctOptionIds  (toPublicVersion)
+          answerKeys/…      solo correctOptionIds (toAnswerKeys)
+```
+
+Cuatro reglas que sostienen esto:
+
+| Regla | Por qué |
+| --- | --- |
+| Contenido y claves se escriben **juntos** (`replaceDraftContent`) | Entre una escritura y otra habría preguntas sin respuesta correcta y un intento entregado en ese hueco sería incobrable |
+| Guardar la **estructura** también recalcula y reescribe las claves | Si un tema se elimina y las claves no se tocan, quedarían respuestas correctas huérfanas de preguntas que ya no existen |
+| Las claves se **recalculan** del contenido guardado | Una pregunta eliminada no deja su respuesta correcta suelta en la base |
+| Solo se editan **borradores** | La versión publicada y su documento de claves son inmutables; cambiarlas es crear la siguiente versión |
+
+El formulario nunca aporta las preguntas «desde cero»: la acción relee la
+versión y aplica los cambios del formulario sobre ella, así que un campo
+manipulado no puede introducir una pregunta que no existe en la versión. Un
+cuestionario **vacío es válido** (se está escribiendo) y lo que falta se ve como
+aviso; publicar sigue exigiendo `validateCourseVersion`, que no se ha tocado.
+
+La vista `draftEditorView` incluye las respuestas correctas porque la usan solo
+las pantallas de administración. El alumnado recibe `PublicQuestion` (sin
+`correctOptionIds`) y `toClientQuiz` lo garantiza en un único punto.
+
+### 4.8 Persistencia de contenido y progreso
 
 ```
 courses/{courseId}                     título + publishedVersion + lastDraftVersion

@@ -2,7 +2,8 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { getUiSession } from "@/demo/session";
 import { adminDraftEditor } from "@/server/portal";
-import { saveDraftAction, startDraftAction } from "@/app/actions/demo";
+import { saveDraftAction, saveQuizAction, startDraftAction } from "@/app/actions/demo";
+import { QuizFields } from "./quiz-fields";
 
 export const dynamic = "force-dynamic";
 
@@ -11,6 +12,8 @@ const OK_MESSAGES: Record<string, string> = {
     "Borrador creado. No se ha publicado nada: el alumnado sigue viendo la versión publicada o, si no había, nada.",
   reanudado: "Este curso ya tenía un borrador abierto: se ha reanudado, no se ha creado otro.",
   guardado: "Borrador guardado. No se ha publicado nada.",
+  cuestionarios:
+    "Cuestionarios guardados con sus claves de corrección. Las respuestas correctas no se envían al alumnado.",
 };
 
 const STATUS_LABEL: Record<string, string> = {
@@ -271,6 +274,61 @@ export default async function DraftEditorPage({
               </span>
             </div>
           </form>
+
+          <section className="card space-y-4 p-5">
+            <div>
+              <h2 className="text-sm font-semibold">Cuestionarios y examen final</h2>
+              <p className="muted mt-1 text-xs">
+                Las respuestas correctas se guardan aparte, en un documento que solo lee el
+                servidor: el alumnado nunca las recibe. Un cuestionario vacío se guarda; lo que
+                falta se indica abajo como aviso.
+              </p>
+              <p className="muted mt-1 text-xs">
+                {view.topics.reduce((sum, topic) => sum + topic.questions, 0)} pregunta(s) en los
+                temas · {view.finalExamQuestions} en el examen final
+              </p>
+            </div>
+
+            <form action={saveQuizAction} className="space-y-5">
+              <input type="hidden" name="courseId" value={view.courseId} />
+              <input type="hidden" name="version" value={view.version} />
+              <input type="hidden" name="expectedRevision" value={view.revision} />
+
+              {view.topics.map((topic) => (
+                <div key={topic.id} className="rounded-lg border border-[var(--line)] p-3">
+                  <h3 className="text-xs font-semibold uppercase tracking-wide muted">
+                    Cuestionario del tema {topic.order} · {topic.title}
+                    {topic.mandatory ? " (obligatorio)" : " (opcional)"}
+                  </h3>
+                  <div className="mt-2">
+                    <QuizFields scope={topic.id} questions={topic.quiz} />
+                  </div>
+                </div>
+              ))}
+
+              <div className="rounded-lg border border-[var(--line)] p-3">
+                <h3 className="text-xs font-semibold uppercase tracking-wide muted">
+                  Examen final
+                </h3>
+                <div className="mt-2">
+                  <QuizFields
+                    scope="final"
+                    questions={view.finalExam}
+                    hint="Se abre al superar todos los temas obligatorios. Sin preguntas, el curso no se puede publicar."
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button type="submit" className="btn btn-primary">
+                  Guardar cuestionarios y examen final
+                </button>
+                <span className="muted text-xs">
+                  Versión {view.version}, revisión {view.revision}. Guardar no publica.
+                </span>
+              </div>
+            </form>
+          </section>
 
           {view.errors.length > 0 ? (
             <section className="card p-5">

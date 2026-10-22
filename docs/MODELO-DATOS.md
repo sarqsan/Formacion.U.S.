@@ -116,11 +116,19 @@ actualizada y **reanuda** el borrador.
 Reglas: `allow read, write: if false`. Ni siquiera el administrador las lee
 desde el cliente: las usa el servidor para corregir.
 
-Un borrador puede **no tener** documento de claves: el editor de estructura no
-crea cuestionarios, así que una versión nueva sin preguntas no tiene nada que
-corregir. El servidor lo trata como «sin claves» (`null`), no como error, y la
-definición se reconstruye igual; publicar seguirá exigiendo las claves que
-correspondan al contenido.
+Un borrador puede **no tener** documento de claves: una versión nueva sin
+preguntas no tiene nada que corregir. El servidor lo trata como «sin claves»
+(`null`), no como error, y la definición se reconstruye igual; publicar seguirá
+exigiendo las claves que correspondan al contenido.
+
+**Editar cuestionarios escribe aquí, no en la versión.** Al guardar, el
+contenido (`versions/{n}`) se reconstruye con `toPublicVersion` —sin
+`correctOptionIds`— y las claves con `toAnswerKeys`, **en la misma operación**.
+Las claves se sustituyen enteras: si se elimina una pregunta, su respuesta
+correcta desaparece con ella. `optionLabels` es opcional en el modelo (el
+contenido anterior al editor no lo tiene); cuando falta, la interfaz muestra el
+identificador de la opción y el editor lo señala como aviso, nunca como error de
+guardado.
 
 ### `progress/{uid}_{courseId}` — progreso por curso
 

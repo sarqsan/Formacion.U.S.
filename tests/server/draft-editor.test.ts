@@ -418,6 +418,37 @@ describe("saveDraftStructure: temas", () => {
     const published = await readDefinition(store, "curso-a", 1);
     expect(published?.topics.map((topic) => topic.id)).toEqual(["tema-1", "tema-2"]);
   });
+
+  it("eliminar un tema arrastra sus claves: no quedan respuestas huérfanas", async () => {
+    const { store, deps, opened } = await draftFromPublished();
+
+    // El borrador nace con las claves de la publicada.
+    const keysBefore = await store.getAnswerKeys("curso-a", opened.version);
+    expect(Object.keys(keysBefore?.quizByTopic ?? {})).toContain("tema-2");
+
+    await saveDraftStructure(
+      {
+        actor: ADMIN,
+        courseId: "curso-a",
+        version: opened.version,
+        expectedRevision: opened.revision,
+        // Solo se conserva el tema 1: el 2 desaparece del borrador.
+        structure: {
+          title: "Curso A",
+          topics: [{ id: "tema-1", title: "Tema uno", order: 1, mandatory: true }],
+        },
+      },
+      deps,
+    );
+
+    const keysAfter = await store.getAnswerKeys("curso-a", opened.version);
+    expect(Object.keys(keysAfter?.quizByTopic ?? {})).toEqual(["tema-1"]);
+    expect(JSON.stringify(keysAfter)).not.toContain("q-tema-2");
+
+    // Y la publicada conserva las suyas intactas.
+    const publishedKeys = await store.getAnswerKeys("curso-a", 1);
+    expect(Object.keys(publishedKeys?.quizByTopic ?? {})).toEqual(["tema-1", "tema-2"]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -751,7 +782,15 @@ describe("equivalencia demo ↔ contrato real", () => {
 
     const demoView = await adminDraftEditor("curso-nuevo", demoOpen.version);
     expect(demoView?.topics).toEqual([
-      { id: "tema-uno", title: "Tema uno", order: 1, mandatory: true, documents: 0, questions: 0 },
+      {
+        id: "tema-uno",
+        title: "Tema uno",
+        order: 1,
+        mandatory: true,
+        documents: 0,
+        questions: 0,
+        quiz: [],
+      },
     ]);
     expect(demoView?.revision).toBe(realSaved.revision);
 

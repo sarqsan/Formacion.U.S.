@@ -21,11 +21,14 @@ import {
   createCourse,
   draftEditorView,
   resolveEditorVersion,
+  saveDraftAssessments,
   saveDraftStructure,
   startDraft,
   type DraftEditorView,
   type DraftStructure,
+  type SaveAssessmentsResult,
 } from "@/server/courses/editor";
+import type { QuizQuestionDefinition } from "@/domain/assessments/scoring";
 import { definitionFromDocuments as definitionFromDocs } from "@/server/courses/definition";
 import { FirestoreEnrollmentStore } from "@/server/firebase/enrollment-store";
 import { FirestoreLearningStore } from "@/server/firebase/learning-store";
@@ -598,6 +601,21 @@ export async function adminSaveDraftStructure(
 ) {
   assertAdmin(actor);
   return saveDraftStructure({ actor, ...input }, { store: firestoreDeps().catalog });
+}
+
+/** Guarda cuestionarios y examen final del borrador; escribe versión y claves juntas. */
+export async function adminSaveDraftAssessments(
+  actor: Actor,
+  input: {
+    courseId: string;
+    version: number;
+    expectedRevision: number;
+    topicQuizzes?: Record<string, QuizQuestionDefinition[]>;
+    finalExam?: QuizQuestionDefinition[];
+  },
+): Promise<SaveAssessmentsResult> {
+  assertAdmin(actor);
+  return saveDraftAssessments({ actor, ...input }, { store: firestoreDeps().catalog });
 }
 
 /** Vista del editor de estructura, o `null` si el curso o la versión no existen. */

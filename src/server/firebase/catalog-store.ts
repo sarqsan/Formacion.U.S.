@@ -365,14 +365,17 @@ export class FirestoreCourseCatalogStore implements CourseCatalogStore {
   }
 
   /**
-   * Guarda la estructura del borrador sin tocar las claves de corrección.
+   * Guarda contenido y claves del borrador en la MISMA transacción.
    *
-   * La comprobación de revisión es lo que impide que dos pestañas se pisen: si
-   * alguien guardó entre la lectura y esta escritura, la transacción falla con
-   * `DRAFT_STALE` y no se escribe nada.
+   * Son dos documentos (la versión, sin respuestas, y el documento de claves).
+   * Escribirlos por separado dejaría estados intermedios en los que una
+   * pregunta existe sin su respuesta correcta, y al eliminar un tema sus claves
+   * quedarían huérfanas. Dentro de la transacción, o se guardan los dos o no se
+   * guarda ninguno.
    */
   async replaceDraftContent(input: {
     versionDoc: CourseVersionDocument;
+    answerKeys: AnswerKeysDocument;
     expectedRevision: number;
   }): Promise<void> {
     throwIfLeaking(input.versionDoc);
@@ -384,6 +387,9 @@ export class FirestoreCourseCatalogStore implements CourseCatalogStore {
         .doc(input.versionDoc.courseId)
         .collection(COLLECTIONS.versions)
         .doc(String(input.versionDoc.version));
+      const keysRef = db
+        .collection(COLLECTIONS.answerKeys)
+        .doc(answerKeysDocId(input.versionDoc.courseId, input.versionDoc.version, "final"));
 
       await db.runTransaction(async (transaction) => {
         const current = await transaction.get(versionRef);
@@ -419,6 +425,10 @@ export class FirestoreCourseCatalogStore implements CourseCatalogStore {
           publishedBy: null,
           updatedAt: FieldValue.serverTimestamp(),
         });
+
+        // Las claves se sustituyen enteras: las de una pregunta eliminada no
+        // sobreviven. El servicio conserva el `createdAt` original.
+        transaction.set(keysRef, { ...input.answerKeys });
       });
     });
   }

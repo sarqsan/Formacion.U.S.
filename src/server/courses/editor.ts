@@ -5,6 +5,8 @@ import {
   type CourseVersionDefinition,
   type TopicDefinition,
 } from "@/domain/courses/content";
+import type { QuizQuestionDefinition } from "@/domain/assessments/scoring";
+import { checkDraftQuizzes } from "@/domain/courses/quiz-draft";
 import {
   EMPTY_COURSE_TEMPLATE,
   cloneVersionAsDraft,
@@ -23,6 +25,7 @@ import {
 import type { CourseVersionStatus } from "@/domain/courses/versioning";
 import { definitionFromDocuments } from "@/server/courses/definition";
 import {
+  toAnswerKeys,
   toPublicVersion,
   type AnswerKeysDocument,
   type CourseCatalogStore,
@@ -446,9 +449,17 @@ export async function saveDraftStructure(
   });
   versionDoc.revision = input.expectedRevision + 1;
 
+  // Las claves se recalculan del contenido resultante: si un tema se ha
+  // eliminado, sus preguntas (y su respuesta correcta) desaparecen con él. Se
+  // escriben en la misma operación que la versión, así que la base nunca queda
+  // con preguntas sin clave ni con claves de preguntas que ya no existen.
+  const answerKeys = toAnswerKeys(merged, {
+    createdAt: keys?.createdAt ?? current.createdAt,
+  });
+
   // Dos documentos por versión (contenido y claves): ninguno puede acercarse al
   // 1 MiB por documento de Firestore. Se comprueban juntos por prudencia.
-  const bytes = jsonByteLength(versionDoc) + (keys ? jsonByteLength(keys) : 0);
+  const bytes = jsonByteLength(versionDoc) + jsonByteLength(answerKeys);
   if (bytes > DRAFT_LIMITS.definitionBytes) {
     throw new DomainError(
       "DEFINITION_TOO_LARGE",
@@ -460,6 +471,7 @@ export async function saveDraftStructure(
 
   await deps.store.replaceDraftContent({
     versionDoc,
+    answerKeys,
     expectedRevision: input.expectedRevision,
   });
 
@@ -468,6 +480,174 @@ export async function saveDraftStructure(
     version: input.version,
     revision: versionDoc.revision,
     warnings: reviewDraft(merged, validateCourseVersion(merged)),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Cuestionarios y examen final
+// ---------------------------------------------------------------------------
+
+export interface SaveAssessmentsResult {
+  courseId: string;
+  version: number;
+  revision: number;
+  /** Lo que falta para publicar; no bloquea el guardado. */
+  warnings: DraftIssue[];
+  quiz: { topics: number; questions: number; finalExam: number };
+}
+
+/** Limpia espacios y deja las etiquetas solo de las opciones que existen. */
+function normalizeQuestion(question: QuizQuestionDefinition): QuizQuestionDefinition {
+  const optionIds = [...question.optionIds];
+  const labels = question.optionLabels ?? {};
+  const optionLabels: Record<string, string> = {};
+  for (const optionId of optionIds) {
+    const label = labels[optionId]?.trim();
+    if (label) optionLabels[optionId] = label;
+  }
+
+  const prompt = question.prompt?.trim();
+
+  return {
+    id: question.id.trim(),
+    type: question.type,
+    optionIds,
+    correctOptionIds: [...question.correctOptionIds],
+    ...(prompt ? { prompt } : {}),
+    ...(Object.keys(optionLabels).length > 0 ? { optionLabels } : {}),
+  };
+}
+
+/**
+ * Guarda los cuestionarios de los temas y el examen final de un borrador.
+ *
+ * Tres decisiones que importan:
+ *
+ *   1. **Contenido y claves se escriben juntos** (`replaceDraftContent`).
+ *      Si se escribieran por separado, entre una escritura y otra habría
+ *      preguntas sin respuesta correcta, y un intento entregado en ese hueco
+ *      sería incobrable.
+ *   2. **Las claves se recalculan del contenido** (`toAnswerKeys`), no se
+ *      mezclan: una pregunta eliminada no deja su respuesta correcta suelta.
+ *   3. Solo admite borradores. La versión publicada y su documento de claves
+ *      son inmutables (`VERSION_NOT_EDITABLE`); editarlas es crear la
+ *      siguiente versión.
+ *
+ * Un cuestionario vacío es válido: se está escribiendo. Lo que falta se
+ * devuelve como aviso y es la puerta de publicación (`validateCourseVersion`,
+ * sin tocar) la que lo impide.
+ */
+export async function saveDraftAssessments(
+  input: {
+    actor: Actor;
+    courseId: string;
+    version: number;
+    expectedRevision: number;
+    /** Preguntas por tema; los temas que no aparezcan no se tocan. */
+    topicQuizzes?: Record<string, QuizQuestionDefinition[]>;
+    /** Examen final completo; si falta, no se toca. */
+    finalExam?: QuizQuestionDefinition[];
+  },
+  deps: DraftDependencies,
+): Promise<SaveAssessmentsResult> {
+  assertAdmin(input.actor);
+
+  const course = await deps.store.getCourse(input.courseId);
+  if (!course) {
+    throw new DomainError("COURSE_NOT_FOUND", "El curso no existe.", 404);
+  }
+
+  const current = await deps.store.getVersion(input.courseId, input.version);
+  if (!current) {
+    throw new DomainError("VERSION_NOT_FOUND", "El borrador no existe.", 404);
+  }
+  if (current.status !== "draft") {
+    throw new DomainError(
+      "VERSION_NOT_EDITABLE",
+      "Solo se puede editar un borrador. Una versión publicada o archivada no se modifica: prepara la siguiente.",
+      409,
+    );
+  }
+
+  const storedKeys = await deps.store.getAnswerKeys(input.courseId, input.version);
+  const definition = definitionFromDocuments(current, storedKeys);
+
+  const unknownTopics = Object.keys(input.topicQuizzes ?? {}).filter(
+    (topicId) => !definition.topics.some((topic) => topic.id === topicId),
+  );
+  if (unknownTopics.length > 0) {
+    throw new DomainError(
+      "TOPIC_NOT_FOUND",
+      `No existe el tema «${unknownTopics[0]}» en esta versión. Recarga la página.`,
+      404,
+    );
+  }
+
+  const topics: TopicDefinition[] = definition.topics.map((topic) => {
+    const edited = input.topicQuizzes?.[topic.id];
+    return edited
+      ? { ...topic, quiz: edited.map(normalizeQuestion) }
+      : topic;
+  });
+
+  const merged: CourseVersionDefinition = {
+    ...definition,
+    topics,
+    finalExam: (input.finalExam ?? definition.finalExam).map(normalizeQuestion),
+  };
+
+  // Solo los errores bloquean: una opción sin texto es un aviso (el alumnado
+  // vería el identificador) y el contenido anterior al editor no tiene
+  // etiquetas, así que no puede impedir guardar.
+  const issues = [...checkDraftQuizzes(merged.topics, merged.finalExam), ...checkDraftStructure(merged)];
+  const blocking = issues.filter((issue) => issue.severity === "error");
+  if (blocking.length > 0) {
+    throw new DomainError(
+      "COURSE_QUIZ_INVALID",
+      blocking[0].message,
+      400,
+      { issues: blocking },
+    );
+  }
+
+  const versionDoc = toPublicVersion(merged, {
+    createdAt: current.createdAt,
+    createdBy: current.createdBy,
+    status: "draft",
+  });
+  versionDoc.revision = input.expectedRevision + 1;
+
+  const answerKeys = toAnswerKeys(merged, {
+    // El documento de claves conserva su fecha original si ya existía.
+    createdAt: storedKeys?.createdAt ?? current.createdAt,
+  });
+
+  const bytes = jsonByteLength(versionDoc) + jsonByteLength(answerKeys);
+  if (bytes > DRAFT_LIMITS.definitionBytes) {
+    throw new DomainError(
+      "DEFINITION_TOO_LARGE",
+      `El borrador ocupa ${bytes} bytes y el máximo son ${DRAFT_LIMITS.definitionBytes}. Divide el contenido en más temas o acorta los textos.`,
+      413,
+      { bytes, maxBytes: DRAFT_LIMITS.definitionBytes },
+    );
+  }
+
+  await deps.store.replaceDraftContent({
+    versionDoc,
+    answerKeys,
+    expectedRevision: input.expectedRevision,
+  });
+
+  return {
+    courseId: input.courseId,
+    version: input.version,
+    revision: versionDoc.revision,
+    warnings: reviewDraft(merged, validateCourseVersion(merged)),
+    quiz: {
+      topics: merged.topics.filter((topic) => topic.quiz.length > 0).length,
+      questions: merged.topics.reduce((sum, topic) => sum + topic.quiz.length, 0),
+      finalExam: merged.finalExam.length,
+    },
   };
 }
 
@@ -482,6 +662,12 @@ export interface DraftTopicView {
   mandatory: boolean;
   documents: number;
   questions: number;
+  /**
+   * Preguntas con su clave, para el editor. Esta vista solo la usan las
+   * pantallas de administración: el alumnado recibe `PublicQuestion`, sin
+   * `correctOptionIds` (ver `toClientQuiz`).
+   */
+  quiz: QuizQuestionDefinition[];
 }
 
 export interface DraftEditorView {
@@ -495,6 +681,7 @@ export interface DraftEditorView {
   title: string;
   description: string | null;
   topics: DraftTopicView[];
+  finalExam: QuizQuestionDefinition[];
   finalExamQuestions: number;
   createdAt: string;
   errors: DraftIssue[];
@@ -546,7 +733,17 @@ export function draftEditorView(input: {
         mandatory: topic.mandatory,
         documents: topic.documents.length,
         questions: topic.quiz.length,
+        quiz: topic.quiz.map((question) => ({
+          ...question,
+          optionIds: [...question.optionIds],
+          correctOptionIds: [...question.correctOptionIds],
+        })),
       })),
+    finalExam: definition.finalExam.map((question) => ({
+      ...question,
+      optionIds: [...question.optionIds],
+      correctOptionIds: [...question.correctOptionIds],
+    })),
     finalExamQuestions: definition.finalExam.length,
     createdAt: version.createdAt,
     errors: checkDraftStructure(definition),

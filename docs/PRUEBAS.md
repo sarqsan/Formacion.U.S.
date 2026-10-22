@@ -643,3 +643,46 @@ npm run test:rules        # requiere JDK
 npm run test:firestore    # requiere JDK
 npm run check:firebase    # requiere red hacia Google y credenciales
 ```
+
+## 17. Bloque 05 — cuestionarios y examen final con claves separadas (22/10/2026)
+
+Alcance ejecutado: crear, editar y eliminar preguntas en el cuestionario de cada
+tema y en el examen final de un **borrador**, con las respuestas correctas en su
+documento solo-servidor y guardado conjunto de contenido y claves. **No** se ha
+tocado la publicación, el visor ni la subida de PDF.
+
+| Comprobación | Comando | Resultado |
+| --- | --- | --- |
+| Cadena completa | `npm run verify` | **exit 0**: tipado 0 errores, lint 0 avisos, **689 pruebas en verde**, build OK |
+| Pruebas totales | `npm test` | **689 pasan**, 4 omitidas (emulador), 43 ficheros + 1 omitido (44) |
+| Recorrido de la demostración | `DEMO_MODE=1 npx next start -p 3000` + `npm run check:demo` | **PASSED**, **56 comprobaciones** (antes 46) |
+| Reglas de Firestore | `npm run test:rules` | **BLOQUEADO**: sin JVM |
+| Integración con emulador | `npm run test:firestore` | **BLOQUEADO**: sin JVM |
+| Conexión real | `npm run check:firebase` | **BLOQUEADO**: TLS hacia Google cortado; sin credenciales |
+
+Pruebas nuevas (51):
+
+| Fichero | Pruebas | Qué fijan |
+| --- | ---: | --- |
+| `tests/domain/courses-quiz.test.ts` | 19 | Estructura de una pregunta (enunciado, 2–8 opciones, identificadores válidos y únicos, una correcta que exista, tipo coherente); cuestionario vacío permitido; límites; aviso —no error— de opción sin texto; `validateCourseVersion` y `validateQuizDefinition` siguen igual de estrictas |
+| `tests/server/draft-quiz.test.ts` | 19 | Guardar contenido y claves fuera de la versión; editar conservando identificadores; eliminaciones sin claves huérfanas; una sola operación del almacén; fallo del almacén sin escritura parcial; cuestionario vacío guardado con avisos; una opción sin texto se guarda con aviso (no bloquea); `COURSE_QUIZ_INVALID`, `TOPIC_NOT_FOUND`, `DRAFT_STALE`, `VERSION_NOT_EDITABLE`; publicada y sus claves intactas; alumnado sin respuestas; paridad demo ↔ dobles |
+| `tests/server/draft-editor.test.ts` | +1 (30) | Eliminar un tema del borrador arrastra sus claves: no quedan respuestas correctas huérfanas y la versión publicada conserva las suyas |
+| `tests/server/quiz-form.test.ts` | 12 | Lectura del `FormData` real: editar enunciado/tipo/etiquetas, cambiar la correcta (única y múltiple), quitar y añadir opciones, eliminar y añadir preguntas, ámbitos separados (tema vs examen final), bloques a medias rechazados, ida y vuelta por el almacén |
+
+Recorrido HTTP añadido a `scripts/demo-smoke.mjs` (10 comprobaciones nuevas):
+
+- el editor incluye el formulario de cuestionarios y examen final;
+- guardar devuelve `ok=cuestionarios` y, al reabrir, la pregunta del tema y la del
+  examen final están ahí y el contador las suma;
+- un guardado con la revisión vieja devuelve **error** y no pisa el cuestionario;
+- el alumnado no ve ninguna de las preguntas del borrador.
+
+Corrección del propio guion (no del producto): `forms()` ahora imita lo que hace
+un navegador con casillas y desplegables (una casilla sin marcar no se envía; un
+`select` envía su opción seleccionada). Antes, un guardado «real» desde el guion
+habría borrado las respuestas correctas de las preguntas existentes.
+
+Lo que **no** demuestran estas pruebas: que la transacción de Firestore escriba
+los dos documentos de forma atómica en un proyecto real, ni que las reglas
+permitan o denieguen nada. Dobles y demo son memoria; el emulador no arranca sin
+JVM y la conexión real está cortada.

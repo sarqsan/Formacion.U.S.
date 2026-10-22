@@ -50,6 +50,9 @@ function question(
     optionIds: options,
     correctOptionIds: [correct],
     prompt: `Pregunta ${id}`,
+    // Con texto en cada opción, como el contenido real: sin él, el editor
+    // mostraría un aviso (la opción se vería como su identificador).
+    optionLabels: Object.fromEntries(options.map((option) => [option, `Opción ${option}`])),
   };
 }
 
@@ -102,6 +105,7 @@ export class InMemoryCatalogStore implements CourseCatalogStore {
   documents: PublicDocument[] = [];
   saveVersionCalls = 0;
   publishVersionCalls = 0;
+  draftContentWrites = 0;
 
   private versionKey(courseId: string, version: number) {
     return `${courseId}@${version}`;
@@ -255,8 +259,15 @@ export class InMemoryCatalogStore implements CourseCatalogStore {
     return { adopted: false };
   }
 
+  /**
+   * Guarda contenido y claves del borrador en una sola operación, como la
+   * transacción real: si la revisión no coincide, no se escribe nada. Las
+   * claves se sustituyen enteras (no quedan restos de temas o preguntas
+   * eliminados).
+   */
   async replaceDraftContent(input: {
     versionDoc: CourseVersionDocument;
+    answerKeys: AnswerKeysDocument;
     expectedRevision: number;
   }): Promise<void> {
     const key = this.versionKey(input.versionDoc.courseId, input.versionDoc.version);
@@ -287,7 +298,8 @@ export class InMemoryCatalogStore implements CourseCatalogStore {
       publishedAt: null,
       publishedBy: null,
     });
-    // Las claves NO se tocan: este doble reproduce el mismo contrato.
+    this.keys.set(key, structuredClone(input.answerKeys));
+    this.draftContentWrites += 1;
   }
 
   async listDocuments(): Promise<PublicDocument[]> {

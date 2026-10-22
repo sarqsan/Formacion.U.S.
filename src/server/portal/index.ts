@@ -3,7 +3,8 @@ import { assertAdmin, type Actor } from "@/domain/auth/authorization";
 import type { CourseVersionDefinition } from "@/domain/courses/content";
 import type { ImportPreview } from "@/domain/people/import-rows";
 import type { ImportDependencies } from "@/server/import/service";
-import type { DraftStructure } from "@/server/courses/editor";
+import type { DraftStructure, SaveAssessmentsResult } from "@/server/courses/editor";
+import type { QuizQuestionDefinition } from "@/domain/assessments/scoring";
 import { submitAssessment } from "@/server/assessments/service";
 import { parsePeopleWorkbook } from "@/server/import/excel";
 import { buildImportPreview } from "@/server/import/service";
@@ -262,6 +263,23 @@ export async function adminSaveDraftStructure(
   return portalMode() === "demo"
     ? demo.adminSaveDraftStructure(actor, input)
     : firebase.adminSaveDraftStructure(actor, input);
+}
+
+/** Guarda cuestionarios y examen final del borrador (versión + claves juntas). */
+export async function adminSaveDraftAssessments(
+  actor: Actor,
+  input: {
+    courseId: string;
+    version: number;
+    expectedRevision: number;
+    topicQuizzes?: Record<string, QuizQuestionDefinition[]>;
+    finalExam?: QuizQuestionDefinition[];
+  },
+): Promise<SaveAssessmentsResult> {
+  assertAdmin(actor);
+  return portalMode() === "demo"
+    ? demo.adminSaveDraftAssessments(actor, input)
+    : firebase.adminSaveDraftAssessments(actor, input);
 }
 
 /** Datos del editor de estructura. Solo lectura; nunca publica. */

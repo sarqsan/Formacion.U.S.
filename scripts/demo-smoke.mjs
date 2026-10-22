@@ -31,9 +31,42 @@ function forms(html) {
       const tag = input[0];
       const name = /name="([^"]+)"/.exec(tag)?.[1];
       if (!name) continue;
+
+      // Un navegador no envía una casilla sin marcar. El guion debe imitarlo:
+      // si no, un guardado «real» borraría las respuestas correctas.
+      const isCheckbox = /type="(checkbox|radio)"/.test(tag);
+      if (isCheckbox) {
+        if (/\schecked(=|\s|>)/.test(tag)) {
+          fields[name] = /value="([^"]*)"/.exec(tag)?.[1] ?? "on";
+        }
+        continue;
+      }
+
       const value = /value="([^"]*)"/.exec(tag)?.[1] ?? "";
       fields[name] = value;
     }
+
+    // Los desplegables también viajan en el formulario: se envía la opción
+    // marcada como `selected` o, si ninguna lo está, la primera (lo que haría
+    // el navegador).
+    const selectRegex = /<select\b[^>]*name="([^"]+)"[^>]*>([\s\S]*?)<\/select>/g;
+    let select;
+    while ((select = selectRegex.exec(inner)) !== null) {
+      const [, name, options] = select;
+      const optionRegex = /<option\b([^>]*)>/g;
+      const values = [];
+      let option;
+      while ((option = optionRegex.exec(options)) !== null) {
+        const attrs = option[1];
+        values.push({
+          value: /value="([^"]*)"/.exec(attrs)?.[1] ?? "",
+          selected: /\sselected(=|\s|$)/.test(attrs),
+        });
+      }
+      const chosen = values.find((item) => item.selected) ?? values[0];
+      if (chosen) fields[name] = chosen.value;
+    }
+
     result.push({ fields, inner });
   }
   return result;
@@ -161,6 +194,8 @@ if (startDraftForm) {
 }
 
 if (editorPath) {
+  // URL del editor con la revisión vigente: se actualiza tras cada guardado.
+  let editorUrl = editorPath;
   const editor = await get(editorPath, admin);
   assert(editor.status === 200, "el editor de estructura carga");
   assert(editor.html.includes("Guardar borrador"), "el editor tiene el formulario de guardado");
@@ -184,7 +219,8 @@ if (editorPath) {
       `el guardado confirmado se anuncia como tal (${saved.location})`,
     );
 
-    const reloaded = await get(saved.location ?? editorPath, admin);
+    editorUrl = saved.location ?? editorPath;
+    const reloaded = await get(editorUrl, admin);
     assert(reloaded.html.includes(DRAFT_TITLE), "el borrador guardado se recupera al reabrir");
     assert(reloaded.html.includes("Tema del borrador"), "el tema nuevo persiste");
     assert(
@@ -208,11 +244,96 @@ if (editorPath) {
       "el guardado obsoleto no se anuncia como guardado",
     );
 
-    const afterStale = await get(stale.location ?? editorPath, admin);
+    editorUrl = stale.location ?? editorUrl;
+    const afterStale = await get(editorUrl, admin);
     assert(afterStale.html.includes(DRAFT_TITLE), "el contenido bueno no se ha pisado");
     assert(
       !afterStale.html.includes("Escritura de una pestaña antigua"),
       "la escritura obsoleta no llega al almacén",
+    );
+  }
+
+  // --- Cuestionarios y examen final (bloque 05) ---------------------------
+
+  const quizPage = await get(editorUrl, admin);
+  const quizForm = forms(quizPage.html).find((form) =>
+    form.inner.includes("Guardar cuestionarios y examen final"),
+  );
+  assert(Boolean(quizForm), "el editor incluye el formulario de cuestionarios");
+
+  if (quizForm) {
+    const questionText = "Pregunta del recorrido automático";
+    const finalText = "Pregunta final del recorrido automático";
+
+    const quizSaved = await postForm(editorUrl, admin, {
+      ...quizForm.fields,
+      "quiz:tema-borrador:newQuestionId": "pregunta-smoke",
+      "quiz:tema-borrador:newQuestionPrompt": questionText,
+      "quiz:tema-borrador:newQuestionType": "single_choice",
+      "quiz:tema-borrador:newOption1Id": "si",
+      "quiz:tema-borrador:newOption1Label": "Sí",
+      "quiz:tema-borrador:newOption1Correct": "on",
+      "quiz:tema-borrador:newOption2Id": "no",
+      "quiz:tema-borrador:newOption2Label": "No",
+      "quiz:final:newQuestionId": "final-smoke",
+      "quiz:final:newQuestionPrompt": finalText,
+      "quiz:final:newQuestionType": "single_choice",
+      "quiz:final:newOption1Id": "correcta",
+      "quiz:final:newOption1Label": "Correcta",
+      "quiz:final:newOption1Correct": "on",
+      "quiz:final:newOption2Id": "incorrecta",
+      "quiz:final:newOption2Label": "Incorrecta",
+    });
+
+    assert(quizSaved.status === 303, `guarda los cuestionarios (HTTP ${quizSaved.status})`);
+    assert(
+      Boolean(quizSaved.location?.includes("ok=cuestionarios")),
+      `el guardado de cuestionarios se anuncia como tal (${quizSaved.location})`,
+    );
+
+    editorUrl = quizSaved.location ?? editorUrl;
+    const quizReloaded = await get(editorUrl, admin);
+    assert(quizReloaded.html.includes(questionText), "la pregunta del tema se recupera al reabrir");
+    assert(quizReloaded.html.includes(finalText), "la pregunta del examen final se recupera");
+    assert(
+      quizReloaded.html.includes("pregunta(s) en los temas") &&
+        quizReloaded.html.includes("en el examen final"),
+      "el editor cuenta las preguntas guardadas",
+    );
+
+    // Un guardado con la revisión vieja no pisa el cuestionario.
+    const quizStale = await postForm(editorUrl, admin, {
+      ...quizForm.fields,
+      "quiz:tema-borrador:newQuestionId": "pregunta-vieja",
+      "quiz:tema-borrador:newQuestionPrompt": "Escritura obsoleta del cuestionario",
+      "quiz:tema-borrador:newOption1Id": "a",
+      "quiz:tema-borrador:newOption1Label": "A",
+      "quiz:tema-borrador:newOption1Correct": "on",
+      "quiz:tema-borrador:newOption2Id": "b",
+      "quiz:tema-borrador:newOption2Label": "B",
+    });
+    assert(
+      Boolean(quizStale.location?.includes("error=")),
+      `el cuestionario obsoleto devuelve error (${quizStale.location})`,
+    );
+    assert(
+      !quizStale.location?.includes("ok="),
+      "el cuestionario obsoleto no se anuncia como guardado",
+    );
+
+    editorUrl = quizStale.location ?? editorUrl;
+    const quizAfterStale = await get(editorUrl, admin);
+    assert(
+      quizAfterStale.html.includes(questionText) &&
+        !quizAfterStale.html.includes("Escritura obsoleta del cuestionario"),
+      "la escritura obsoleta no llega al cuestionario",
+    );
+
+    const learnerWithQuiz = await get("/panel", learner);
+    assert(
+      !learnerWithQuiz.html.includes(questionText) &&
+        !learnerWithQuiz.html.includes(finalText),
+      "el alumnado no ve las preguntas del borrador",
     );
   }
 

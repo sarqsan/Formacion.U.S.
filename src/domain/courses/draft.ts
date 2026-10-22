@@ -1,5 +1,6 @@
 import type { CourseVersionDefinition, TopicDefinition } from "@/domain/courses/content";
 import { isSlug } from "@/domain/courses/content";
+import { reviewDraftQuizzes } from "@/domain/courses/quiz-draft";
 
 /**
  * BORRADOR: QUÉ SE PUEDE GUARDAR Y QUÉ FALTA PARA PUBLICAR
@@ -182,6 +183,9 @@ export function reviewDraft(
       severity: "warning",
     });
   }
+
+  // Calidad de los cuestionarios (opciones sin texto): se avisa, no se bloquea.
+  warnings.push(...reviewDraftQuizzes(definition.topics, definition.finalExam));
 
   return warnings;
 }
