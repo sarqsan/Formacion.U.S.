@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { isFirebaseConfigured, isDemoMode } from "@/demo/session";
+import { isDemoMode } from "@/demo/session";
+import { assessFirebaseReadiness, missingConfiguration } from "@/server/firebase/readiness";
 import { demoState } from "@/demo/store";
 import { LoginForm } from "./login-form";
 import { enterDemoSession } from "@/app/actions/demo";
@@ -13,7 +14,13 @@ export default async function LoginPage({
 }) {
   const { demo } = await searchParams;
   const demoMode = isDemoMode();
-  const firebaseReady = isFirebaseConfigured();
+  // El formulario real necesita **las dos** partes: credenciales del servidor
+  // (Admin SDK) y configuración pública de la app web (SDK del navegador).
+  // Antes solo se miraban las credenciales, así que con la app web sin
+  // registrar el formulario aparecía y el error saltaba al pulsar «Entrar».
+  const readiness = assessFirebaseReadiness(process.env);
+  const firebaseReady = readiness.ready;
+  const missing = missingConfiguration(readiness);
   const accounts = demoMode
     ? demoState().accounts.filter((account) => account.status === "active")
     : [];
@@ -32,11 +39,42 @@ export default async function LoginPage({
           <div className="mt-5">
             {firebaseReady ? (
               <LoginForm />
+            ) : demoMode ? (
+              // En la demostración no falta nada: no se usa Firebase. Se dice
+              // así para no llenar la pantalla de variables sin configurar.
+              <div className="alert alert-info">
+                <strong>Estás en la demostración.</strong> Aquí no hay contraseñas ni Firebase: elige
+                una cuenta ficticia en el panel de la derecha. El acceso real se habilita al
+                configurar el proyecto (detalle: <span className="mono">npm run check:setup</span>).
+              </div>
             ) : (
               <div className="alert alert-warn">
-                <strong>Firebase no está configurado en esta instalación.</strong> El formulario real
-                necesita un proyecto de Firebase (o el emulador) con Authentication habilitado. Para
-                recorrer la interfaz, usa el acceso de demostración.
+                <strong>Acceso real no disponible todavía.</strong> Falta configuración de Firebase en
+                esta instalación, así que el formulario no se muestra (no tendría con qué comprobar la
+                contraseña).
+                {missing.length > 0 ? (
+                  <ul className="mt-2 list-disc space-y-1 pl-5 text-xs">
+                    {readiness.serverFindings
+                      .filter((finding) => finding.level === "FAILED")
+                      .map((finding) => (
+                        <li key={finding.id}>
+                          <span className="mono">{finding.id}</span>: {finding.detail}
+                        </li>
+                      ))}
+                    {readiness.webFindings
+                      .filter((finding) => finding.level === "FAILED")
+                      .map((finding) => (
+                        <li key={finding.id}>
+                          <span className="mono">{finding.id}</span>: falta la configuración pública de
+                          la app web.
+                        </li>
+                      ))}
+                  </ul>
+                ) : null}
+                <p className="mt-2 text-xs">
+                  El detalle, paso a paso: <span className="mono">npm run check:setup</span>. Para
+                  recorrer la interfaz sin Firebase, usa el acceso de demostración.
+                </p>
               </div>
             )}
           </div>

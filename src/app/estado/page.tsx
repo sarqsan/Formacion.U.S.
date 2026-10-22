@@ -60,6 +60,12 @@ const ROWS: Row[] = [
       "Panel de alumno y de administración con el estado real del progreso guardado.",
   },
   {
+    feature: "Preparación de la conexión",
+    state: "real",
+    detail:
+      "`npm run check:setup` comprueba sin red qué valores faltan o están mal: proyecto, credenciales, clave RSA, configuración web y endurecimiento de producción. La pantalla de acceso usa la misma valoración, así que no muestra el formulario si falta algo. No demuestra que la conexión funcione: eso exige red y credenciales (npm run check:firebase).",
+  },
+  {
     feature: "Historial de formación",
     state: "demo",
     detail:

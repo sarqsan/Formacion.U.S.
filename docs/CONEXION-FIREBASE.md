@@ -10,6 +10,9 @@ Plan: **Spark (gratuito)**. Nada de esta guía activa facturación.
 > El estado real de la conexión se consulta con `npm run check:firebase`.
 > Mientras no haya credenciales, esa comprobación devuelve **FAILED (exit 2)** y
 > la aplicación **no afirma** estar conectada.
+>
+> Antes de tener credenciales hay una pregunta previa: **qué falta**. La
+> responde `npm run check:setup`, sin red y sin tocar nada (ver §7).
 
 ---
 
@@ -382,6 +385,10 @@ git ls-files --error-unmatch .env.local   # debe fallar: «did not match any fil
   `formacionus-63555` está confirmado y ya escrito en el código, pero `apiKey` y
   `appId` aún no existen en este entorno porque no se ha registrado (o no se ha
   copiado) la app web.
+- Que la configuración esté completa: eso **sí** se comprueba hoy, sin red, con
+  `npm run check:setup` (y sus pruebas). «Completa» no es «correcta para
+  Google»: que la cuenta de servicio exista y tenga permisos solo lo dice
+  `npm run check:firebase`.
 - Que las reglas de seguridad sean correctas: 0 de 57 ejecutadas. Lo que sí se
   ha comprobado es que el texto de las reglas sigue la política prevista (22
   comprobaciones estáticas en `npm test`); el motor no se ha ejecutado (ver
@@ -442,3 +449,44 @@ las del fichero.
 6. Repetir la batería negativa contra el proyecto real con una cuenta de prueba
    (lectura anónima, lectura de otro alumno, cuenta deshabilitada) y borrarla al
    terminar.
+
+---
+
+## 7. Antes de conectar: `npm run check:setup` (fase 3)
+
+Pregunta que responde, sin red y en un segundo: **¿qué valores faltan o están mal
+para que esta instalación pueda hablar con `formacionus-63555`?**
+
+```bash
+npm run check:setup          # informe legible + lista de acciones en orden
+npm run check:setup -- --json   # lo mismo, para máquinas
+```
+
+Qué comprueba, sin hablar con Google:
+
+| Grupo | Comprobaciones |
+| --- | --- |
+| Servidor | `FIREBASE_PROJECT_ID` presente **y** igual al previsto; `FIREBASE_CLIENT_EMAIL` y `FIREBASE_PRIVATE_KEY` presentes; la clave se **parsa de verdad** (`node:crypto`) y es **RSA**; `PDF_STORAGE_BUDGET_MB` numérico |
+| Cliente web | `apiKey` con forma de Firebase, `authDomain` sin `https://`, `appId` con forma `1:nº:web:hash`, `projectId` **igual al del servidor**, dominio de correo igual al del servidor |
+| Producción | `APP_ORIGIN` presente y https fuera de local; cookie con prefijo `__Host-`; sin variables de emulador |
+| Entorno | `.env.local` existe → se comprueba que **git lo ignora** |
+
+Salida real en esta máquina (sin `.env.local`): `RESULTADO: FAILED` (exit 2) con
+siete acciones numeradas, empezando por `FIREBASE_PROJECT_ID` y siguiendo por la
+cuenta de servicio y la app web.
+
+**Lo que NO dice `check:setup`:** si el proyecto existe, si la cuenta de servicio
+tiene permisos o si Firestore responde. Eso es `npm run check:firebase` (con
+red). `check:setup` solo evita perder tiempo con un despiste de pegado.
+
+### Qué cambia en la aplicación
+
+- **Pantalla de acceso** (`/login`): el formulario real solo se muestra cuando
+  están las **dos** partes (credenciales de servidor y configuración web). Antes
+  se miraban solo las credenciales: con la app web sin registrar, el formulario
+  aparecía y el error saltaba al pulsar «Entrar», en el navegador y sin decir qué
+  faltaba. Ahora, si falta algo, se enumeran los valores que faltan y se remite a
+  `npm run check:setup`. En demostración se explica que allí no hay Firebase.
+- **`GET /api/health`**: añade `ready` (todo rellenado) sin exponer nombres de
+  variables ni valores. `ready: true` **no** significa «conectado»: la conexión
+  exige red y la comprueba `check:firebase`.

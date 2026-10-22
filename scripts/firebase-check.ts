@@ -4,6 +4,7 @@
  * ========================================
  *
  *   npm run check:firebase
+ *   npm run check:setup              (--setup: qué falta, SIN red)
  *   npm run check:firebase -- --json
  *   npm run check:firebase -- --timeout=15000
  *   npm run check:web                (equivale a --config-only: sin red)
@@ -36,14 +37,13 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { createPrivateKey } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
 import { loadEnvFiles } from "../src/server/firebase/env-file";
-import { checkPublicFirebaseConfig } from "../src/server/firebase/public-config";
+import { assessFirebaseReadiness } from "../src/server/firebase/readiness";
 
 const EXPECTED_PROJECT = "formacionus-63555";
 const json = process.argv.includes("--json");
@@ -54,6 +54,14 @@ const json = process.argv.includes("--json");
  * credenciales de servidor.
  */
 const configOnly = process.argv.includes("--config-only");
+
+/**
+ * `--setup` responde a «¿qué me falta para poder conectar?» **sin red**:
+ * servidor, cliente web, fichero de entorno y endurecimiento. Es el modo que se
+ * usa antes de tener credenciales; `--config-only` se queda como estaba (solo
+ * la parte web, el que usa `npm run check:web`).
+ */
+const setupOnly = process.argv.includes("--setup");
 
 // Next.js carga `.env.local` al arrancar; este script es un proceso aparte y
 // tiene que hacerlo también, o diría «no configurado» con el fichero lleno.
@@ -130,64 +138,23 @@ const authEmulator = envValue("FIREBASE_AUTH_EMULATOR_HOST");
 const firestoreEmulator = envValue("FIRESTORE_EMULATOR_HOST");
 const usingEmulator = Boolean(authEmulator || firestoreEmulator);
 
+// Todo lo que se puede comprobar sin red vive en `assessFirebaseReadiness`:
+// una sola fuente de verdad, compartida con la pantalla de acceso. Aquí solo se
+// traduce a la salida del diagnóstico.
+const readiness = assessFirebaseReadiness(process.env, { expectedProject: EXPECTED_PROJECT });
+
 if (!configOnly) {
-  if (!projectId) {
-    record(
-      "project",
-      "FIREBASE_PROJECT_ID",
-      "FAILED",
-      "No está definido.",
-      `Define FIREBASE_PROJECT_ID=${EXPECTED_PROJECT} en .env.local (sin comillas).`,
-    );
-  } else if (projectId === EXPECTED_PROJECT) {
-    record("project", "Proyecto de Firebase", "PASSED", `FIREBASE_PROJECT_ID=${projectId}`);
-  } else {
-    record(
-      "project",
-      "Proyecto de Firebase",
-      "FAILED",
-      `El proyecto configurado es «${projectId}» y el previsto es «${EXPECTED_PROJECT}».`,
-      "No se reutiliza el Firebase de otra aplicación: corrige FIREBASE_PROJECT_ID.",
-    );
+  for (const finding of readiness.serverFindings) {
+    record(finding.id, finding.title, finding.level, finding.detail, finding.fix ?? null);
   }
 
-  if (!usingEmulator && (!clientEmail || !privateKey)) {
+  if (readiness.demoMode) {
     record(
-      "credentials",
-      "Credenciales de la cuenta de servicio",
-      "FAILED",
-      "Faltan FIREBASE_CLIENT_EMAIL y/o FIREBASE_PRIVATE_KEY.",
-      "Consola de Firebase → Configuración del proyecto → Cuentas de servicio → Generar nueva clave privada.",
-    );
-  } else if (usingEmulator) {
-    record(
-      "credentials",
-      "Credenciales de la cuenta de servicio",
+      "demo",
+      "Modo demostración",
       "PASSED",
-      `Modo emulador (${[authEmulator, firestoreEmulator].filter(Boolean).join(", ")}).`,
+      "DEMO_MODE=1: la aplicación arrancará con datos en memoria y NO usará Firebase, aunque la configuración sea correcta.",
     );
-  } else {
-    record(
-      "credentials",
-      "Credenciales de la cuenta de servicio",
-      "PASSED",
-      `Cuenta de servicio presente (${clientEmail?.split("@")[1] ?? "dominio desconocido"}).`,
-    );
-  }
-
-  if (privateKey && !usingEmulator) {
-    try {
-      createPrivateKey(normalizeKey(privateKey));
-      record("key", "Clave privada legible", "PASSED", "PEM correcto (RSA).");
-    } catch {
-      record(
-        "key",
-        "Clave privada legible",
-        "FAILED",
-        "FIREBASE_PRIVATE_KEY no es un PEM válido.",
-        'Pega la clave entre comillas dobles conservando los \\n: FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\\n…".',
-      );
-    }
   }
 }
 
@@ -228,9 +195,8 @@ function checkEnvFileIgnored(): void {
 
 checkEnvFileIgnored();
 
-const publicCheck = checkPublicFirebaseConfig(process.env);
-for (const issue of publicCheck.issues) {
-  record(issue.field, issue.field, issue.ok ? "PASSED" : "FAILED", issue.detail, issue.fix ?? null);
+for (const finding of readiness.webFindings) {
+  record(finding.id, finding.title, finding.level, finding.detail, finding.fix ?? null);
 }
 
 const configurationFailed = results.some((item) => item.status === "FAILED");
@@ -356,7 +322,7 @@ async function main(): Promise<void> {
       "BLOCKED",
       "No se ha intentado: la configuración no es válida.",
     );
-  } else if (configOnly) {
+  } else if (configOnly || setupOnly) {
     // En modo configuración no se intenta conectar: eso es lo esperado, no un
     // problema. No se añade ningún resultado para no teñir el veredicto.
   } else {
@@ -367,13 +333,26 @@ async function main(): Promise<void> {
 
   if (json) {
     console.log(
-      JSON.stringify({ status: finalStatus, network: !configOnly, wrote: false, results }, null, 2),
+      JSON.stringify(
+        {
+          status: finalStatus,
+          network: !configOnly && !setupOnly,
+          wrote: false,
+          ready: readiness.ready,
+          actions: readiness.actions,
+          results,
+        },
+        null,
+        2,
+      ),
     );
   } else {
     console.log(
-      configOnly
-        ? "\nConfiguración web de Firebase (SIN RED, SOLO LECTURA)\n"
-        : "\nComprobación de conexión con Firebase (SOLO LECTURA)\n",
+      setupOnly
+        ? "\nPreparación de la conexión con Firebase (SIN RED, SOLO LECTURA)\n"
+        : configOnly
+          ? "\nConfiguración web de Firebase (SIN RED, SOLO LECTURA)\n"
+          : "\nComprobación de conexión con Firebase (SOLO LECTURA)\n",
     );
     if (envFiles.loaded.length > 0) {
       console.log(`Valores cargados desde: ${envFiles.loaded.join(", ")}\n`);
@@ -383,8 +362,21 @@ async function main(): Promise<void> {
       console.log(`${icon} ${item.title}: ${item.detail}`);
       if (item.fix && item.status !== "PASSED") console.log(`  → ${item.fix}`);
     }
+    if (setupOnly && !readiness.ready) {
+      console.log("\nACCIONES PENDIENTES (en este orden)\n");
+      readiness.actions.forEach((action, index) => console.log(`  ${index + 1}. ${action}`));
+      console.log(
+        "\nCuando estén hechas: `npm run check:firebase` (con red) comprueba que el proyecto responde.",
+      );
+    }
+    if (setupOnly && readiness.ready) {
+      console.log(
+        "\nNo falta ningún valor. Falta comprobar con red: `npm run check:firebase`.",
+      );
+    }
+
     console.log(`\nRESULTADO: ${finalStatus}`);
-    if (configOnly) {
+    if (configOnly || setupOnly) {
       console.log("No se ha intentado conectar: esta comprobación no usa la red.");
     }
     console.log("No se ha escrito nada: esta comprobación no modifica datos.\n");

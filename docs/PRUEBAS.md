@@ -1071,3 +1071,54 @@ reimplementación de terceros (`hidane`, `@firestore-emulator/server`) no evalú
 4. Documentación del bloqueo con el hash y el tamaño exactos, para que quien tenga
    red pueda traer el jar y comprobarlo (`ENTORNO-PRUEBAS.md` §2 bis y
    `CONEXION-FIREBASE.md` §6.1).
+
+## 25. Fase 3 de integración de Firebase — preparación de la conexión (22/10/2026)
+
+Objetivo: dejar la aplicación **preparada** para conectar con `formacionus-63555`
+sin depender del emulador y sin escribir en Firebase. No hay credenciales en este
+entorno (no existe `.env.local` y no hay ninguna variable `FIREBASE_*` definida),
+así que **no se ha ejecutado ninguna comprobación de red**: eso sigue pendiente.
+
+| Comprobación | Comando (ejecutado) | Resultado |
+| --- | --- | --- |
+| Cadena completa | `npm run verify` | **exit 0**: tipado, lint, **890 pruebas en verde** (9 omitidas), build OK |
+| Recorrido de la demostración | `DEMO_MODE=1 npx next start` + `npm run check:demo` | **PASSED**, 140 comprobaciones |
+| Preparación, sin red | `npm run check:setup` | **FAILED (exit 2)**, 7 acciones numeradas (no hay `.env.local`; es lo esperado) |
+| Configuración web, sin red | `npm run check:web` | **FAILED (exit 2)**: faltan los cinco valores `NEXT_PUBLIC_*` |
+| Conexión real | `npm run check:firebase` | **no ejecutado**: sin credenciales no hay nada que probar (y no se inventan) |
+| Aplicación en modo real sin configurar | `next start` sin `DEMO_MODE` + `curl /login` y `/api/health` | **200**; `/login` no muestra el formulario y enumera lo que falta; `/api/health` → `{"configured":false,"ready":false,"mode":"unconfigured"}` |
+
+### Defecto corregido
+
+**La pantalla de acceso decidía con la mitad de la información.**
+`isFirebaseConfigured()` solo miraba las credenciales del servidor. Con
+`FIREBASE_*` puesto y la app web sin registrar —el orden natural de
+configuración—, `/login` mostraba el formulario, la persona escribía su usuario y
+contraseña, y el error («Firebase no está configurado en este entorno») aparecía
+al pulsar «Entrar», en el navegador y sin decir **qué** valor faltaba. Ahora la
+decisión sale de `assessFirebaseReadiness`, que exige las dos partes y enumera lo
+que falta.
+
+### Cambios y pruebas
+
+| Pieza | Qué hace |
+| --- | --- |
+| `src/server/firebase/readiness.ts` (nuevo) | Valoración pura de la configuración: proyecto, credenciales, **PEM RSA parseado de verdad**, presupuesto de PDF, endurecimiento de producción (`APP_ORIGIN` https, `__Host-`, sin emuladores), y la parte web reutilizando `checkPublicFirebaseConfig`. Devuelve hallazgos + **acciones ordenadas** que nombran la variable. No importa Firestore ni imprime secretos |
+| `scripts/firebase-check.ts` | Nuevo modo `--setup` (sin red) que imprime las acciones pendientes; `--config-only` y `check:web` siguen igual; la parte de configuración del servidor se delega en el módulo (una sola fuente de verdad) |
+| `npm run check:setup` (nuevo script) | Atajo de `--setup` |
+| `src/app/login/page.tsx` | Solo muestra el formulario si la configuración está completa; si no, enumera lo que falta y remite a `check:setup`; en demostración, mensaje propio |
+| `GET /api/health` | Añade `ready` (booleano), sin nombres ni valores |
+
+Pruebas nuevas (**28**):
+
+| Fichero | Cuántas | Qué fija |
+| --- | --- | --- |
+| `tests/server/readiness.test.ts` | **24** | Instalación vacía: no lista y acciones ordenadas nombrando la variable. Solo servidor / solo web: no listo. Ambas partes: listo. Proyecto distinto del previsto, cliente y servidor descuadrados, clave que no es PEM, **clave pública pegada como privada**, apiKey falsa. Clave con `\n` escapados aceptada. Producción: sin `APP_ORIGIN`, sin `__Host-`, con http, con emuladores → no listo; con https y `__Host-` → listo. Emulador sin credenciales → listo. Presupuesto de PDF inválido → rechazado. **No filtra la clave ni el correo completo** |
+| `tests/server/firebase-check.test.ts` | **+4** (22) | `--setup` existe, el intento de conexión queda detrás de la condición, usa el mismo módulo que la pantalla, y la valoración no importa Firestore |
+
+### Lo que NO demuestra esta fase
+
+- Que la conexión funcione: no hay credenciales ni se ha ejecutado nada con red.
+- Que la cuenta de servicio exista o tenga permisos, ni que Firestore esté creado.
+- Que el inicio de sesión real funcione: depende de Firebase Authentication y de
+  la app web registrada.
