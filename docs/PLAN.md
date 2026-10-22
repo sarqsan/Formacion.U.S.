@@ -4,11 +4,12 @@
 > inicial y **no** coincide con la secuencia ejecutada. Lo que hay hecho es:
 > B03 (ciclo de versiones), B04 (editor de borradores), B05 (cuestionarios con
 > claves separadas), B06 (subida de PDF por partes y cuota), B07 (visor PDF
-> privado), B08 (publicación como puerta del servidor) y B09 funcional
-> (administración de cuentas: deshabilitar, reactivar y reemitir códigos). Lo que
-> queda pendiente de este plan es, sobre todo, el **bloque 2** (emulador y reglas)
-> y todo lo que dependa de Firebase real: siguen **bloqueados** en este entorno
-> por falta de JVM y de acceso a los servicios de Google. Ver `PRUEBAS.md` §21 y
+> privado), B08 (publicación como puerta del servidor), B09 funcional
+> (administración de cuentas: deshabilitar, reactivar y reemitir códigos) y B10
+> (historial de formación: leer el progreso archivado). Lo que queda pendiente de
+> este plan es, sobre todo, el **bloque 2** (emulador y reglas) y todo lo que
+> dependa de Firebase real: siguen **bloqueados** en este entorno por falta de
+> JVM y de acceso a los servicios de Google. Ver `PRUEBAS.md` §22 y
 > `ENTORNO-PRUEBAS.md`.
 
 

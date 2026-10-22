@@ -7,7 +7,12 @@ import {
   validateAttemptDocument,
   validateProgressDocument,
 } from "@/server/db/schema";
-import type { AttemptRecord, LearningStore, StoredProgress } from "@/server/learning/store";
+import type {
+  ArchivedProgress,
+  AttemptRecord,
+  LearningStore,
+  StoredProgress,
+} from "@/server/learning/store";
 import { getAdminDb } from "@/server/firebase/admin";
 
 /**
@@ -54,6 +59,23 @@ function serializeProgress(progress: StoredProgress): Record<string, unknown> {
 function serializeAttempt(attempt: AttemptRecord): Record<string, unknown> {
   validateAttemptDocument(attempt as unknown as Record<string, unknown>);
   return { ...attempt };
+}
+
+/** Fecha de Firestore o cadena → ISO. Devuelve `null` si no se puede leer. */
+function toIsoString(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object" && "toDate" in value) {
+    const date = (value as { toDate: () => Date }).toDate();
+    return date instanceof Date ? date.toISOString() : null;
+  }
+  return null;
+}
+
+/** `progressHistory/{uid}_{courseId}_v{n}` → `courseId`. */
+function courseIdFromHistoryId(documentId: string, uid: string): string {
+  const value = documentId.slice(`${uid}_`.length);
+  const separator = value.lastIndexOf("_v");
+  return separator === -1 ? value : value.slice(0, separator);
 }
 
 export class FirestoreLearningStore implements LearningStore {
@@ -177,6 +199,43 @@ export class FirestoreLearningStore implements LearningStore {
         .get();
 
       return snapshot.docs.map((doc) => doc.data() as StoredProgress);
+    });
+  }
+
+  /**
+   * Histórico de versiones anteriores.
+   *
+   * Se filtra **solo por `uid`** (campo único, índice automático) y se ordena en
+   * memoria con `sortHistory`. Un `orderBy("archivedAt")` habría exigido un
+   * índice compuesto nuevo, y publicar índices es una operación reservada para
+   * la sesión de Firebase.
+   *
+   * `archivedAt` se escribe con `serverTimestamp()`: al leerlo llega como
+   * `Timestamp`, no como cadena. Se normaliza aquí para que el resto del código
+   * no tenga que saberlo (ni la demostración se comporte distinto).
+   */
+  async listArchivedProgress(uid: string): Promise<ArchivedProgress[]> {
+    return guard(async () => {
+      const snapshot = await getAdminDb()
+        .collection(COLLECTIONS.progressHistory)
+        .where("uid", "==", uid)
+        .limit(200)
+        .get();
+
+      return snapshot.docs.map((doc) => {
+        const data = doc.data() as ArchivedProgress & {
+          archivedAt?: unknown;
+          completedAt?: string | null;
+        };
+        return {
+          ...data,
+          uid,
+          // `courseId` puede faltar en documentos antiguos: se deduce del id,
+          // que es `{uid}_{courseId}_v{n}`.
+          courseId: data.courseId ?? courseIdFromHistoryId(doc.id, uid),
+          archivedAt: toIsoString(data.archivedAt),
+        } as ArchivedProgress;
+      });
     });
   }
 

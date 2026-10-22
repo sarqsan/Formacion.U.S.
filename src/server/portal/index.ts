@@ -247,6 +247,22 @@ export async function adminActivationSummary(actor: Actor, uid: string) {
     : firebase.adminActivationSummary(actor, uid);
 }
 
+/**
+ * Historial de formación superada (bloque 10): el archivo de versiones
+ * anteriores, que hasta ahora se escribía y no se leía.
+ */
+export async function learnerCourseHistory(actor: Actor) {
+  return portalMode() === "demo"
+    ? demo.learnerCourseHistory(actor)
+    : firebase.learnerCourseHistory(actor);
+}
+
+export async function accountCourseHistory(actor: Actor, uid: string) {
+  return portalMode() === "demo"
+    ? demo.accountCourseHistory(actor, uid)
+    : firebase.accountCourseHistory(actor, uid);
+}
+
 export async function adminProgress(actor: Actor) {
   assertAdmin(actor);
   return portalMode() === "demo" ? demo.adminProgress() : firebase.adminProgress(actor);

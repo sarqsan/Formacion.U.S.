@@ -118,6 +118,19 @@ async function postForm(path, headers, fields) {
   return { status: response.status, location: response.headers.get("location"), html: text };
 }
 
+/**
+ * Lee la primera pantalla de un documento con el formulario real de la página.
+ * Sirve para dejar progreso en una versión concreta antes de archivarla.
+ */
+async function readFirstPage(courseId, documentId, headers) {
+  const path = `/cursos/${courseId}/documentos/${documentId}`;
+  const page = await get(path, headers);
+  const form = forms(page.html).find((item) => item.fields.page);
+  if (!form) return { status: page.status, posted: false };
+  const result = await postForm(path, headers, form.fields);
+  return { status: result.status, posted: true, location: result.location };
+}
+
 function assert(condition, message) {
   if (!condition) {
     console.error(`✖ ${message}`);
@@ -822,6 +835,14 @@ if (revisionMatch) {
   }
 }
 
+// Progreso en la versión que va a quedar atrás: sin esto, el histórico se
+// probaría sobre un archivo vacío y no demostraría nada.
+const v1Read = await readFirstPage(DATA_COURSE, "doc-datos", learner);
+assert(
+  v1Read.posted && (v1Read.status === 303 || v1Read.status === 200),
+  `el alumno deja progreso en la versión 1 antes de publicar (HTTP ${v1Read.status})`,
+);
+
 // ---------------------------------------------------------------------------
 // 4. Publicación de un borrador
 // ---------------------------------------------------------------------------
@@ -846,6 +867,45 @@ if (publishForm) {
   assert(
     panel.html.includes("Versión 2") || panel.html.includes("curso-proteccion-datos"),
     "el alumno ve la versión nueva en su panel",
+  );
+
+  // -------------------------------------------------------------------------
+  // 4 bis. Historial de formación (bloque 10)
+  // -------------------------------------------------------------------------
+  // Publicar reinicia el progreso; el archivo de la versión anterior se crea
+  // la primera vez que el alumno vuelve a tocar el curso.
+  const historyTrigger = await readFirstPage(DATA_COURSE, "doc-datos", learner);
+  assert(
+    historyTrigger.posted,
+    `el alumno vuelve a abrir el curso en la versión nueva (HTTP ${historyTrigger.status})`,
+  );
+
+  const historyPanel = await get("/panel", learner);
+  assert(
+    historyPanel.html.includes("Historial de formación"),
+    "el panel del alumno muestra el historial de formación",
+  );
+  assert(
+    historyPanel.html.includes("Protección de datos y confidencialidad") &&
+      historyPanel.html.includes("Incompleto"),
+    "el histórico conserva la versión 1 con su resultado real",
+  );
+  // React intercala un separador entre el texto y la expresión, así que se
+  // comprueba la frase y el número por separado.
+  assert(
+    historyPanel.html.includes("sustituido por la versión") &&
+      /sustituido por la versión[^0-9]*2/.test(historyPanel.html),
+    "el histórico indica qué versión sustituye a la archivada",
+  );
+  assert(/pill pill-off">v<\/span>/.test(historyPanel.html) || historyPanel.html.includes("v1"),
+    "el histórico muestra el número de versión archivada");
+
+  const historyFicha = await get("/admin/personas/demo-alumno-1", admin);
+  assert(historyFicha.status === 200, `administración abre la ficha (HTTP ${historyFicha.status})`);
+  assert(
+    historyFicha.html.includes("Historial de versiones") &&
+      historyFicha.html.includes("Protección de datos y confidencialidad"),
+    "la ficha de administración muestra el histórico de la persona",
   );
 
   if (uploadedDocumentId) {

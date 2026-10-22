@@ -10,6 +10,7 @@ import type { CourseVersionDefinition } from "@/domain/courses/content";
 import { mandatoryTopicsOf, type PublicQuestion } from "@/server/courses/catalog";
 import { revokeEnrollment, enrollStudent } from "@/server/enrollments/service";
 import { loadOrInitProgress } from "@/server/learning/progress-loader";
+import { accountHistory, learnerHistory } from "@/server/learning/history";
 import {
   courseViewForLearner as learnerCourseView,
   coursesForLearner as learnerCourses,
@@ -156,6 +157,21 @@ export async function documentFileSummary(actor: Actor, documentId: string) {
 /** PDF completo verificado, listo para entregar con `application/pdf`. */
 export async function documentFile(actor: Actor, documentId: string) {
   return readDocumentFile({ actor, documentId }, demoFileDeps());
+}
+
+/**
+ * Historial de formación superada (bloque 10).
+ *
+ * Mismo servicio que en producción; el archivo vive ahora también en el estado
+ * de la demostración (antes se descartaba), así que al publicar una versión
+ * nueva lo anterior no desaparece.
+ */
+export async function learnerCourseHistory(actor: Actor) {
+  return learnerHistory(demoDeps(), actor);
+}
+
+export async function accountCourseHistory(actor: Actor, uid: string) {
+  return accountHistory(demoDeps(), { actor, uid });
 }
 
 export function accountLabel(uid: string): string {

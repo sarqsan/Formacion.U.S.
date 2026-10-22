@@ -906,3 +906,62 @@ Recorrido HTTP añadido a `scripts/demo-smoke.mjs` (23 comprobaciones nuevas):
   petición relee la ficha de la cuenta, que es justo la propiedad que interesa.
   Las consultas nuevas usan índices que ya existían; **no se ha publicado
   ninguno**.
+
+## 22. Bloque 10 — historial de formación (22/10/2026)
+
+Defecto de partida, comprobado antes de escribir código: `progressHistory` se
+**escribía** en Firestore y en la demostración, pero **nadie la leía**; no
+existía puerto, servicio ni pantalla. Peor aún, en la demostración el archivo se
+descartaba (`void archive`), así que al publicar una versión nueva el histórico
+se **perdía** y la frase del panel («se repite desde el principio sin perder el
+histórico») era falsa.
+
+Alcance ejecutado: lectura del progreso archivado, resumen común, orden en
+memoria, pantalla de alumno y ficha de administración. No se ha tocado la
+publicación, la corrección, el visor, la subida ni el archivo en sí: se ha
+cambiado **quién lo lee y qué se enseña**.
+
+| Comprobación | Comando | Resultado |
+| --- | --- | --- |
+| Cadena completa | `npm run verify` | **exit 0**: tipado 0 errores, lint 0 avisos, **824 pruebas en verde**, build OK |
+| Pruebas totales | `npm test` | **824 pasan**, 4 omitidas (emulador), 51 ficheros + 1 omitido (52) |
+| Recorrido de la demostración | `DEMO_MODE=1 npx next start -p 3000` + `npm run check:demo` | **PASSED**, **140 comprobaciones** (antes 132) |
+| Reglas de Firestore | `npm run test:rules` | **BLOQUEADO**: sin JVM |
+| Integración con emulador | `npm run test:firestore` | **BLOQUEADO**: sin JVM |
+| Conexión real | `npm run check:firebase` | **BLOQUEADO**: TLS hacia Google cortado; sin credenciales |
+
+Pruebas nuevas (25):
+
+| Fichero | Grupo | Qué fija |
+| --- | --- | --- |
+| `tests/domain/history.test.ts` (8) | Resumen | Solo cuentan los temas **obligatorios**; un tema repetido no se cuenta dos veces; `completed` sale de `completedAt` y no de recalcular; un archivo a medias se resume como incompleto |
+| | Orden | Más reciente primero usando `completedAt ?? archivedAt`; desempate por versión y curso; **no muta** la colección; una fecha ilegible no rompe el orden |
+| `tests/server/history.test.ts` (13) | Lectura | Histórico vacío sin archivo; versión completada con sus cifras y su título de entonces; lo incompleto se muestra; `supersededBy` señala la versión publicada vigente; **no** mezcla el archivo de otras personas; un curso desaparecido se cuenta como `unresolved` sin romper |
+| | Orden | Se respeta lo más reciente primero aunque el almacén devuelva otro orden |
+| | Autorización | Cuenta pendiente o deshabilitada rechazada; cada persona ve el suyo; un alumno **no** lee el de otra (`FORBIDDEN`); administración sí; `uid` vacío rechazado |
+| `tests/demo/demo-flow.test.ts` (4) | Recorrido real | Completar la v1 no archiva nada mientras siga publicada; al publicar la v2 el progreso vivo vuelve a cero y, en cuanto se toca el curso, la v1 queda archivada **completada** con `supersededBy: 2`; lo empezado y no terminado se archiva como **incompleto**; administración lee el histórico de la persona y otra persona recibe `FORBIDDEN` |
+
+Recorrido HTTP añadido a `scripts/demo-smoke.mjs` (8 comprobaciones nuevas):
+
+- antes de publicar, el alumno deja progreso real en la v1 con el mismo
+  formulario de lectura de la página (si no, el histórico se probaría vacío);
+- tras publicar la v2 y volver a abrir el curso, `/panel` muestra la sección
+  **Historial de formación**, conserva el título de la versión 1, la marca como
+  **Incompleto**, indica qué versión la sustituye y muestra su número de versión;
+- la ficha `/admin/personas/demo-alumno-1` muestra **Historial de versiones** con
+  ese mismo registro.
+
+### Lo que hay que tener presente
+
+- **El archivo es perezoso.** La entrada aparece la primera vez que la persona
+  vuelve a tocar el curso tras la publicación; hasta entonces la consulta a
+  `progressHistory` no encuentra nada y la pantalla lo dice. No se inventa una
+  entrada.
+- **No se publica ningún índice.** La consulta filtra solo por `uid` y el orden
+  se resuelve en memoria (ADR-029). Si algún día se quisiera paginar en Firestore
+  ordenando por fecha, habría que crear y publicar un índice compuesto: eso
+  queda para la sesión de Firebase.
+- Lo que **no** demuestran estas pruebas: que Firestore devuelva los documentos
+  de `progressHistory` en el formato esperado ni el comportamiento del
+  `limit(200)`. La batería usa dobles y la demostración; el bloqueo de B02–B09
+  (reglas, emulador, Firebase real) sigue declarado en `/estado`.

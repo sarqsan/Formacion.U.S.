@@ -182,6 +182,13 @@ no se puede publicar «olvidándose» de comprobarlos. Ver ADR-027.
   versión publicada vigente y que el documento esté **referenciado** en ella;
   antes de responder comprueba tamaño y SHA-256 globales. La lectura por páginas
   (`/pages`) y el progreso no cambian: son cosas distintas y siguen como estaban.
+- **Historial de formación** (bloque 10): al publicarse una versión nueva, el
+  progreso anterior se archiva y el alumno repite el curso; lo archivado se lee
+  con `listArchivedProgress` y se resume en `src/domain/progress/history.ts`
+  (mismo cálculo en Firestore y en la demostración). Se muestra en `/panel`
+  («Historial de formación») y en la ficha de cada persona de administración
+  («Historial de versiones»). La consulta filtra solo por `uid` y ordena en
+  memoria, así que **no se publica ningún índice nuevo**. Ver ADR-029.
 - **Ciclo de vida de la cuenta** (bloque 09): administración puede deshabilitar,
   reactivar y reemitir códigos de activación. El servicio
   (`src/server/accounts/service.ts`) reutiliza las reglas de transición del

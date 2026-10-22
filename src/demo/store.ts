@@ -14,7 +14,12 @@ import {
 import type { CourseVersionStatus, CourseVersionSummary } from "@/domain/courses/versioning";
 import type { CourseEditorStore } from "@/server/courses/editor";
 import type { EnrollmentStore } from "@/server/enrollments/store";
-import type { AttemptRecord, LearningStore, StoredProgress } from "@/server/learning/store";
+import type {
+  ArchivedProgress,
+  AttemptRecord,
+  LearningStore,
+  StoredProgress,
+} from "@/server/learning/store";
 import { createPdfMemoryState, type PdfMemoryState } from "@/demo/pdf-store";
 import { seedDemoPdfs } from "@/demo/pdf-sample";
 import {
@@ -56,6 +61,15 @@ export interface DemoState {
   courses: Map<string, DemoCourseRecord>;
   enrollments: Map<string, Enrollment>;
   progress: Map<string, StoredProgress>;
+  /**
+   * Histórico de versiones anteriores (`progressHistory` en Firestore).
+   *
+   * Antes **no existía**: la demostración descartaba el archivo con un
+   * `void archive`, así que al publicar una versión nueva se perdía lo que la
+   * persona había superado en la anterior. El panel prometía «sin perder el
+   * histórico» y no era cierto en la demo.
+   */
+  progressHistory: Map<string, ArchivedProgress>;
   attempts: AttemptRecord[];
   /**
    * PDF de la demostración: bytes reales en memoria, con la misma máquina de
@@ -100,12 +114,18 @@ export function progressKey(uid: string, courseId: string): string {
   return `${uid}_${courseId}`;
 }
 
+/** Misma forma que `progressHistory/{uid}_{courseId}_v{n}` en Firestore. */
+export function progressHistoryKey(uid: string, courseId: string, version: number): string {
+  return `${uid}_${courseId}_v${version}`;
+}
+
 function seedState(): DemoState {
   const state: DemoState = {
     accounts: DEMO_ACCOUNTS.map((account) => ({ ...account })),
     courses: new Map(),
     enrollments: new Map(),
     progress: new Map(),
+    progressHistory: new Map(),
     attempts: [],
     pdf: createPdfMemoryState(),
     activationTokens: new Map(),
@@ -656,6 +676,19 @@ export class DemoEnrollmentStore implements EnrollmentStore {
 // Progreso e intentos
 // ---------------------------------------------------------------------------
 
+/**
+ * Guarda una versión anterior en el histórico.
+ *
+ * La clave es la misma que en Firestore, así que rearchivar la misma versión
+ * sobrescribe en lugar de duplicar (un documento por curso y versión).
+ */
+function archiveLocally(archive: StoredProgress, archivedAt: string): void {
+  demoState().progressHistory.set(
+    progressHistoryKey(archive.uid, archive.courseId, archive.version),
+    { ...structuredClone(archive), archivedAt },
+  );
+}
+
 export class DemoLearningStore implements LearningStore {
   async getProgress(uid: string, courseId: string): Promise<StoredProgress | null> {
     return demoState().progress.get(progressKey(uid, courseId)) ?? null;
@@ -668,6 +701,10 @@ export class DemoLearningStore implements LearningStore {
   }): Promise<void> {
     const state = demoState();
     state.attempts.push({ ...input.attempt });
+    // Igual que la transacción de Firestore: si el intento coincide con una
+    // versión nueva publicada, el progreso anterior se archiva en vez de
+    // desaparecer.
+    if (input.archive) archiveLocally(input.archive, input.progress.updatedAt);
     state.progress.set(progressKey(input.progress.uid, input.progress.courseId), {
       ...input.progress,
     });
@@ -675,10 +712,14 @@ export class DemoLearningStore implements LearningStore {
 
   async saveProgress(progress: StoredProgress, archive?: StoredProgress | null): Promise<void> {
     const state = demoState();
-    // El histórico de versiones anteriores no se representa en la demostración:
-    // solo se conserva el progreso vigente.
-    void archive;
+    if (archive) archiveLocally(archive, progress.updatedAt);
     state.progress.set(progressKey(progress.uid, progress.courseId), { ...progress });
+  }
+
+  async listArchivedProgress(uid: string): Promise<ArchivedProgress[]> {
+    return [...demoState().progressHistory.values()]
+      .filter((entry) => entry.uid === uid)
+      .map((entry) => structuredClone(entry));
   }
 
   async listProgressByCourse(
