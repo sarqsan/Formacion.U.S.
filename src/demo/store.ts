@@ -12,8 +12,11 @@ import {
   type PublicDocument,
 } from "@/server/courses/catalog";
 import type { CourseVersionStatus, CourseVersionSummary } from "@/domain/courses/versioning";
+import type { CourseEditorStore } from "@/server/courses/editor";
 import type { EnrollmentStore } from "@/server/enrollments/store";
 import type { AttemptRecord, LearningStore, StoredProgress } from "@/server/learning/store";
+import { createPdfMemoryState, type PdfMemoryState } from "@/demo/pdf-store";
+import { seedDemoPdfs } from "@/demo/pdf-sample";
 import {
   DEMO_ACCOUNTS,
   DEMO_COURSES,
@@ -42,7 +45,9 @@ export interface DemoCourseRecord {
   summary: CourseSummary;
   versions: Map<
     number,
-    { version: CourseVersionDocument; keys: AnswerKeysDocument }
+    // `keys` puede ser null: un borrador creado vacío todavía no tiene
+    // cuestionarios y, por tanto, no hay claves que guardar.
+    { version: CourseVersionDocument; keys: AnswerKeysDocument | null }
   >;
 }
 
@@ -52,6 +57,12 @@ export interface DemoState {
   enrollments: Map<string, Enrollment>;
   progress: Map<string, StoredProgress>;
   attempts: AttemptRecord[];
+  /**
+   * PDF de la demostración: bytes reales en memoria, con la misma máquina de
+   * estados y la misma contabilidad de cuota que Firestore. Se pierde al
+   * reiniciar, como todo lo demás.
+   */
+  pdf: PdfMemoryState;
 }
 
 const SEED_NOW = "2026-01-08T09:00:00.000Z";
@@ -71,13 +82,19 @@ function seedState(): DemoState {
     enrollments: new Map(),
     progress: new Map(),
     attempts: [],
+    pdf: createPdfMemoryState(),
   };
 
   for (const { definition, published } of DEMO_COURSES) {
     let record = state.courses.get(definition.courseId);
     if (!record) {
       record = {
-        summary: { courseId: definition.courseId, title: definition.title, publishedVersion: null },
+        summary: {
+          courseId: definition.courseId,
+          title: definition.title,
+          publishedVersion: null,
+          lastDraftVersion: null,
+        },
         versions: new Map(),
       };
       state.courses.set(definition.courseId, record);
@@ -101,7 +118,19 @@ function seedState(): DemoState {
       version,
       keys: toAnswerKeys(definition, { createdAt }),
     });
+    // `lastDraftVersion` apunta SOLO a un borrador: una versión publicada no
+    // deja el puntero apuntando a algo que ya no es editable.
+    if (!published) {
+      record.summary.lastDraftVersion = definition.version;
+    }
   }
+
+  // PDF de ejemplo para los documentos del contenido: se generan al arrancar y
+  // quedan en memoria con el mismo estado que produce una subida verificada.
+  seedDemoPdfs(
+    state.pdf,
+    DEMO_COURSES.map((course) => course.definition),
+  );
 
   for (const enrollment of DEMO_ENROLLMENTS) {
     const course = state.courses.get(enrollment.courseId);
@@ -234,7 +263,8 @@ export function definitionOf(
     })),
     quiz: topic.quiz.map((question) => ({
       ...question,
-      correctOptionIds: keys.quizByTopic[topic.id]?.find((key) => key.id === question.id)?.correctOptionIds ?? [],
+      correctOptionIds:
+        keys?.quizByTopic[topic.id]?.find((key) => key.id === question.id)?.correctOptionIds ?? [],
     })),
   }));
 
@@ -246,14 +276,16 @@ export function definitionOf(
     topics,
     finalExam: publicVersion.finalExam.map((question) => ({
       ...question,
-      correctOptionIds: keys.finalExam.find((key) => key.id === question.id)?.correctOptionIds ?? [],
+      correctOptionIds:
+        keys?.finalExam.find((key) => key.id === question.id)?.correctOptionIds ?? [],
     })),
   };
 }
 
 export function listCourseSummaries(): CourseSummary[] {
   return [...demoState().courses.values()]
-    .map((record) => record.summary)
+    // Copia: quien lee no puede cambiar el estado compartido por referencia.
+    .map((record) => ({ ...record.summary }))
     .sort((a, b) => a.title.localeCompare(b.title, "es"));
 }
 
@@ -274,8 +306,15 @@ export function listVersionsOf(courseId: string): Array<CourseVersionSummary & {
 // ---------------------------------------------------------------------------
 
 export class DemoCatalogStore implements CourseCatalogStore {
+  /**
+   * Se devuelve una COPIA: el estado del demo es memoria compartida entre
+   * peticiones y quien lee no debe poder cambiarlo por referencia. Un puntero
+   * de borrador mutado «por accidente» desde una lectura sería un fallo
+   * invisible en producción.
+   */
   async getCourse(courseId: string): Promise<CourseSummary | null> {
-    return demoState().courses.get(courseId)?.summary ?? null;
+    const summary = demoState().courses.get(courseId)?.summary;
+    return summary ? { ...summary } : null;
   }
 
   async listVersions(courseId: string): Promise<CourseVersionSummary[]> {
@@ -283,11 +322,13 @@ export class DemoCatalogStore implements CourseCatalogStore {
   }
 
   async getVersion(courseId: string, version: number): Promise<CourseVersionDocument | null> {
-    return demoState().courses.get(courseId)?.versions.get(version)?.version ?? null;
+    const document = demoState().courses.get(courseId)?.versions.get(version)?.version;
+    return document ? structuredClone(document) : null;
   }
 
   async getAnswerKeys(courseId: string, version: number): Promise<AnswerKeysDocument | null> {
-    return demoState().courses.get(courseId)?.versions.get(version)?.keys ?? null;
+    const keys = demoState().courses.get(courseId)?.versions.get(version)?.keys;
+    return keys ? structuredClone(keys) : null;
   }
 
   async saveVersion(input: {
@@ -297,7 +338,7 @@ export class DemoCatalogStore implements CourseCatalogStore {
   }): Promise<void> {
     const state = demoState();
     const record = state.courses.get(input.course.courseId) ?? {
-      summary: { ...input.course, publishedVersion: null },
+      summary: { ...input.course, publishedVersion: null, lastDraftVersion: null },
       versions: new Map(),
     };
 
@@ -313,10 +354,11 @@ export class DemoCatalogStore implements CourseCatalogStore {
       ...record.summary,
       title: input.version.title,
       publishedVersion: record.summary.publishedVersion ?? null,
+      lastDraftVersion: Math.max(record.summary.lastDraftVersion ?? 0, input.version.version),
     };
     record.versions.set(input.version.version, {
-      version: input.version,
-      keys: input.answerKeys,
+      version: structuredClone(input.version),
+      keys: structuredClone(input.answerKeys),
     });
     state.courses.set(record.summary.courseId, record);
   }
@@ -339,8 +381,8 @@ export class DemoCatalogStore implements CourseCatalogStore {
     }
 
     record.versions.set(input.version.version, {
-      version: { ...input.version, createdAt: current.version.createdAt },
-      keys: input.answerKeys,
+      version: { ...structuredClone(input.version), createdAt: current.version.createdAt },
+      keys: structuredClone(input.answerKeys),
     });
   }
 
@@ -376,11 +418,166 @@ export class DemoCatalogStore implements CourseCatalogStore {
     });
     record.summary.publishedVersion = input.version;
     record.summary.title = target.version.title;
+    // Publicar consume el borrador: el puntero no puede seguir apuntando a una
+    // versión que ya es inmutable.
+    record.summary.lastDraftVersion = null;
+  }
+
+  /**
+   * Guarda contenido y claves del borrador a la vez (mismo contrato que la
+   * transacción de Firestore): revisión esperada, versión en borrador y
+   * sustitución completa de las claves. Así no quedan preguntas sin respuesta
+   * ni claves de temas eliminados.
+   */
+  async replaceDraftContent(input: {
+    versionDoc: CourseVersionDocument;
+    answerKeys: AnswerKeysDocument;
+    expectedRevision: number;
+  }): Promise<void> {
+    const record = demoState().courses.get(input.versionDoc.courseId);
+    const current = record?.versions.get(input.versionDoc.version);
+    if (!record || !current) {
+      throw new DomainError("VERSION_NOT_FOUND", "El borrador no existe.", 404);
+    }
+    if (current.version.status !== "draft") {
+      throw new DomainError(
+        "VERSION_NOT_EDITABLE",
+        "Solo se puede editar un borrador. Una versión publicada no se modifica.",
+        409,
+      );
+    }
+
+    const revision = current.version.revision ?? 0;
+    if (revision !== input.expectedRevision) {
+      throw new DomainError(
+        "DRAFT_STALE",
+        "El borrador se ha modificado desde que abriste el editor. Recarga la página antes de guardar.",
+        409,
+      );
+    }
+
+    demoState().courses.set(input.versionDoc.courseId, {
+      summary: record.summary,
+      versions: new Map(record.versions).set(input.versionDoc.version, {
+        version: {
+          ...structuredClone(input.versionDoc),
+          revision: revision + 1,
+          createdAt: current.version.createdAt,
+          createdBy: current.version.createdBy,
+          publishedAt: null,
+          publishedBy: null,
+        },
+        // Las claves se sustituyen enteras: no quedan restos de preguntas
+        // eliminadas.
+        keys: structuredClone(input.answerKeys),
+      }),
+    });
   }
 
   async listDocuments(courseId: string, version: number, topicId: string): Promise<PublicDocument[]> {
     const document = await this.getVersion(courseId, version);
     return document?.topics.find((topic) => topic.id === topicId)?.documents ?? [];
+  }
+
+  /**
+   * Creación del borrador en memoria.
+   *
+   * Aquí no hay transacciones ni concurrencia real (un solo proceso, estado
+   * síncrono), pero se respetan las MISMAS comprobaciones que la versión de
+   * Firestore: estado esperado de la ficha, adopción de un borrador existente y
+   * puntero actualizado junto con la versión.
+   */
+  async createDraftVersion(input: {
+    courseId: string;
+    versionDoc: CourseVersionDocument;
+    answerKeys: AnswerKeysDocument | null;
+    expected: { publishedVersion: number | null; lastDraftVersion: number | null };
+  }): Promise<{ adopted: boolean }> {
+    const state = demoState();
+    const record = state.courses.get(input.courseId);
+    if (!record) {
+      throw new DomainError("COURSE_NOT_FOUND", "El curso no existe.", 404);
+    }
+
+    if (
+      record.summary.publishedVersion !== input.expected.publishedVersion ||
+      record.summary.lastDraftVersion !== input.expected.lastDraftVersion
+    ) {
+      throw new DomainError("DRAFT_CONFLICT", "El curso cambió mientras se preparaba el borrador.", 409);
+    }
+
+    const existing = record.versions.get(input.versionDoc.version);
+    if (existing) {
+      if (existing.version.status !== "draft") {
+        throw new DomainError(
+          "VERSION_ALREADY_EXISTS",
+          "Esa versión ya existe y no es un borrador.",
+          409,
+        );
+      }
+      state.courses.set(input.courseId, {
+        ...record,
+        summary: { ...record.summary, lastDraftVersion: input.versionDoc.version },
+      });
+      return { adopted: true };
+    }
+
+    state.courses.set(input.courseId, {
+      summary: { ...record.summary, lastDraftVersion: input.versionDoc.version },
+      versions: new Map(record.versions).set(input.versionDoc.version, {
+        version: {
+          ...structuredClone(input.versionDoc),
+          revision: input.versionDoc.revision ?? 1,
+        },
+        keys: input.answerKeys ? structuredClone(input.answerKeys) : null,
+      }),
+    });
+    return { adopted: false };
+  }
+
+}
+
+// ---------------------------------------------------------------------------
+// Editor de cursos (creación)
+// ---------------------------------------------------------------------------
+
+/**
+ * Creación de cursos en memoria.
+ *
+ * Reproduce la invariante que importa del adaptador real: crear **no**
+ * sobrescribe un curso existente y deja `publishedVersion` y
+ * `lastDraftVersion` a null (curso sin versiones). No reproduce transacciones
+ * de Firestore porque aquí no las hay: el estado es de un solo proceso.
+ */
+export class DemoCourseEditorStore implements CourseEditorStore {
+  async getCourse(courseId: string): Promise<CourseSummary | null> {
+    const summary = demoState().courses.get(courseId)?.summary;
+    return summary ? { ...summary } : null;
+  }
+
+  async createCourse(
+    summary: CourseSummary & { createdAt: string; createdBy: string },
+  ): Promise<void> {
+    const state = demoState();
+    if (state.courses.has(summary.courseId)) {
+      throw new DomainError(
+        "COURSE_ALREADY_EXISTS",
+        "Ya existe un curso con ese identificador. Elige otro.",
+        409,
+      );
+    }
+
+    // Nace sin versiones: `publishedVersion` y `lastDraftVersion` son nulos
+    // hasta que alguien abra el primer borrador.
+    state.courses.set(summary.courseId, {
+      summary: {
+        courseId: summary.courseId,
+        title: summary.title,
+        publishedVersion: null,
+        lastDraftVersion: null,
+      },
+      versions: new Map(),
+    });
   }
 }
 

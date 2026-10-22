@@ -43,6 +43,8 @@ usan APIs de Node (gRPC, streams) que no deben empaquetarse con el cliente.
 │                 · session.ts (cookie + claims + BD)           │
 │                 · db/schema.ts (esquema y validación)         │
 │                 · courses/catalog.ts (publicar versiones)     │
+│                 · courses/editor.ts (borradores)              │
+│                 · courses/draft-form.ts (formulario)          │
 │                 · assessments/service.ts (corrección)         │
 │                 · learning/store.ts (puertos de progreso)     │
 │                 · import/service.ts (puertos, no Firebase)    │
@@ -132,6 +134,54 @@ POST /api/admin/import/confirm   (mismo cuerpo + decisiones)
   avanza página a página (`assertCanViewPage`) en la capa de progreso. Tope del
   PDF: **8 MiB** (11 fragmentos), elegido para que quepa en la transacción de
   10 MiB de Firestore. Ver §4.6.
+- La **subida** es un ciclo con estados, no una escritura: el administrador abre
+  la subida (se reserva la cuota), envía partes de 768 KiB en orden, finaliza (se
+  verifica tamaño y SHA-256 y el documento pasa a `active`) o cancela (se libera
+  la reserva). Solo un documento `active` se asocia a un tema del borrador.
+
+```
+POST /api/admin/documents/uploads                → 201 { documentId, partsTotal, … } (reserva)
+PUT  /api/admin/documents/uploads/{id}/parts/{n} → octet-stream ≤ 768 KiB (orden + %PDF-)
+POST /api/admin/documents/uploads/{id}/finalize  → verifica y activa (idempotente)
+POST /api/admin/documents/uploads/{id}/abort     → cancela y libera la reserva
+POST /api/admin/documents/{id}/attach            → { expectedRevision } → tema del borrador
+GET  /api/admin/documents                        → cuota usada / reservada / libre
+GET  /api/documents/{id}/file                    → PDF completo (portal del alumnado)
+```
+
+Todas exigen sesión de administración, origen verificado y rol comprobado en el
+servicio (`assertAdmin`). El identificador del documento lo calcula el servidor:
+el cliente no lo elige y no puede modificar registros ajenos.
+
+### 4.4 bis Publicar: cinco comprobaciones antes de escribir
+
+Publicar es la única puerta por la que el contenido llega al alumnado, así que el
+servidor no se fía de que la interfaz haya desactivado el botón. En orden y sin
+escribir nada hasta el final:
+
+1. `assertAdmin` y `assertPublishable`: solo la versión inmediatamente siguiente a
+   la publicada, y solo si está en borrador.
+2. `assertNoAnswerLeak`: el contenido público no lleva respuestas correctas.
+3. Existen las claves de corrección de esa versión.
+4. `validateCourseVersion` sobre la definición reconstruida con
+   `definitionFromDocuments(versión, claves)` — la **misma** función con la que el
+   editor avisa, sin una segunda regla que pueda divergir.
+5. `checkPublishableDocuments`: cada documento existe, está `active`, tiene todas
+   sus partes y es de ese curso (solo metadatos: no se lee el PDF).
+
+Si algo falla, la versión sigue en borrador y el curso no cambia. Si todo pasa,
+una sola transacción escribe la versión como `published`, **archiva la anterior**,
+mueve el puntero del curso y deja `lastDraftVersion` en `null`. El tipo de las
+dependencias (`PublishDependencies`) obliga a inyectar la consulta de documentos:
+no se puede publicar «olvidándose» de comprobarlos. Ver ADR-027.
+- **Entrega al alumnado** (bloque 07): la página del documento ofrece el PDF con
+  el **visor nativo del navegador** (`<object type="application/pdf">` y, siempre,
+  un enlace a una pestaña nueva, porque Android Chrome no incrusta PDF en todos
+  los casos). No hay `pdf.js` ni visor propio. El fichero se pide a
+  `GET /api/documents/{id}/file`, que exige cuenta activa, matrícula activa,
+  versión publicada vigente y que el documento esté **referenciado** en ella;
+  antes de responder comprueba tamaño y SHA-256 globales. La lectura por páginas
+  (`/pages`) y el progreso no cambian: son cosas distintas y siguen como estaban.
 - **Acceso por matrícula** (`enrollments/{uid}_{courseId}`): estar publicado ya
   no da acceso. Matricular y revocar es cosa de administración; toda lectura de
   contenido pasa por `assertCourseAccess`.
@@ -160,13 +210,87 @@ adaptador de Firestore. Las claves de corrección viven en una colección aparte
 (`answerKeys`, cerrada al cliente) y la respuesta del servicio contiene solo el
 resultado.
 
-### 4.6 Persistencia de contenido y progreso
+### 4.6 Borradores: abrir, editar y guardar sin publicar
 
 ```
-courses/{courseId}                     título + publishedVersion
+/admin/cursos/{id}            ficha: versiones, validación y acciones
+/admin/cursos/{id}/editar?v=n editor de estructura del borrador
+```
+
+```
+Abrir borrador ──POST startDraftAction──► startDraft
+     lee ficha ─► ¿ya hay borrador? ─sí─► reanuda (no crea otra versión)
+                                    └no─► clona la publicada o crea vacía
+     escribe versión + lastDraftVersion en UNA transacción (estado esperado)
+
+Guardar ──POST saveDraftAction──► parseDraftStructureForm ─► saveDraftStructure
+     estructura (checkDraftStructure) ─► revisión esperada ─► transacción
+     avisos (reviewDraft) se muestran; NO bloquean el guardado
+```
+
+Tres responsabilidades separadas, y cada una en su sitio:
+
+| Nivel | Dónde | Qué hace |
+| --- | --- | --- |
+| Estructura | `domain/courses/draft.ts` → `checkDraftStructure` | Bloquea el guardado solo por forma: identificadores, longitudes, órdenes |
+| Avisos | `reviewDraft` (reutiliza `validateCourseVersion`) | Lo que falta para publicar y lo que conviene mirar; no impide guardar |
+| Publicación | `validateCourseVersion` (sin cambios) | Puerta dura; guardar nunca la relaja |
+
+El **orden de temas se normaliza a 1..n** antes de escribir (desempate por
+identificador, resultado determinista) y el editor **no edita cuestionarios ni
+examen final**: `saveDraftStructure` los conserva por identificador, así que
+guardar la estructura no pierde preguntas ni claves.
+
+Concurrencia y errores: cada guardado lleva la `revision` abierta y la exige en
+el almacén (`DRAFT_STALE` si otra pestaña guardó); abrir un borrador comprueba
+el estado esperado de la ficha (`DRAFT_CONFLICT`) y reintenta leyendo de nuevo,
+de modo que un reintento reanuda en vez de duplicar. La pantalla solo muestra
+«guardado» cuando el servicio ha confirmado; si falla, vuelve al editor con el
+mensaje real.
+
+### 4.7 Cuestionarios del borrador: contenido y claves en una sola escritura
+
+```
+/admin/cursos/{id}/editar?v=n   dos formularios, la misma revisión
+    «Guardar borrador»                    → estructura (bloque 04)
+    «Guardar cuestionarios y examen final» → preguntas y claves (bloque 05)
+```
+
+```
+FormData ─► parseDraftQuizForm ─► saveDraftAssessments
+     las preguntas actuales se leen del ALMACÉN (no del formulario)
+     se fusionan los cambios por identificador
+     checkDraftQuizzes (estructura) → reviewDraft (avisos) → transacción
+          versions/{n}      sin correctOptionIds  (toPublicVersion)
+          answerKeys/…      solo correctOptionIds (toAnswerKeys)
+```
+
+Cuatro reglas que sostienen esto:
+
+| Regla | Por qué |
+| --- | --- |
+| Contenido y claves se escriben **juntos** (`replaceDraftContent`) | Entre una escritura y otra habría preguntas sin respuesta correcta y un intento entregado en ese hueco sería incobrable |
+| Guardar la **estructura** también recalcula y reescribe las claves | Si un tema se elimina y las claves no se tocan, quedarían respuestas correctas huérfanas de preguntas que ya no existen |
+| Las claves se **recalculan** del contenido guardado | Una pregunta eliminada no deja su respuesta correcta suelta en la base |
+| Solo se editan **borradores** | La versión publicada y su documento de claves son inmutables; cambiarlas es crear la siguiente versión |
+
+El formulario nunca aporta las preguntas «desde cero»: la acción relee la
+versión y aplica los cambios del formulario sobre ella, así que un campo
+manipulado no puede introducir una pregunta que no existe en la versión. Un
+cuestionario **vacío es válido** (se está escribiendo) y lo que falta se ve como
+aviso; publicar sigue exigiendo `validateCourseVersion`, que no se ha tocado.
+
+La vista `draftEditorView` incluye las respuestas correctas porque la usan solo
+las pantallas de administración. El alumnado recibe `PublicQuestion` (sin
+`correctOptionIds`) y `toClientQuiz` lo garantiza en un único punto.
+
+### 4.8 Persistencia de contenido y progreso
+
+```
+courses/{courseId}                     título + publishedVersion + lastDraftVersion
 courses/{courseId}/versions/{n}        contenido público (nunca respuestas)
 answerKeys/{courseId}_v{n}_{eval}      claves de corrección (solo servidor)
-documents/{documentId}                metadatos de PDF (sin binario ni rutas)
+documents/{documentId}                metadatos de PDF (sin binario ni rutas, solo servidor)
 pdfChunks/{documentId}_{n}            fragmentos del PDF (Bytes, solo servidor)
 progress/{uid}_{courseId}              estado de la versión en curso
 progressHistory/{uid}_{courseId}_v{n}  progreso archivado al cambiar de versión

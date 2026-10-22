@@ -18,11 +18,51 @@ import {
   type CourseView,
   type DocumentView,
 } from "@/server/portal/learner";
-import { publishCourseVersion, updateDraftVersion, saveDraftVersion } from "@/server/courses/catalog";
+import { publishCourseVersion } from "@/server/courses/catalog";
+import {
+  createCourse,
+  draftEditorView,
+  resolveEditorVersion,
+  saveDraftAssessments,
+  saveDraftStructure,
+  startDraft,
+  type CourseEditorDependencies,
+  type DraftEditorView,
+  type DraftStructure,
+  type SaveAssessmentsResult,
+} from "@/server/courses/editor";
+import type { QuizQuestionDefinition } from "@/domain/assessments/scoring";
+import { definitionFromDocuments } from "@/server/courses/definition";
+import {
+  abortPdfUpload,
+  archivePdfDocument,
+  createPdfUpload,
+  finalizePdfUpload,
+  putPdfUploadPart,
+  storageUsage,
+  uploadPdfDocument,
+  type StorageUsage,
+  type UploadDependencies,
+  type UploadDocumentResult,
+} from "@/server/documents/service";
+import {
+  attachDocumentToDraft,
+  type AttachResult,
+} from "@/server/documents/attach";
+import type { PdfDocumentMeta } from "@/server/documents/store";
+import {
+  documentFileSummary as documentFileSummaryFor,
+  isDocumentFileAvailable,
+  readDocumentFile,
+  type DocumentFileDependencies,
+} from "@/server/documents/file";
+import { MemoryPdfDocumentStore } from "@/demo/pdf-store";
+import { budgetBytesFromMiB } from "@/domain/storage/pdf-chunks";
 import type { AttemptRecord, StoredProgress } from "@/server/learning/store";
 import { screensForDocument, type DemoScreen } from "@/demo/content";
 import {
   DemoCatalogStore,
+  DemoCourseEditorStore,
   DemoEnrollmentStore,
   DemoLearningStore,
   definitionOf,
@@ -58,6 +98,57 @@ export function demoDeps() {
 /** Instancias sin estado: el estado vive en `demoState()`. */
 function catalogStore(): DemoCatalogStore {
   return new DemoCatalogStore();
+}
+
+function demoCourseEditorDeps(): CourseEditorDependencies {
+  return { store: new DemoCourseEditorStore() };
+}
+
+/**
+ * Dependencias de la subida en la demostración.
+ *
+ * La demo no lee la configuración del servidor: no hay Firebase y no debe
+ * exigir credenciales para arrancar. El presupuesto sale de la misma variable
+ * (`PDF_STORAGE_BUDGET_MB`, opcional) con el mismo recorte al techo seguro; si
+ * no está, se usa el valor por defecto del dominio (512 MiB).
+ */
+function demoUploadDeps(): UploadDependencies {
+  const raw = process.env.PDF_STORAGE_BUDGET_MB;
+  const mib = raw && raw.trim() !== "" ? Number(raw) : undefined;
+  return {
+    documents: new MemoryPdfDocumentStore(demoState().pdf),
+    catalog: catalogStore(),
+    budgetBytes: budgetBytesFromMiB(mib),
+  };
+}
+
+/**
+ * Dependencias de lectura del PDF completo en la demostración.
+ *
+ * Mismo servicio que en producción (`readDocumentFile`), con los bytes en
+ * memoria. Sin límite de descargas: un solo proceso y nada real que proteger.
+ */
+function demoFileDeps(): DocumentFileDependencies {
+  return {
+    documents: new MemoryPdfDocumentStore(demoState().pdf),
+    catalog: catalogStore(),
+    enrollments: new DemoEnrollmentStore(),
+  };
+}
+
+/** ¿Puede este actor abrir el PDF de este documento? (sin leer los bytes) */
+export async function documentFileAvailable(actor: Actor, documentId: string): Promise<boolean> {
+  return isDocumentFileAvailable({ actor, documentId }, demoFileDeps());
+}
+
+/** Resumen para la interfaz (título, páginas y tamaño), o `null` si no es accesible. */
+export async function documentFileSummary(actor: Actor, documentId: string) {
+  return documentFileSummaryFor({ actor, documentId }, demoFileDeps());
+}
+
+/** PDF completo verificado, listo para entregar con `application/pdf`. */
+export async function documentFile(actor: Actor, documentId: string) {
+  return readDocumentFile({ actor, documentId }, demoFileDeps());
 }
 
 export function accountLabel(uid: string): string {
@@ -249,6 +340,8 @@ export interface AdminCourseRow {
   courseId: string;
   title: string;
   publishedVersion: number | null;
+  /** Última versión guardada como borrador; null si el curso no tiene ninguna. */
+  lastDraftVersion: number | null;
   versions: Array<{ version: number; status: string; title: string }>;
   drafts: number;
 }
@@ -260,6 +353,7 @@ export function adminCourses(): AdminCourseRow[] {
       courseId: summary.courseId,
       title: summary.title,
       publishedVersion: summary.publishedVersion,
+      lastDraftVersion: summary.lastDraftVersion,
       versions,
       drafts: versions.filter((version) => version.status === "draft").length,
     };
@@ -436,16 +530,151 @@ export async function adminRevokeEnrollment(actor: Actor, uid: string, courseId:
   return revokeEnrollment({ actor, uid, courseId }, demoDeps());
 }
 
-export async function adminSaveDraft(actor: Actor, definition: CourseVersionDefinition) {
-  return saveDraftVersion({ actor, definition }, demoDeps());
+/** Crea un curso vacío (sin versiones) a partir de la plantilla vacía. */
+export async function adminCreateCourse(
+  actor: Actor,
+  input: { courseId: string; title: string; description?: string },
+) {
+  return createCourse({ ...input, actor }, demoCourseEditorDeps());
 }
 
-export async function adminUpdateDraft(actor: Actor, definition: CourseVersionDefinition) {
-  return updateDraftVersion({ actor, definition }, demoDeps());
+/** Abre (o reanuda) el borrador del curso: no publica nada. */
+export async function adminStartDraft(actor: Actor, courseId: string) {
+  return startDraft({ actor, courseId }, demoDeps());
 }
+
+/** Guarda la estructura del borrador (título, descripción y temas). */
+export async function adminSaveDraftStructure(
+  actor: Actor,
+  input: { courseId: string; version: number; expectedRevision: number; structure: DraftStructure },
+) {
+  return saveDraftStructure({ actor, ...input }, demoDeps());
+}
+
+/** Guarda cuestionarios y examen final del borrador, con sus claves aparte. */
+export async function adminSaveDraftAssessments(
+  actor: Actor,
+  input: {
+    courseId: string;
+    version: number;
+    expectedRevision: number;
+    topicQuizzes?: Record<string, QuizQuestionDefinition[]>;
+    finalExam?: QuizQuestionDefinition[];
+  },
+): Promise<SaveAssessmentsResult> {
+  return saveDraftAssessments({ actor, ...input }, demoDeps());
+}
+
+/** Vista del editor de estructura, o `null` si el curso o la versión no existen. */
+export async function adminDraftEditor(
+  courseId: string,
+  version?: number,
+): Promise<DraftEditorView | null> {
+  const deps = demoDeps();
+  const course = await deps.catalog.getCourse(courseId);
+  if (!course) return null;
+
+  const versions = (await deps.catalog.listVersions(courseId)).map((item) => item.version);
+  const target = resolveEditorVersion(course, versions, version);
+  if (target === null) return null;
+
+  const document = await deps.catalog.getVersion(courseId, target);
+  if (!document) return null;
+
+  const keys = await deps.catalog.getAnswerKeys(courseId, target);
+  return draftEditorView({
+    course,
+    version: document,
+    definition: definitionFromDocuments(document, keys),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Documentos PDF (subida por partes)
+// ---------------------------------------------------------------------------
+
+export async function adminCreatePdfUpload(
+  actor: Actor,
+  input: {
+    courseId: string;
+    version: number;
+    topicId: string;
+    title: string;
+    pageCount: number;
+    bytes: number;
+    sha256: string;
+  },
+) {
+  return createPdfUpload({ actor, ...input }, demoUploadDeps());
+}
+
+/** Subida de una sola petición (ficheros pequeños), mismo ciclo y misma reserva. */
+export async function adminUploadPdfDocument(
+  actor: Actor,
+  input: {
+    courseId: string;
+    version: number;
+    topicId: string;
+    title: string;
+    pageCount: number;
+    bytes: Uint8Array;
+  },
+): Promise<UploadDocumentResult> {
+  return uploadPdfDocument({ actor, ...input }, demoUploadDeps());
+}
+
+export async function adminPutPdfPart(
+  actor: Actor,
+  input: { documentId: string; index: number; bytes: Uint8Array },
+) {
+  return putPdfUploadPart({ actor, ...input }, demoUploadDeps());
+}
+
+export async function adminFinalizePdfUpload(actor: Actor, documentId: string) {
+  return finalizePdfUpload({ actor, documentId }, demoUploadDeps());
+}
+
+export async function adminAbortPdfUpload(actor: Actor, documentId: string) {
+  return abortPdfUpload({ actor, documentId }, demoUploadDeps());
+}
+
+export async function adminArchivePdfDocument(actor: Actor, documentId: string) {
+  return archivePdfDocument({ actor, documentId }, demoUploadDeps());
+}
+
+export async function adminPdfStorage(): Promise<StorageUsage> {
+  return storageUsage(demoUploadDeps());
+}
+
+/** Subidas pendientes de una versión, para reanudarlas o cancelarlas. */
+export async function adminPendingPdfUploads(
+  courseId: string,
+  version: number,
+): Promise<PdfDocumentMeta[]> {
+  return demoUploadDeps().documents.listPending({ courseId, version });
+}
+
+export async function adminAttachDocument(
+  actor: Actor,
+  input: { documentId: string; expectedRevision: number },
+): Promise<AttachResult> {
+  return attachDocumentToDraft(
+    { actor, ...input },
+    { documents: demoUploadDeps().documents, catalog: catalogStore() },
+  );
+}
+
+// Los servicios de escritura anteriores (`saveDraftVersion`, `updateDraftVersion`)
+// siguen existiendo para pruebas de contrato, pero la administración usa el
+// editor de estructura: una sola puerta, con revisión y puntero de borrador.
 
 export async function adminPublish(actor: Actor, courseId: string, version: number) {
-  return publishCourseVersion({ actor, courseId, version }, demoDeps());
+  // Publicar exige comprobar que los documentos de la versión existen y están
+  // activos: se pasa la misma consulta de metadatos que usa la subida.
+  return publishCourseVersion(
+    { actor, courseId, version },
+    { store: catalogStore(), documents: new MemoryPdfDocumentStore(demoState().pdf) },
+  );
 }
 
 // ---------------------------------------------------------------------------

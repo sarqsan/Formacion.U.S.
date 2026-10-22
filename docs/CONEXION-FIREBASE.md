@@ -383,5 +383,6 @@ git ls-files --error-unmatch .env.local   # debe fallar: «did not match any fil
   `appId` aún no existen en este entorno porque no se ha registrado (o no se ha
   copiado) la app web.
 - Que las reglas de seguridad sean correctas: 0 de 41 ejecutadas.
-- Que la lectura de PDF se vea en pantalla: el visor sigue pendiente; el
-  servidor sí sirve las páginas autorizadas y registra el avance.
+- Que la lectura de PDF se vea en pantalla con datos reales: la ruta que entrega
+  el PDF completo está escrita y probada con dobles y en la demostración, pero no
+  se ha ejecutado contra Firestore ni con documentos reales.

@@ -76,11 +76,17 @@ describe("inventario de endpoints", () => {
     const paths = routes.map((route) => route.relativePath).sort();
     expect(paths).toEqual([
       "activate/route.ts",
+      "admin/documents/[documentId]/attach/route.ts",
       "admin/documents/route.ts",
+      "admin/documents/uploads/[documentId]/abort/route.ts",
+      "admin/documents/uploads/[documentId]/finalize/route.ts",
+      "admin/documents/uploads/[documentId]/parts/[index]/route.ts",
+      "admin/documents/uploads/route.ts",
       "admin/enrollments/route.ts",
       "admin/import/confirm/route.ts",
       "admin/import/preview/route.ts",
       "auth/session/route.ts",
+      "documents/[documentId]/file/route.ts",
       "documents/[documentId]/pages/route.ts",
       "health/route.ts",
       "me/route.ts",
@@ -115,6 +121,7 @@ describe("endpoints que escriben estado", () => {
 
       const hasGuard =
         route.source.includes("requireActor(") ||
+        route.source.includes("requirePortalActor(") ||
         route.source.includes("getActor(") ||
         route.source.includes("verifyIdToken(");
 
@@ -148,7 +155,10 @@ describe("endpoints de administración", () => {
 
   it("todos exigen sesión", () => {
     for (const route of adminRoutes) {
-      expect(route.source.includes("requireActor("), `${route.relativePath} sin requireActor`).toBe(true);
+      expect(
+        route.source.includes("requireActor(") || route.source.includes("requirePortalActor("),
+        `${route.relativePath} sin requireActor`,
+      ).toBe(true);
     }
   });
 
@@ -158,6 +168,12 @@ describe("endpoints de administración", () => {
         route.source.includes("buildImportPreview(") ||
         route.source.includes("confirmImport(") ||
         route.source.includes("uploadPdfDocument(") ||
+        route.source.includes("adminCreatePdfUpload(") ||
+        route.source.includes("adminUploadPdfDocument(") ||
+        route.source.includes("adminPutPdfPart(") ||
+        route.source.includes("adminFinalizePdfUpload(") ||
+        route.source.includes("adminAbortPdfUpload(") ||
+        route.source.includes("adminAttachDocument(") ||
         route.source.includes("assertAdmin(");
       expect(
         delegates,
@@ -172,7 +188,14 @@ describe("endpoints de administración", () => {
       "utf8",
     );
 
-    for (const functionName of ["uploadPdfDocument", "archivePdfDocument"]) {
+    for (const functionName of [
+      "uploadPdfDocument",
+      "archivePdfDocument",
+      "createPdfUpload",
+      "putPdfUploadPart",
+      "finalizePdfUpload",
+      "abortPdfUpload",
+    ]) {
       const start = service.indexOf(`export async function ${functionName}`);
       expect(start, `no se encuentra ${functionName}`).toBeGreaterThan(-1);
       const body = service.slice(start, start + 700);
@@ -208,7 +231,9 @@ describe("endpoints de lectura", () => {
 
     for (const route of readRoutes) {
       expect(
-        route.source.includes("getActor(") || route.source.includes("requireActor("),
+        route.source.includes("getActor(") ||
+          route.source.includes("requireActor(") ||
+          route.source.includes("requirePortalActor("),
         `${route.relativePath} lee datos sin resolver el actor`,
       ).toBe(true);
     }

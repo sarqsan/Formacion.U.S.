@@ -5,6 +5,7 @@ import {
   progressHistoryDocId,
   validateAccountDocument,
   validateAttemptDocument,
+  validateCourseDocument,
   validateProgressDocument,
   versionPath,
 } from "@/server/db/schema";
@@ -156,5 +157,53 @@ describe("catálogo de colecciones", () => {
   it("la versión de esquema es un entero positivo", () => {
     expect(Number.isInteger(SCHEMA_VERSION)).toBe(true);
     expect(SCHEMA_VERSION).toBeGreaterThanOrEqual(1);
+  });
+
+  it("los metadatos de documentos NO son legibles por el cliente (esquema v2)", () => {
+    // Un documento en borrador no debe revelar ni su título ni su número de
+    // páginas a un alumno que conozca el identificador. Se leen solo desde el
+    // servidor, por la API de documentos.
+    expect(CLIENT_READABLE_COLLECTIONS as readonly string[]).not.toContain("documents");
+    expect(SERVER_ONLY_COLLECTIONS as readonly string[]).toContain(COLLECTIONS.documents);
+    expect(SCHEMA_VERSION).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("ficha de curso", () => {
+  const course = {
+    courseId: "curso-a",
+    title: "Curso A",
+    publishedVersion: null,
+    lastDraftVersion: null,
+    createdAt: "2026-10-21T08:00:00.000Z",
+    createdBy: "admin-uid-1",
+  };
+
+  it("acepta un curso recién creado, sin versión publicada ni borrador", () => {
+    expect(() => validateCourseDocument(course)).not.toThrow();
+  });
+
+  it("acepta punteros de versión válidos", () => {
+    expect(() =>
+      validateCourseDocument({ ...course, publishedVersion: 2, lastDraftVersion: 3 }),
+    ).not.toThrow();
+  });
+
+  it("rechaza punteros que no son null ni enteros positivos", () => {
+    for (const value of [0, -1, 1.5, "1", true, undefined]) {
+      expect(() => validateCourseDocument({ ...course, publishedVersion: value })).toThrow(
+        DomainError,
+      );
+      expect(() => validateCourseDocument({ ...course, lastDraftVersion: value })).toThrow(
+        DomainError,
+      );
+    }
+  });
+
+  it("rechaza fichas sin identificador, título ni autoría", () => {
+    expect(() => validateCourseDocument({ ...course, courseId: "Curso A" })).toThrow(DomainError);
+    expect(() => validateCourseDocument({ ...course, title: "   " })).toThrow(DomainError);
+    expect(() => validateCourseDocument({ ...course, createdAt: "" })).toThrow(DomainError);
+    expect(() => validateCourseDocument({ ...course, createdBy: "" })).toThrow(DomainError);
   });
 });

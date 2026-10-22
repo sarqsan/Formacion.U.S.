@@ -8,20 +8,56 @@ import type { AccountRole, AccountStatus, PersonRol } from "@/domain/roles";
 import { COLLECTIONS } from "@/server/db/schema.constants";
 import { mandatoryTopicsOf } from "@/server/courses/catalog";
 import { definitionFromDocuments } from "@/server/courses/definition";
-import {
-  publishCourseVersion,
-  saveDraftVersion,
-  updateDraftVersion,
-} from "@/server/courses/catalog";
+import { publishCourseVersion } from "@/server/courses/catalog";
 import { enrollStudent, revokeEnrollment } from "@/server/enrollments/service";
 import { submitAssessment } from "@/server/assessments/service";
 import { parsePeopleWorkbook } from "@/server/import/excel";
 import { buildImportPreview } from "@/server/import/service";
-import { importDependencies } from "@/server/deps";
-import { documentDependencies } from "@/server/deps";
-import { readDocumentPages, uploadPdfDocument } from "@/server/documents/service";
+import {
+  courseEditorDependencies,
+  documentDependencies,
+  documentFileDependencies,
+  importDependencies,
+} from "@/server/deps";
+import {
+  documentFileSummary as documentFileSummaryFor,
+  isDocumentFileAvailable,
+  readDocumentFile,
+  type DocumentFileResult,
+  type DocumentFileSummary,
+} from "@/server/documents/file";
+import {
+  abortPdfUpload,
+  archivePdfDocument,
+  createPdfUpload,
+  finalizePdfUpload,
+  putPdfUploadPart,
+  readDocumentPages,
+  storageUsage as pdfStorageUsage,
+  uploadPdfDocument,
+  type CreateUploadInput,
+  type FinalizeUploadResult,
+  type PdfUploadView,
+  type StorageUsage,
+  type UploadDocumentResult,
+} from "@/server/documents/service";
+import { attachDocumentToDraft, type AttachResult } from "@/server/documents/attach";
+import type { PdfDocumentMeta } from "@/server/documents/store";
 import { getAdminDb } from "@/server/firebase/admin";
 import { FirestoreCourseCatalogStore } from "@/server/firebase/catalog-store";
+import {
+  createCourse,
+  draftEditorView,
+  resolveEditorVersion,
+  saveDraftAssessments,
+  saveDraftStructure,
+  startDraft,
+  type DraftEditorView,
+  type DraftStructure,
+  type SaveAssessmentsResult,
+} from "@/server/courses/editor";
+import type { QuizQuestionDefinition } from "@/domain/assessments/scoring";
+import { definitionFromDocuments as definitionFromDocs } from "@/server/courses/definition";
 import { FirestoreEnrollmentStore } from "@/server/firebase/enrollment-store";
 import { FirestoreLearningStore } from "@/server/firebase/learning-store";
 import { guard } from "@/server/firebase/repositories";
@@ -160,6 +196,27 @@ export interface PdfReadingView {
  * del fichero; los bytes se piden al endpoint autorizado
  * `/api/documents/{id}/pages`, que también registra la lectura.
  */
+/**
+ * Lectura del PDF completo por el alumnado (bloque 07).
+ *
+ * Usa `readDocumentFile`, que comprueba sesión, matrícula, versión publicada,
+ * referencia expresa del documento y SHA-256 antes de devolver un solo byte.
+ */
+export async function documentFile(actor: Actor, documentId: string): Promise<DocumentFileResult> {
+  return readDocumentFile({ actor, documentId }, documentFileDependencies());
+}
+
+export async function documentFileAvailable(actor: Actor, documentId: string): Promise<boolean> {
+  return isDocumentFileAvailable({ actor, documentId }, documentFileDependencies());
+}
+
+export async function documentFileSummary(
+  actor: Actor,
+  documentId: string,
+): Promise<DocumentFileSummary | null> {
+  return documentFileSummaryFor({ actor, documentId }, documentFileDependencies());
+}
+
 export async function learnerReadingView(
   actor: Actor,
   input: { courseId: string; documentId: string; page?: number },
@@ -313,6 +370,8 @@ export interface AdminCourseRow {
   courseId: string;
   title: string;
   publishedVersion: number | null;
+  /** Última versión guardada como borrador; null si el curso no tiene ninguna. */
+  lastDraftVersion: number | null;
   versions: Array<{ version: number; status: string; title: string }>;
   drafts: number;
 }
@@ -325,7 +384,11 @@ export async function adminCourses(actor: Actor): Promise<AdminCourseRow[]> {
     const rows: AdminCourseRow[] = [];
 
     for (const doc of snapshot.docs) {
-      const data = doc.data() as { title?: string; publishedVersion?: number | null };
+      const data = doc.data() as {
+        title?: string;
+        publishedVersion?: number | null;
+        lastDraftVersion?: number | null;
+      };
       const versions = await deps.catalog.listVersions(doc.id);
       const detailed: Array<{ version: number; status: string; title: string }> = [];
       for (const version of versions) {
@@ -341,6 +404,7 @@ export async function adminCourses(actor: Actor): Promise<AdminCourseRow[]> {
         courseId: doc.id,
         title: data.title ?? doc.id,
         publishedVersion: data.publishedVersion ?? null,
+        lastDraftVersion: data.lastDraftVersion ?? null,
         versions: detailed,
         drafts: detailed.filter((version) => version.status === "draft").length,
       });
@@ -392,7 +456,9 @@ export async function adminCourseDetail(
     selected: {
       version: selected.version,
       status: selected.status,
-      definition: keys ? definitionFromDocuments(selected, keys) : null,
+      // Definición siempre reconstruible: un borrador sin cuestionarios no
+      // tiene documento de claves y aun así debe poder abrirse y validarse.
+      definition: definitionFromDocuments(selected, keys),
       topics: selected.topics.map((topic) => ({
         id: topic.id,
         title: topic.title,
@@ -419,7 +485,6 @@ export async function definitionOf(
   const document = await deps.catalog.getVersion(courseId, version);
   if (!document) return null;
   const keys = await deps.catalog.getAnswerKeys(courseId, version);
-  if (!keys) return null;
   return definitionFromDocuments(document, keys);
 }
 
@@ -557,34 +622,176 @@ export async function adminRevokeEnrollment(actor: Actor, uid: string, courseId:
   return guard(() => revokeEnrollment({ actor, uid, courseId }, firestoreDeps()));
 }
 
-export async function adminSaveDraft(actor: Actor, definition: CourseVersionDefinition) {
-  return saveDraftVersion(
-    { definition, actor },
-    { store: firestoreDeps().catalog },
+/**
+ * Crea un curso vacío (sin versiones) a partir de la plantilla vacía.
+ *
+ * Escribe una sola ficha y no crea ninguna versión: el curso queda con
+ * `publishedVersion` y `lastDraftVersion` a null para que el editor del bloque
+ * siguiente guarde su primer borrador.
+ */
+export async function adminCreateCourse(
+  actor: Actor,
+  input: { courseId: string; title: string; description?: string },
+) {
+  assertAdmin(actor);
+  return createCourse({ ...input, actor }, courseEditorDependencies());
+}
+
+/** Abre (o reanuda) el borrador del curso: escribe versión y puntero a la vez. */
+export async function adminStartDraft(actor: Actor, courseId: string) {
+  assertAdmin(actor);
+  return startDraft({ actor, courseId }, { store: firestoreDeps().catalog });
+}
+
+/** Guarda la estructura del borrador; exige la revisión abierta en el editor. */
+export async function adminSaveDraftStructure(
+  actor: Actor,
+  input: { courseId: string; version: number; expectedRevision: number; structure: DraftStructure },
+) {
+  assertAdmin(actor);
+  return saveDraftStructure({ actor, ...input }, { store: firestoreDeps().catalog });
+}
+
+/** Guarda cuestionarios y examen final del borrador; escribe versión y claves juntas. */
+export async function adminSaveDraftAssessments(
+  actor: Actor,
+  input: {
+    courseId: string;
+    version: number;
+    expectedRevision: number;
+    topicQuizzes?: Record<string, QuizQuestionDefinition[]>;
+    finalExam?: QuizQuestionDefinition[];
+  },
+): Promise<SaveAssessmentsResult> {
+  assertAdmin(actor);
+  return saveDraftAssessments({ actor, ...input }, { store: firestoreDeps().catalog });
+}
+
+// ---------------------------------------------------------------------------
+// Documentos PDF: subida por partes y asociación al borrador
+// ---------------------------------------------------------------------------
+
+/**
+ * Abre una subida (reserva cuota). El identificador lo calcula el servicio a
+ * partir del contenido: el cliente no lo elige.
+ */
+export async function adminCreatePdfUpload(
+  actor: Actor,
+  input: Omit<CreateUploadInput, "actor">,
+): Promise<{ created: boolean; upload: PdfUploadView }> {
+  assertAdmin(actor);
+  return createPdfUpload({ actor, ...input }, documentDependencies());
+}
+
+/** Subida de una sola petición (ficheros pequeños), mismo ciclo y misma reserva. */
+export async function adminUploadPdfDocument(
+  actor: Actor,
+  input: {
+    courseId: string;
+    version: number;
+    topicId: string;
+    title: string;
+    pageCount: number;
+    bytes: Uint8Array;
+  },
+): Promise<UploadDocumentResult> {
+  assertAdmin(actor);
+  return uploadPdfDocument({ actor, ...input }, documentDependencies());
+}
+
+/** Guarda una parte del fichero; el orden y el tamaño se comprueban en servidor. */
+export async function adminPutPdfPart(
+  actor: Actor,
+  input: { documentId: string; index: number; bytes: Uint8Array },
+) {
+  assertAdmin(actor);
+  return putPdfUploadPart({ actor, ...input }, documentDependencies());
+}
+
+/** Verifica la huella y activa el documento (idempotente). */
+export async function adminFinalizePdfUpload(
+  actor: Actor,
+  documentId: string,
+): Promise<FinalizeUploadResult> {
+  assertAdmin(actor);
+  return finalizePdfUpload({ actor, documentId }, documentDependencies());
+}
+
+export async function adminAbortPdfUpload(actor: Actor, documentId: string) {
+  assertAdmin(actor);
+  return abortPdfUpload({ actor, documentId }, documentDependencies());
+}
+
+export async function adminArchivePdfDocument(actor: Actor, documentId: string) {
+  assertAdmin(actor);
+  return archivePdfDocument({ actor, documentId }, documentDependencies());
+}
+
+export async function adminPdfStorage(actor: Actor): Promise<StorageUsage> {
+  assertAdmin(actor);
+  return pdfStorageUsage(documentDependencies());
+}
+
+/** Subidas pendientes de una versión (para reanudar o cancelar). */
+export async function adminPendingPdfUploads(
+  actor: Actor,
+  courseId: string,
+  version: number,
+): Promise<PdfDocumentMeta[]> {
+  assertAdmin(actor);
+  return documentDependencies().documents.listPending({ courseId, version });
+}
+
+/** Asocia un documento **activo** al tema de un borrador. */
+export async function adminAttachDocument(
+  actor: Actor,
+  input: { documentId: string; expectedRevision: number },
+): Promise<AttachResult> {
+  assertAdmin(actor);
+  const deps = documentDependencies();
+  return attachDocumentToDraft(
+    { actor, ...input },
+    { documents: deps.documents, catalog: deps.catalog },
   );
 }
 
-export async function adminUpdateDraft(actor: Actor, definition: CourseVersionDefinition) {
-  return updateDraftVersion(
-    { definition, actor },
-    { store: firestoreDeps().catalog },
-  );
+/** Vista del editor de estructura, o `null` si el curso o la versión no existen. */
+export async function adminDraftEditor(
+  actor: Actor,
+  courseId: string,
+  version?: number,
+): Promise<DraftEditorView | null> {
+  assertAdmin(actor);
+  const deps = firestoreDeps();
+  const course = await deps.catalog.getCourse(courseId);
+  if (!course) return null;
+
+  const versions = (await deps.catalog.listVersions(courseId)).map((item) => item.version);
+  const target = resolveEditorVersion(course, versions, version);
+  if (target === null) return null;
+
+  const document = await deps.catalog.getVersion(courseId, target);
+  if (!document) return null;
+
+  const keys = await deps.catalog.getAnswerKeys(courseId, target);
+  return draftEditorView({
+    course,
+    version: document,
+    definition: definitionFromDocs(document, keys),
+  });
 }
+
+// `saveDraftVersion`/`updateDraftVersion` quedan como contrato interno; la
+// administración pasa por `startDraft`/`saveDraftStructure`.
 
 export async function adminPublish(actor: Actor, courseId: string, version: number) {
-  return publishCourseVersion({ actor, courseId, version }, { store: firestoreDeps().catalog });
-}
-
-/** Crea la versión siguiente a partir de una ya existente. */
-export async function adminNewDraft(actor: Actor, courseId: string, fromVersion: number) {
-  const base = await definitionOf(actor, courseId, fromVersion);
-  if (!base) {
-    throw new DomainError("VERSION_NOT_FOUND", "No se encontró la versión base.", 404);
-  }
-
-  const versions = await firestoreDeps().catalog.listVersions(courseId);
-  const nextVersion = Math.max(...versions.map((item) => item.version), 0) + 1;
-  return adminSaveDraft(actor, { ...base, version: nextVersion });
+  // Se reutilizan las dependencias de documentos ya cableadas (mismo adaptador
+  // que la subida y la lectura): no hay un segundo almacén que consultar.
+  const deps = documentDependencies();
+  return publishCourseVersion(
+    { actor, courseId, version },
+    { store: deps.catalog, documents: deps.documents },
+  );
 }
 
 // ---------------------------------------------------------------------------

@@ -14,11 +14,16 @@ import {
   makeDefinition,
   makeTopic,
 } from "../helpers/db-doubles";
+import { PublishingDocuments } from "../helpers/document-double";
 
 function setup() {
   const store = new InMemoryCatalogStore();
-  const deps = { store, now: () => FIXED_NOW };
-  return { store, deps };
+  // Estas pruebas van del orden de las versiones: los documentos se dan por
+  // activos. La puerta de documentos tiene su propia batería
+  // (`tests/server/publish-gate.test.ts`).
+  const documents = new PublishingDocuments({ autoActiveCourseId: "curso-a" });
+  const deps = { store, documents, now: () => FIXED_NOW };
+  return { store, documents, deps };
 }
 
 describe("toPublicVersion / toAnswerKeys", () => {

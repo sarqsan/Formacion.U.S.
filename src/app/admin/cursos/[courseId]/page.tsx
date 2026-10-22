@@ -3,18 +3,13 @@ import { notFound, redirect } from "next/navigation";
 import { getUiSession } from "@/demo/session";
 import { adminCourseDetail } from "@/server/portal";
 import { validateCourseVersion } from "@/domain/courses/content";
-import {
-  newDraftAction,
-  publishAction,
-  saveDraftAction,
-} from "@/app/actions/demo";
+import { publishAction, startDraftAction } from "@/app/actions/demo";
 
 export const dynamic = "force-dynamic";
 
 const MESSAGES: Record<string, string> = {
-  guardado: "Borrador guardado. El contenido publicado no ha cambiado.",
+  creado: "Curso creado. Todavía no tiene versiones: no está publicado ni visible para el alumnado.",
   publicada: "Versión publicada. Quien tenía el curso empezado lo repetirá desde el principio.",
-  borrador: "Versión nueva creada en borrador a partir de la publicada.",
 };
 
 const STATUS_LABEL: Record<string, string> = {
@@ -28,10 +23,10 @@ export default async function AdminCoursePage({
   searchParams,
 }: {
   params: Promise<{ courseId: string }>;
-  searchParams: Promise<{ v?: string; ok?: string; error?: string; revisar?: string }>;
+  searchParams: Promise<{ v?: string; ok?: string; error?: string }>;
 }) {
   const { courseId } = await params;
-  const { v, ok, error, revisar } = await searchParams;
+  const { v, ok, error } = await searchParams;
 
   const session = await getUiSession();
   if (session.mode === "unconfigured") redirect("/admin");
@@ -71,15 +66,19 @@ export default async function AdminCoursePage({
           <p className="muted mono mt-1 text-xs">{detail.courseId}</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Link href={`/admin/cursos/${detail.courseId}?v=${detail.publishedVersion ?? 1}`} className="btn btn-secondary">
-            Ver estructura
-          </Link>
-          {detail.publishedVersion !== null ? (
-            <form action={newDraftAction}>
+          {detail.versions.length > 0 ? (
+            <Link
+              href={`/admin/cursos/${detail.courseId}?v=${detail.publishedVersion ?? detail.versions[0].version}`}
+              className="btn btn-secondary"
+            >
+              Ver estructura
+            </Link>
+          ) : null}
+          {detail.drafts > 0 || detail.publishedVersion !== null ? (
+            <form action={startDraftAction}>
               <input type="hidden" name="courseId" value={detail.courseId} />
-              <input type="hidden" name="fromVersion" value={detail.publishedVersion} />
               <button type="submit" className="btn btn-secondary">
-                Nueva versión en borrador
+                {detail.drafts > 0 ? "Abrir borrador" : "Nueva versión en borrador"}
               </button>
             </form>
           ) : null}
@@ -102,7 +101,22 @@ export default async function AdminCoursePage({
       </div>
 
       {!selected ? (
-        <div className="card p-5 muted text-sm">Este curso no tiene versiones.</div>
+        <div className="card p-5 text-sm">
+          <p className="font-semibold">Este curso no tiene versiones.</p>
+          <p className="muted mt-1">
+            Se creó vacío a propósito: no está publicado, no aparece en el catálogo del alumnado y
+            no se puede matricular a nadie en él.
+          </p>
+          <form action={startDraftAction} className="mt-3">
+            <input type="hidden" name="courseId" value={detail.courseId} />
+            <button type="submit" className="btn btn-primary">
+              Preparar el primer borrador
+            </button>
+          </form>
+          <p className="muted mt-2 text-xs">
+            El borrador se guarda sin publicar y puede quedar incompleto tanto tiempo como haga falta.
+          </p>
+        </div>
       ) : (
         <>
           <section className="card p-5">
@@ -158,157 +172,42 @@ export default async function AdminCoursePage({
                   ))}
                 </ul>
               )}
-              {revisar ? (
-                <p className="muted mt-2 text-xs">
-                  La validación se ejecuta con el mismo código que bloquea una publicación.
-                </p>
-              ) : null}
             </div>
           </section>
 
-          {isDraft && selected.definition ? (
+          {isDraft ? (
             <section className="card p-5">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <h2 className="text-sm font-semibold">Editar borrador</h2>
+                  <h2 className="text-sm font-semibold">Borrador de la versión {selected.version}</h2>
                   <p className="muted mt-1 text-xs">
-                    Título, descripción, orden de temas y pantallas. Las preguntas no se editan
-                    todavía (ver hoja de ruta).
+                    Título, descripción y temas se editan en el editor de estructura. Publicar exige
+                    que no quede ningún problema de validación.
                   </p>
                 </div>
-                <form action={publishAction}>
-                  <input type="hidden" name="courseId" value={detail.courseId} />
-                  <input type="hidden" name="version" value={selected.version} />
-                  <button type="submit" className="btn btn-primary" disabled={issues.length > 0}>
-                    Publicar versión {selected.version}
-                  </button>
-                </form>
+                <div className="flex flex-wrap gap-2">
+                  <Link
+                    href={`/admin/cursos/${detail.courseId}/editar?v=${selected.version}`}
+                    className="btn btn-secondary"
+                  >
+                    Abrir editor
+                  </Link>
+                  <form action={publishAction}>
+                    <input type="hidden" name="courseId" value={detail.courseId} />
+                    <input type="hidden" name="version" value={selected.version} />
+                    <button type="submit" className="btn btn-primary" disabled={issues.length > 0}>
+                      Publicar versión {selected.version}
+                    </button>
+                  </form>
+                </div>
               </div>
 
               {issues.length > 0 ? (
                 <p className="alert alert-warn mt-3">
-                  No se puede publicar hasta corregir los problemas de validación.
+                  Guardar el borrador no está bloqueado, pero no se puede publicar hasta corregir
+                  estos problemas.
                 </p>
               ) : null}
-
-              <form action={saveDraftAction} className="mt-4 space-y-4">
-                <input type="hidden" name="courseId" value={detail.courseId} />
-                <input type="hidden" name="version" value={selected.version} />
-
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div>
-                    <label className="label" htmlFor="title">
-                      Título del curso
-                    </label>
-                    <input
-                      id="title"
-                      name="title"
-                      className="input"
-                      defaultValue={selected.definition.title}
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="label" htmlFor="description">
-                      Descripción
-                    </label>
-                    <input
-                      id="description"
-                      name="description"
-                      className="input"
-                      defaultValue={selected.definition.description ?? ""}
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  {selected.definition.topics.map((topic) => (
-                    <fieldset key={topic.id} className="rounded-lg border border-[var(--line)] p-3">
-                      <legend className="px-1 text-xs font-semibold uppercase tracking-wide muted">
-                        Tema {topic.id}
-                      </legend>
-                      <div className="grid gap-2 sm:grid-cols-[1fr_6rem]">
-                        <div>
-                          <label className="label" htmlFor={`topic:${topic.id}:title`}>
-                            Título del tema
-                          </label>
-                          <input
-                            id={`topic:${topic.id}:title`}
-                            name={`topic:${topic.id}:title`}
-                            className="input"
-                            defaultValue={topic.title}
-                            required
-                          />
-                        </div>
-                        <div>
-                          <label className="label" htmlFor={`topic:${topic.id}:order`}>
-                            Orden
-                          </label>
-                          <input
-                            id={`topic:${topic.id}:order`}
-                            name={`topic:${topic.id}:order`}
-                            className="input"
-                            type="number"
-                            min={1}
-                            max={selected.definition?.topics.length ?? 1}
-                            defaultValue={topic.order}
-                          />
-                        </div>
-                      </div>
-
-                      <div className="mt-2 space-y-2">
-                        {topic.documents.map((document) => (
-                          <div
-                            key={document.id}
-                            className="grid gap-2 rounded-md bg-[#f8f9f6] p-2 sm:grid-cols-[1fr_6rem]"
-                          >
-                            <div>
-                              <label className="label" htmlFor={`doc:${document.id}:title`}>
-                                Pantalla / documento
-                              </label>
-                              <input
-                                id={`doc:${document.id}:title`}
-                                name={`doc:${document.id}:title`}
-                                className="input"
-                                defaultValue={document.title}
-                                required
-                              />
-                            </div>
-                            <div>
-                              <label className="label" htmlFor={`doc:${document.id}:pages`}>
-                                Pantallas
-                              </label>
-                              <input
-                                id={`doc:${document.id}:pages`}
-                                name={`doc:${document.id}:pages`}
-                                className="input"
-                                type="number"
-                                min={1}
-                                max={5000}
-                                defaultValue={document.pageCount}
-                              />
-                            </div>
-                          </div>
-                        ))}
-                        <p className="muted text-xs">
-                          {topic.quiz.length} pregunta(s) en el cuestionario del tema. Añadir o
-                          quitar preguntas cambiará la clave de corrección: queda fuera de esta
-                          entrega para no reescribir el editor a medias.
-                        </p>
-                      </div>
-                    </fieldset>
-                  ))}
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <button type="submit" className="btn btn-primary">
-                    Guardar borrador
-                  </button>
-                  <span className="muted text-xs">
-                    Guardar no publica: los alumnos siguen viendo la versión publicada.
-                  </span>
-                </div>
-              </form>
             </section>
           ) : (
             <section className="card p-5">

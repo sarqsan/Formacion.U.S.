@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getUiSession } from "@/demo/session";
-import { readingView } from "@/server/portal";
+import { documentFileSummary, readingView } from "@/server/portal";
+import { PdfViewer } from "./pdf-viewer";
 import { readScreenAction } from "@/app/actions/demo";
 import { DomainError } from "@/domain/text";
 
@@ -46,6 +47,10 @@ export default async function ScreenPage({
     throw caught;
   }
 
+  // ¿Se puede ofrecer el PDF? El servidor decide: cuenta, matrícula, versión
+  // publicada y referencia expresa del documento. No se lee el fichero aquí.
+  const file = await documentFileSummary(session.actor, documentId);
+
   if (view.kind === "pdf") {
     const isLastPage = view.page >= view.totalPages;
     const alreadyRead = view.lastPageViewed >= view.totalPages;
@@ -82,48 +87,33 @@ export default async function ScreenPage({
 
         {error ? <p className="alert alert-error">{error}</p> : null}
 
-        <article className="card space-y-3 p-5 text-sm">
-          <h2 className="text-base font-semibold">Documento PDF alojado en Firestore</h2>
-          <p className="muted leading-relaxed">
-            Este curso se sirve desde Firebase, no desde los datos de ejemplo. El fichero no tiene
-            URL pública: viaja troceado en Firestore y solo el servidor comprueba la matrícula, la
-            versión publicada y el orden de lectura antes de entregar una página.
+        {file ? (
+          <section className="card space-y-3 p-5 text-sm">
+            <div>
+              <h2 className="text-base font-semibold">{file.title}</h2>
+              <p className="muted mt-1 text-xs leading-relaxed">
+                El documento se sirve completo desde el servidor, sin URL pública ni copia en el
+                navegador: se comprueba tu matrícula, la versión publicada del curso y la integridad
+                del fichero en cada apertura. Se muestra con el visor del propio navegador.
+              </p>
+            </div>
+            <PdfViewer
+              src={`/api/documents/${encodeURIComponent(documentId)}/file`}
+              title={file.title}
+              bytes={file.bytes}
+            />
+          </section>
+        ) : (
+          <p className="alert alert-warn text-sm">
+            El documento todavía no está disponible para abrirlo en PDF. Si acabas de empezar el
+            curso, vuelve a intentarlo en un momento; si sigue igual, avisa a administración.
           </p>
-          <dl className="grid gap-2 text-xs sm:grid-cols-2">
-            <div>
-              <dt className="muted">Tamaño</dt>
-              <dd className="mono">{view.bytes} bytes</dd>
-            </div>
-            <div>
-              <dt className="muted">SHA-256</dt>
-              <dd className="mono break-all">{view.sha256.slice(0, 24)}…</dd>
-            </div>
-            <div>
-              <dt className="muted">Última página registrada</dt>
-              <dd className="mono">{view.lastPageViewed}</dd>
-            </div>
-            <div>
-              <dt className="muted">Endpoint autorizado</dt>
-              <dd className="mono">/api/documents/{view.documentId}/pages</dd>
-            </div>
-          </dl>
-
-          <p className="alert alert-warn text-xs">
-            El visor de PDF dentro de la página todavía no está implementado: esta entrega conecta la
-            lectura autorizada y el registro de progreso, no el renderizado. Está declarado como
-            pendiente en <span className="mono">docs/INFORME-FASE-8.md</span>.
-          </p>
-        </article>
+        )}
 
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <a
-            href={`/api/documents/${encodeURIComponent(documentId)}/pages?from=${view.page}&to=${view.page}`}
-            className="btn btn-secondary"
-            target="_blank"
-            rel="noreferrer"
-          >
-            Pedir esta página al servidor
-          </a>
+          <Link href={`/cursos/${courseId}`} className="btn btn-secondary">
+            Volver al curso
+          </Link>
 
           <div className="flex flex-wrap gap-2">
             {alreadyRead ? (
@@ -185,6 +175,29 @@ export default async function ScreenPage({
         <p className="alert alert-warn">
           Esa pantalla todavía no está disponible: primero hay que leer las anteriores.
         </p>
+      ) : null}
+
+      {file ? (
+        <section className="card space-y-2 p-4 text-sm">
+          <h2 className="text-sm font-semibold">Documento completo en PDF</h2>
+          <p className="muted text-xs leading-relaxed">
+            El PDF de este documento también se puede abrir con el visor del navegador. La lectura
+            guiada de arriba se mantiene igual: no cambia el progreso del curso.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <a
+              href={`/api/documents/${encodeURIComponent(documentId)}/file`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn btn-secondary btn-sm"
+            >
+              Abrir el PDF en una pestaña nueva
+            </a>
+            <span className="muted text-xs">
+              {file.pageCount} página(s) · se abre con la aplicación de PDF del dispositivo
+            </span>
+          </div>
+        </section>
       ) : null}
 
       <article className="screen-body">

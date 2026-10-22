@@ -115,8 +115,9 @@ está verificado. Lo que sí conviene cerrar antes:
 
 **Mejoras que sí cambiarían la demo (no imprescindibles):**
 
-1. Editor de preguntas y creación de temas en el panel (hoy se limita a títulos
-   y orden; tocar preguntas sin versionar las claves rompería la corrección).
+1. ~~Editor de preguntas y creación de temas en el panel~~ — **hecho**:
+   temas y estructura en el bloque 04 y cuestionarios y examen final con claves
+   separadas en el bloque 05 (ADR-023 y ADR-024).
 2. Subida de PDF y lectura real por páginas con documentos sintéticos.
 3. Ejecutar las pruebas de reglas e integración con el emulador
    (`docs/ENTORNO-PRUEBAS.md`) y conectar `formacionus-63555` siguiendo

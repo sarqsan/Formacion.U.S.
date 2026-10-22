@@ -25,7 +25,8 @@ import { getAdminDb } from "@/server/firebase/admin";
  * - `saveVersion` usa un lote: documento de versión + claves + ficha del curso
  *   (si es la primera). Las claves nunca acaban dentro de la versión.
  * - `publishVersion` usa una transacción: comprueba que la versión sigue en
- *   borrador y actualiza el puntero del curso a la vez.
+ *   borrador, archiva la que estaba publicada y actualiza el puntero del curso
+ *   a la vez. Así nunca hay dos versiones `published`.
  *
  * Lecturas: las que usan los servicios y el panel de administración, cada una
  * respaldada por un índice en `firestore.indexes.json`.
@@ -52,11 +53,16 @@ export class FirestoreCourseCatalogStore implements CourseCatalogStore {
     return guard(async () => {
       const doc = await getAdminDb().collection(COLLECTIONS.courses).doc(courseId).get();
       if (!doc.exists) return null;
-      const data = doc.data() as { title?: string; publishedVersion?: number | null };
+      const data = doc.data() as {
+        title?: string;
+        publishedVersion?: number | null;
+        lastDraftVersion?: number | null;
+      };
       return {
         courseId,
         title: data.title ?? courseId,
         publishedVersion: data.publishedVersion ?? null,
+        lastDraftVersion: data.lastDraftVersion ?? null,
       };
     });
   }
@@ -149,15 +155,22 @@ export class FirestoreCourseCatalogStore implements CourseCatalogStore {
 
         const courseDoc = await transaction.get(courseRef);
         if (courseDoc.exists) {
+          // `publishedVersion` NO se toca aquí: publicar es otra operación. Solo
+          // se actualiza la ficha de autoría y el puntero del último borrador.
           transaction.update(courseRef, {
             title: input.course.title,
+            lastDraftVersion: input.course.lastDraftVersion,
             updatedAt: FieldValue.serverTimestamp(),
           });
         } else {
+          // Alta implícita (compatibilidad): un curso sin ficha que guarda su
+          // primera versión. La creación explícita vive en el editor de cursos.
           transaction.set(courseRef, {
             courseId: input.course.courseId,
             title: input.course.title,
             publishedVersion: null,
+            lastDraftVersion: input.course.lastDraftVersion,
+            createdBy: input.version.createdBy,
             createdAt: FieldValue.serverTimestamp(),
             updatedAt: FieldValue.serverTimestamp(),
           });
@@ -224,6 +237,9 @@ export class FirestoreCourseCatalogStore implements CourseCatalogStore {
       const versionRef = courseRef.collection(COLLECTIONS.versions).doc(String(input.version));
 
       await db.runTransaction(async (transaction) => {
+        // Todas las lecturas van antes de la primera escritura (requisito de
+        // las transacciones de Firestore).
+        const courseDoc = await transaction.get(courseRef);
         const versionDoc = await transaction.get(versionRef);
         if (!versionDoc.exists) {
           throw new DomainError("VERSION_NOT_FOUND", "La versión indicada no existe.", 404);
@@ -238,6 +254,27 @@ export class FirestoreCourseCatalogStore implements CourseCatalogStore {
           );
         }
 
+        // La versión publicada anterior pasa a `archived` en la MISMA
+        // transacción. Sin esto quedarían dos versiones `published` a la vez:
+        // `assertPublishable` lo detecta después como estado inconsistente y la
+        // siguiente publicación fallaría con un 500. La demostración y los
+        // dobles ya lo hacían así; el adaptador real no, y por eso no se veía.
+        const previousVersion =
+          (courseDoc.data() as { publishedVersion?: number | null } | undefined)?.publishedVersion ??
+          null;
+        if (typeof previousVersion === "number" && previousVersion !== input.version) {
+          const previousRef = courseRef
+            .collection(COLLECTIONS.versions)
+            .doc(String(previousVersion));
+          const previousDoc = await transaction.get(previousRef);
+          if (
+            previousDoc.exists &&
+            (previousDoc.data() as { status?: string }).status === "published"
+          ) {
+            transaction.update(previousRef, { status: "archived" });
+          }
+        }
+
         // La versión pasa a publicada y el curso apunta a ella en la misma
         // transacción: no puede quedar un curso apuntando a algo no publicado.
         transaction.update(versionRef, {
@@ -247,8 +284,176 @@ export class FirestoreCourseCatalogStore implements CourseCatalogStore {
         });
         transaction.update(courseRef, {
           publishedVersion: input.version,
+          // Publicar consume el borrador: el puntero no puede quedar apuntando a
+          // una versión que ya es inmutable (el editor dejaría de reanudar).
+          lastDraftVersion: null,
           updatedAt: FieldValue.serverTimestamp(),
         });
+      });
+    });
+  }
+
+  /**
+   * Crea el borrador y fija el puntero del curso en la MISMA transacción.
+   *
+   * Transacción y no lote: hay que **leer** el estado de la ficha y decidir con
+   * él (¿cambió?, ¿existe ya la versión?). Un lote escribiría sin mirar y una
+   * carrera dejaría dos borradores o un puntero perdido.
+   *
+   * Coste: 2 lecturas y 2–3 escrituras de documentos pequeños (≤ 800 KiB el de
+   * contenido, ~KB el de claves), muy por debajo de los límites de Firestore
+   * (10 MiB por transacción; el tope de 500 escrituras ya no existe).
+   */
+  async createDraftVersion(input: {
+    courseId: string;
+    versionDoc: CourseVersionDocument;
+    answerKeys: AnswerKeysDocument | null;
+    expected: { publishedVersion: number | null; lastDraftVersion: number | null };
+  }): Promise<{ adopted: boolean }> {
+    throwIfLeaking(input.versionDoc);
+
+    return guard(async () => {
+      const db = getAdminDb();
+      const courseRef = db.collection(COLLECTIONS.courses).doc(input.courseId);
+      const versionRef = courseRef
+        .collection(COLLECTIONS.versions)
+        .doc(String(input.versionDoc.version));
+      const keysRef = db
+        .collection(COLLECTIONS.answerKeys)
+        .doc(answerKeysDocId(input.courseId, input.versionDoc.version, "final"));
+
+      return db.runTransaction(async (transaction) => {
+        const [courseDoc, versionDoc] = await Promise.all([
+          transaction.get(courseRef),
+          transaction.get(versionRef),
+        ]);
+
+        if (!courseDoc.exists) {
+          throw new DomainError("COURSE_NOT_FOUND", "El curso no existe.", 404);
+        }
+
+        const data = courseDoc.data() as {
+          publishedVersion?: number | null;
+          lastDraftVersion?: number | null;
+        };
+        const published = data.publishedVersion ?? null;
+        const draft = data.lastDraftVersion ?? null;
+
+        if (
+          published !== input.expected.publishedVersion ||
+          draft !== input.expected.lastDraftVersion
+        ) {
+          // Otra operación creó un borrador o publicó. No se escribe NADA: la
+          // persona que llama releerá y decidirá (reanudar o reintentar).
+          throw new DomainError(
+            "DRAFT_CONFLICT",
+            "El curso cambió mientras se preparaba el borrador.",
+            409,
+          );
+        }
+
+        if (versionDoc.exists) {
+          const status = (versionDoc.data() as { status?: string } | undefined)?.status;
+          if (status !== "draft") {
+            throw new DomainError(
+              "VERSION_ALREADY_EXISTS",
+              "Esa versión ya existe y no es un borrador.",
+              409,
+            );
+          }
+
+          // Adopción: la versión ya era un borrador (datos anteriores al
+          // puntero). Solo se fija el puntero; no se toca su contenido.
+          transaction.update(courseRef, {
+            lastDraftVersion: input.versionDoc.version,
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+          return { adopted: true };
+        }
+
+        transaction.set(versionRef, {
+          ...input.versionDoc,
+          revision: input.versionDoc.revision ?? 1,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+        if (input.answerKeys) {
+          transaction.set(keysRef, input.answerKeys);
+        }
+        transaction.update(courseRef, {
+          lastDraftVersion: input.versionDoc.version,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+
+        return { adopted: false };
+      });
+    });
+  }
+
+  /**
+   * Guarda contenido y claves del borrador en la MISMA transacción.
+   *
+   * Son dos documentos (la versión, sin respuestas, y el documento de claves).
+   * Escribirlos por separado dejaría estados intermedios en los que una
+   * pregunta existe sin su respuesta correcta, y al eliminar un tema sus claves
+   * quedarían huérfanas. Dentro de la transacción, o se guardan los dos o no se
+   * guarda ninguno.
+   */
+  async replaceDraftContent(input: {
+    versionDoc: CourseVersionDocument;
+    answerKeys: AnswerKeysDocument;
+    expectedRevision: number;
+  }): Promise<void> {
+    throwIfLeaking(input.versionDoc);
+
+    await guard(async () => {
+      const db = getAdminDb();
+      const versionRef = db
+        .collection(COLLECTIONS.courses)
+        .doc(input.versionDoc.courseId)
+        .collection(COLLECTIONS.versions)
+        .doc(String(input.versionDoc.version));
+      const keysRef = db
+        .collection(COLLECTIONS.answerKeys)
+        .doc(answerKeysDocId(input.versionDoc.courseId, input.versionDoc.version, "final"));
+
+      await db.runTransaction(async (transaction) => {
+        const current = await transaction.get(versionRef);
+        if (!current.exists) {
+          throw new DomainError("VERSION_NOT_FOUND", "El borrador no existe.", 404);
+        }
+
+        const data = current.data() as Partial<CourseVersionDocument>;
+        if (data.status !== "draft") {
+          throw new DomainError(
+            "VERSION_NOT_EDITABLE",
+            "Solo se puede editar un borrador. Una versión publicada no se modifica.",
+            409,
+          );
+        }
+
+        const revision = Number(data.revision ?? 0);
+        if (revision !== input.expectedRevision) {
+          throw new DomainError(
+            "DRAFT_STALE",
+            "El borrador se ha modificado desde que abriste el editor. Recarga la página antes de guardar.",
+            409,
+          );
+        }
+
+        transaction.set(versionRef, {
+          ...input.versionDoc,
+          revision: revision + 1,
+          // Editar no cambia ni la fecha ni la autoría de la versión.
+          createdAt: data.createdAt ?? input.versionDoc.createdAt,
+          createdBy: data.createdBy ?? input.versionDoc.createdBy,
+          publishedAt: null,
+          publishedBy: null,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+
+        // Las claves se sustituyen enteras: las de una pregunta eliminada no
+        // sobreviven. El servicio conserva el `createdAt` original.
+        transaction.set(keysRef, { ...input.answerKeys });
       });
     });
   }

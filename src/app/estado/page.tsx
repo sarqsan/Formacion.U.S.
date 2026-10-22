@@ -27,13 +27,13 @@ const ROWS: Row[] = [
     feature: "Publicación de versiones",
     state: "real",
     detail:
-      "Servicio real: valida el contenido, impide publicar saltándose versiones y hace inmutable lo publicado.",
+      "El servidor valida el contenido con la misma función que el editor, exige que cada PDF esté activo y completo, impide saltarse versiones y archiva la anterior, así que nunca hay dos publicadas. Probado con dobles y en la demostración; la transacción de Firestore no se ha ejecutado contra Firestore real.",
   },
   {
     feature: "Lectura en orden",
     state: "real",
     detail:
-      "El servidor rechaza cualquier salto de página o pantalla. Los PDF por fragmentos están implementados y probados con dobles; la demostración usa texto para no necesitar documentos reales.",
+      "El servidor rechaza cualquier salto de página o pantalla. Los PDF por fragmentos están implementados y probados con dobles; la demostración genera sus propios PDF de ejemplo en memoria.",
   },
   {
     feature: "Cuestionarios y examen final",
@@ -60,10 +60,22 @@ const ROWS: Row[] = [
       "La vista previa y la validación funcionan. La creación de cuentas requiere Firebase Authentication: no se ha ejecutado nunca contra el servicio real.",
   },
   {
-    feature: "Subida y lectura de PDF",
+    feature: "Subida de PDF por partes y cuota",
     state: "pending",
     detail:
-      "Escritura y lectura por fragmentos conectadas a Firestore (sin Storage). Falta el visor de PDF en la página: hoy se sirve la página autorizada al endpoint y se registra el progreso, pero no se dibuja el documento. No se ha ejecutado con documentos reales.",
+      "Implementada y probada con dobles y en la demostración: reserva de cuota, partes de 768 KiB en orden, verificación de SHA-256 y cancelación que libera la reserva. La transacción real de Firestore no se ha ejecutado (sin emulador): la subida no se declara verificada contra Firestore.",
+  },
+  {
+    feature: "Lectura de PDF por páginas",
+    state: "pending",
+    detail:
+      "El servidor sirve rangos de páginas autorizados por matrícula y en orden. La página no dibuja el PDF: el alumnado abre el documento completo con la aplicación de PDF del dispositivo. No se ha ejecutado con documentos reales.",
+  },
+  {
+    feature: "Apertura del PDF privado",
+    state: "demo",
+    detail:
+      "Implementada y probada con dobles y en la demostración: el servidor comprueba cuenta activa, matrícula, versión publicada y que el documento esté referenciado en ella, y verifica tamaño y SHA-256 antes de enviar el fichero completo (sin caché compartida). El hash demuestra integridad, no que el PDF sea inocuo. No se ha ejecutado contra Firestore real ni en un móvil Android.",
   },
   {
     feature: "Reglas de Firestore",

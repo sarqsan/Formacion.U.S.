@@ -1,11 +1,14 @@
 import { getServerConfig } from "@/server/config";
 import { budgetBytesFromMiB } from "@/domain/storage/pdf-chunks";
 import { FirestoreCourseCatalogStore } from "@/server/firebase/catalog-store";
+import { FirestoreCourseEditorStore } from "@/server/firebase/course-editor-store";
+import type { CourseEditorDependencies } from "@/server/courses/editor";
 import { FirestorePdfDocumentStore } from "@/server/firebase/document-store";
 import { FirestoreEnrollmentStore } from "@/server/firebase/enrollment-store";
 import { FirestoreLearningStore } from "@/server/firebase/learning-store";
-import { pdfLimiter } from "@/server/ratelimit/limiter";
+import { pdfLimiter, uploadLimiter } from "@/server/ratelimit/limiter";
 import type { DocumentDependencies } from "@/server/documents/service";
+import type { DocumentFileDependencies } from "@/server/documents/file";
 import type { EnrollmentDependencies } from "@/server/enrollments/service";
 import { ACTIVATION_TOKEN_TTL_HOURS } from "@/domain/auth/activation";
 import type { ImportDependencies } from "@/server/import/service";
@@ -50,10 +53,37 @@ export function documentDependencies(): DocumentDependencies {
     enrollments: new FirestoreEnrollmentStore(),
     learning: new FirestoreLearningStore(),
     budgetBytes: budgetBytesFromMiB(config.PDF_STORAGE_BUDGET_MB),
-    // Límite en memoria por proceso: suficiente para un servidor propio; con
+    // Límites en memoria por proceso: suficiente para un servidor propio; con
     // varias instancias habría que compartir el contador.
+    //   - `limiter` cobra lecturas (por página) y partes de subida;
+    //   - `uploadLimiter` cobra abrir y finalizar subidas (20/hora por admin).
+    limiter: pdfLimiter(),
+    uploadLimiter: uploadLimiter(),
+  };
+}
+
+/**
+ * Lectura del PDF completo por el alumnado (bloque 07).
+ *
+ * Comparte el mismo adaptador de documentos que la subida: no hay un segundo
+ * almacén ni una segunda copia. Solo se cablean las dependencias que la lectura
+ * necesita (documentos, catálogo, matrículas y el límite de descargas).
+ */
+export function documentFileDependencies(): DocumentFileDependencies {
+  return {
+    documents: new FirestorePdfDocumentStore(),
+    catalog: new FirestoreCourseCatalogStore(),
+    enrollments: new FirestoreEnrollmentStore(),
     limiter: pdfLimiter(),
   };
+}
+
+/**
+ * Creación y edición de cursos. Hoy solo la creación: el editor de contenido
+ * llega en los bloques siguientes y reutilizará este mismo puerto.
+ */
+export function courseEditorDependencies(): CourseEditorDependencies {
+  return { store: new FirestoreCourseEditorStore() };
 }
 
 export function enrollmentDependencies(): EnrollmentDependencies {

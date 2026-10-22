@@ -1,33 +1,35 @@
-import { NextResponse } from "next/server";
 import { jsonOk, toErrorResponse, assertTrustedOrigin } from "@/server/http";
-import { requireActor } from "@/server/auth/session";
-import { assertAdmin } from "@/domain/auth/authorization";
-import { getServerConfig } from "@/server/config";
-import { documentDependencies } from "@/server/deps";
+import { requirePortalActor } from "@/server/portal/session";
+import { configuredAppOrigin } from "@/server/config";
+import { adminPdfStorage, adminUploadPdfDocument } from "@/server/portal";
 import { readPdfUploadForm } from "@/server/documents/request";
-import { storageUsage, uploadPdfDocument } from "@/server/documents/service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
  * POST /api/admin/documents
- * Sube un PDF y lo guarda fragmentado en Firestore (no en Storage).
+ * Subida de un PDF en **una sola petición** (ficheros pequeños, hasta 8 MiB).
  *
- * Solo administradores activos. El servidor valida la firma `%PDF-`, el tamaño,
- * las páginas y la cuota, y calcula el SHA-256. La respuesta NO incluye ninguna
- * ubicación del fichero: solo tamaño, fragmentos y huella.
+ * No es una segunda vía de escritura: internamente abre la misma subida por
+ * partes, reserva cuota, escribe los fragmentos, verifica el SHA-256 y activa
+ * el documento. Si algo falla, cancela la subida para no dejar la reserva
+ * colgada.
+ *
+ * La interfaz de administración usa la subida por partes (límite de cuerpo de
+ * las funciones desplegadas); este endpoint queda para herramientas y pruebas.
+ *
+ * El identificador del documento lo calcula el servidor: cualquier
+ * `documentId` que llegue en el formulario se ignora.
  */
 export async function POST(request: Request) {
   try {
-    const config = getServerConfig();
-    assertTrustedOrigin(request, config.APP_ORIGIN);
-    const actor = await requireActor();
+    assertTrustedOrigin(request, configuredAppOrigin());
+    const actor = await requirePortalActor();
 
     const form = await readPdfUploadForm(request);
-    const deps = documentDependencies();
-    const result = await uploadPdfDocument({ ...form, actor }, deps);
-    const usage = await storageUsage(deps);
+    const result = await adminUploadPdfDocument(actor, form);
+    const usage = await adminPdfStorage(actor);
 
     return jsonOk({
       documentId: result.documentId,
@@ -36,6 +38,7 @@ export async function POST(request: Request) {
       sha256: result.sha256,
       usage: {
         usedBytes: usage.usedBytes,
+        reservedBytes: usage.reservedBytes,
         budgetBytes: usage.budgetBytes,
         percent: usage.percent,
       },
@@ -47,15 +50,17 @@ export async function POST(request: Request) {
 
 /**
  * GET /api/admin/documents
- * Uso de la cuota de PDF (sin exponer rutas ni fragmentos).
+ * Uso de la cuota de PDF: en uso, reservado por subidas pendientes y libre.
+ *
+ * La cuota es información de administración: no se muestra a un alumno y no
+ * expone rutas ni fragmentos.
  */
 export async function GET() {
   try {
-    // La cuota es información de administración: no se muestra a un alumno.
-    assertAdmin(await requireActor());
-    const usage = await storageUsage(documentDependencies());
+    const usage = await adminPdfStorage(await requirePortalActor());
     return jsonOk({
       usedBytes: usage.usedBytes,
+      reservedBytes: usage.reservedBytes,
       budgetBytes: usage.budgetBytes,
       freeBytes: usage.freeBytes,
       percent: usage.percent,
@@ -63,9 +68,4 @@ export async function GET() {
   } catch (error) {
     return toErrorResponse(error);
   }
-}
-
-/** Evita que Next intente cachear respuestas de documentos. */
-export function OPTIONS() {
-  return new NextResponse(null, { status: 204, headers: { "Cache-Control": "no-store" } });
 }

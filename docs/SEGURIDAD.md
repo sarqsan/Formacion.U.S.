@@ -16,7 +16,7 @@ una prueba o una configuración verificable detrás.
 | T5 | Alteración del progreso | Escritura desde cliente prohibida en reglas; recálculo en servidor; auditoría automática comprueba que no hay escrituras de Firestore en el código de navegador | Sí (dominio, servicio y auditoría) / reglas sin ejecutar |
 | T6 | Autoinflado de resultados | El cliente envía opciones; `gradeAttempt` corrige contra la clave del servidor; `passed` nunca viene del cliente | Sí |
 | T7 | Fuga de respuestas correctas | `toClientQuiz` elimina `correctOptionIds`; `answerKeys` con `allow read: false` | Sí (dominio) / reglas sin emular |
-| T8 | PDF público permanente | Bucket sin acceso cliente; URLs firmadas de 300 s; rutas validadas | Sí (rutas) / firma sin ejecutar |
+| T8 | PDF público permanente | No hay Storage ni URL: fragmentos solo-servidor y lectura por páginas con sesión, matrícula y orden | Sí (dominio y rutas) / reglas sin emular |
 | T9 | Path traversal en Storage | `isSafeStoragePath` + `assertPathWithinTopic` | Sí |
 | T10 | Alteración de rol/estado | `role`/`status`/`claimsVersion` solo con Admin SDK; reglas `write: false`; `isAdmin()` exige rol admin en la ficha y en el token | Sí (dominio y auditoría estática) / reglas sin ejecutar |
 | T11 | Sesión robada persiste tras deshabilitar | Triple barrera: (1) `resolveSession` compara ficha y token en servidor; (2) las **reglas** consultan la ficha con `get()`, no solo las claims; (3) sesión `checkRevoked`. Política probada con 16 pruebas; reglas **sin ejecutar** | Parcial: lógica sí, reglas no |
@@ -26,6 +26,13 @@ una prueba o una configuración verificable detrás.
 | T15 | Fuga de secretos en el repositorio | `.env*` ignorado; sin claves en código; `.env.example` sin valores | Revisado |
 | T16 | Duplicar cuentas de una persona real | Duplicados exigen decisión; "ya existe" no se puede incluir | Sí |
 | T17 | Dejar el sistema sin administradores | Protección del último admin activo | Sí |
+
+| T18 | Subida de PDF sin permiso | `assertAdmin` en el servicio, sesión de portal en la ruta y origen verificado; la versión debe ser `draft` | Sí |
+| T19 | Ocupar la cuota con subidas falsas | La reserva se hace **en la misma transacción** que el registro, hay límite por usuario y hora (20/h) y la cancelación libera la reserva | Sí (dominio y demo) / transacción real sin emulador |
+| T20 | Colar un fichero que no es un PDF | La parte 0 debe empezar por `%PDF-`; se comprueban tamaño declarado, tamaño por parte, número de partes y SHA-256 global antes de activar | Sí |
+| T21 | Servir o publicar un documento incompleto | `getMeta` oculta `aborted`; la lectura y la asociación exigen `state === "active"` | Sí |
+| T22 | Elegir el id de un documento ajeno | El id lo calcula el servidor a partir del contenido y del destino; el cuerpo con `documentId` u otros campos extra se rechaza (`strictObject`) | Sí |
+| T23 | Sustituir un PDF ya publicado | Un `active` es inmutable: no acepta más partes y la cancelación se rechaza (`UPLOAD_ALREADY_ACTIVE`); sustituir es un activo nuevo | Sí |
 
 ## 2. Autenticación y sesión
 
@@ -89,8 +96,10 @@ ejecuten, la barrera 2 está implementada pero **no verificada**.
 Con el plan Spark no existe Cloud Storage, así que el riesgo de "URL firmada =
 permiso temporal de portador" **desaparece**: no hay ninguna URL que compartir.
 En su lugar, el binario se sirve por páginas desde `/api/documents/{id}/pages`
-con `Cache-Control: no-store` (≤ 20 páginas y ≤ 768 KiB por petición), y el
-cliente nunca recibe el fichero completo de una sola respuesta.
+con `Cache-Control: no-store` (≤ 20 páginas y ≤ 768 KiB por petición) y, desde el
+bloque 07, **también entero** en `GET /api/documents/{id}/file` para que el
+navegador lo abra con su visor nativo. Lo segundo es una decisión expresa de ese
+bloque (experiencia Android sin `pdf.js`), no un descuido: ver 5.3 quater.
 
 Lo que queda es un control de aplicación, no DRM (ver 5.3): un alumno **con
 matrícula activa** en ese curso puede descargar las páginas del PDF que está
@@ -117,6 +126,86 @@ peticiones en orden y dentro de los límites) y reconstruir el PDF. Los límites
 por usuario y globales encarecen el abuso y protegen la cuota gratuita, no son
 DRM. No se ha implementado marca de agua ni cifrado; si se exige, es un bloque
 aparte (marca de agua por usuario, PDF cifrado).
+
+### 5.3 ter Subida de PDF: límites conocidos
+
+Lo que la subida por partes **no** resuelve, dicho sin adornos:
+
+- **No hay análisis antivirus.** El servidor comprueba que el fichero es un PDF
+  (cabecera, tamaños, SHA-256) pero no que su contenido sea inocuo. Un PDF con
+  código incrustado es un PDF válido. El alumnado lo descarga por páginas y lo
+  abre con su lector: la mitigación real es que solo se aceptan ficheros de
+  administradores y que el visor es un bloque posterior.
+- **El número de páginas es una declaración**, no una comprobación. Si el
+  administrador se equivoca, el control de lectura usará un número incorrecto.
+  La interfaz lo exige de forma expresa y el modelo de datos lo guarda tal cual.
+- **Sin TTL**: Firestore solo ofrece TTL en Blaze. Una subida pendiente que se
+  abandona ocupa su reserva hasta que alguien la cancela desde el editor. Es
+  visible (aparece como «subida pendiente») y cancelable, pero no caduca sola.
+- **La atomicidad de la reserva está probada en dobles y en la demo, no en
+  Firestore real**: sin JVM no hay emulador y no se ha ejecutado. La
+  implementación usa transacciones con lectura previa del contador, que es el
+  patrón documentado, pero **no está verificado aquí**.
+- **El límite de cuerpo de las funciones desplegadas no se puede verificar desde
+  el repositorio.** Por eso la interfaz usa partes de 768 KiB: el margen frente a
+  los ~4,5 MB documentados por Vercel en el plan Hobby es amplio, pero es una
+  precaución, no una medición hecha en producción.
+- **Un `pending` no se sirve a nadie**: ni al alumnado, ni al administrador por
+  la API de lectura. Para inspeccionarlo hay que finalizarlo o cancelarlo.
+
+### 5.3 quater Lectura del PDF completo: qué se comprueba y qué no
+
+`GET /api/documents/{id}/file` entrega el fichero entero para que lo abra la
+aplicación de PDF del dispositivo. Antes de enviar un byte, el servidor
+comprueba, en este orden y sin fiarse de nada del cliente:
+
+1. cuenta **activa** (una cookie no basta; `status` sale de la base de datos);
+2. forma del identificador (`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`, sin `..`):
+   así el id no puede convertirse en una ruta ni en una consulta;
+3. documento **existente y `active`**: ni `pending`, ni `aborted`, ni
+   `archived`, ni con partes incompletas;
+4. curso con **versión publicada** (no vale «el fichero existe»);
+5. **matrícula activa** del actor en ese curso;
+6. el documento está **referenciado expresamente** en la definición de esa
+   versión publicada: un PDF de un borrador o de una versión antigua no se
+   entrega aunque su id sea correcto y sus bytes sigan en el almacén;
+7. las partes cubren el tamaño declarado (`bytes`) y el **SHA-256 global**
+   coincide con el que se verificó al activar el documento.
+
+Denegaciones y respuestas: los casos «no existe», «no está en la versión
+publicada» y «documento no servible» devuelven **el mismo 404**
+(`DOCUMENT_NOT_FOUND`), para no revelar qué documentos hay en borradores ni en
+versiones antiguas; sin matrícula, **403** (`COURSE_NOT_AUTHORIZED`); cuenta no
+activa, **403**; integridad rota (parte ausente, tamaño, firma o SHA-256), **409**
+(`DOCUMENT_CORRUPTED`), sin devolver un PDF aparentemente válido. Ningún error
+incluye rutas del almacén, claves de respuesta ni datos de otros documentos.
+
+Cabeceras de la respuesta correcta: `Content-Type: application/pdf`,
+`Content-Disposition: inline; filename="…"` con un nombre ASCII derivado del
+título (nunca la ruta interna), `Cache-Control: no-store, max-age=0, private`,
+`X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` y
+`Content-Length`. No hay caché compartida: la respuesta es privada por
+`Cache-Control` y `private`, y el proxy de sesión no la almacena.
+
+**Lo que esto no es:**
+
+- **No es un antivirus.** El SHA-256 demuestra que los bytes son los que se
+  subieron y que no se han alterado en el almacén, **no** que el PDF sea inocuo.
+  Un PDF con código incrustado puede tener el hash correcto. La mitigación sigue
+  siendo que solo administración sube ficheros y que el alumnado abre el PDF con
+  el lector del sistema (con su propio aislamiento), no con código de la
+  aplicación.
+- **No evita que quien tiene matrícula guarde el fichero.** Entregar el PDF
+  completo implica exactamente eso: una persona autorizada puede guardarlo. El
+  control es de acceso (quién), no de uso (qué hace después). El límite por
+  usuario y el global encarecen la descarga masiva, no la impiden.
+- **No demuestra nada contra Firestore real.** La batería se ejecuta con dobles y
+  con la demostración; el emulador sigue sin JVM. Que las reglas cierren
+  `pdfChunks` a todo cliente es una afirmación del fichero de reglas, **no** una
+  prueba ejecutada.
+- **La versión antigua no se sirve aunque sea pública en su momento**: solo vale
+  la versión publicada vigente del curso. Es lo que evita que un enlace guardado
+  siga dando acceso a material retirado.
 
 ### 5.3 bis Copias de seguridad: cifradas, pero sin instantánea global
 
@@ -161,12 +250,18 @@ reglas), así que un fallo en las reglas no rompe la app ni abre el acceso vía
 servidor; pero sí podría dejar datos expuestos a un cliente manipulado.
 Primera acción pendiente: `npm run test:rules` en un entorno con JDK 11+.
 
-### 5.7c Metadatos de documentos visibles para cualquier cuenta activa
-La regla de `documents` deja leer metadatos a cualquier cuenta activa, sin
-comprobar pertenencia al curso (no existe aún modelo de matriculación). No
-expone el PDF —los fragmentos están en `pdfChunks`, cerrados a todo cliente y
-sin identificador adivinable útil— solo títulos, número de páginas y tamaño.
-Se cerrará cuando se defina la matriculación.
+### 5.7c (cerrado en el bloque 03) Metadatos de documentos visibles para el cliente
+La regla de `documents` permitía leer metadatos a cualquier cuenta activa
+matriculada en el curso. Con el ciclo de vida de cursos eso alcanzaba también a
+los documentos de **borradores**: quien conociera un identificador veía título y
+páginas de material no publicado.
+
+Cerrado por diseño, no por filtro: `documents` pasa a solo-servidor
+(`allow read, write: if false`) y sale de `CLIENT_READABLE_COLLECTIONS`. La
+aplicación nunca leyó Firestore desde el navegador, así que la regla no daba
+ninguna funcionalidad; solo superficie. Queda pendiente **desplegar** las reglas
+y ejecutar `npm run test:rules` en un entorno con JDK: desde aquí no se han
+publicado ni verificado (ver 5.6).
 
 ### 5.8 Cuota de almacenamiento (nuevo en fase 4)
 Los PDF comparten la cuota de 1 GiB de Firestore con el resto de la base de

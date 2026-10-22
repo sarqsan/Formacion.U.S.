@@ -54,6 +54,22 @@ export type ServerConfig = z.infer<typeof serverEnvSchema> & {
 
 let cached: ServerConfig | null = null;
 
+/**
+ * Origen público configurado (`APP_ORIGIN`), **sin** exigir el resto de la
+ * configuración.
+ *
+ * Hace falta en los endpoints que también funcionan en la demostración: allí no
+ * hay Firebase ni credenciales, así que `getServerConfig()` fallaría con un 503
+ * por motivos que no tienen nada que ver con la petición. La comprobación de
+ * origen sigue siendo la misma (`assertTrustedOrigin`), y en modo real el resto
+ * del camino (`requireActor`) vuelve a exigir la configuración completa, incluido
+ * el endurecimiento de producción (APP_ORIGIN obligatorio y https).
+ */
+export function configuredAppOrigin(env: ServerEnvInput = process.env): string | undefined {
+  const value = env.APP_ORIGIN?.trim();
+  return value ? value : undefined;
+}
+
 export type ServerEnvInput = Record<string, string | undefined>;
 
 export function getServerConfig(env: ServerEnvInput = process.env): ServerConfig {

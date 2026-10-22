@@ -75,6 +75,9 @@ export default async function AdminPage() {
           <Link href="/admin/cursos" className="btn btn-primary">
             Gestionar cursos
           </Link>
+          <Link href="/admin/cursos/nuevo" className="btn btn-secondary">
+            Nuevo curso
+          </Link>
           <Link href="/admin/matriculas" className="btn btn-secondary">
             Matrículas
           </Link>

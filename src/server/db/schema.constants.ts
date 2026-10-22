@@ -12,7 +12,15 @@
  * y en `docs/MODELO-DATOS.md`.
  */
 
-export const SCHEMA_VERSION = 1;
+/**
+ * Versión del esquema.
+ *
+ * v1 → v2 (bloque 03): `documents` deja de ser legible por el cliente y los
+ * documentos guardan `originVersion` (la versión en la que se subieron) además
+ * de `version`, que se conserva por compatibilidad. Los campos nuevos son
+ * opcionales en lectura, así que una base v1 sigue siendo utilizable.
+ */
+export const SCHEMA_VERSION = 2;
 
 export const COLLECTIONS = {
   accounts: "accounts",
@@ -33,7 +41,14 @@ export const COLLECTIONS = {
 
 export const META_DOC = { collection: COLLECTIONS.meta, id: "schema" } as const;
 
-/** Colecciones legibles por el cliente (solo lo que permiten las reglas). */
+/**
+ * Colecciones legibles por el cliente (solo lo que permiten las reglas).
+ *
+ * `documents` NO está aquí desde el esquema v2: aunque solo contiene metadatos
+ * (título, páginas, tamaño), los metadatos de un documento en **borrador** no
+ * deben ser visibles para el alumnado. Los lee el servidor a través de la API
+ * de documentos, que comprueba sesión, matrícula y publicación.
+ */
 export const CLIENT_READABLE_COLLECTIONS = [
   COLLECTIONS.accounts,
   COLLECTIONS.audits,
@@ -42,7 +57,6 @@ export const CLIENT_READABLE_COLLECTIONS = [
   COLLECTIONS.progress,
   COLLECTIONS.progressHistory,
   COLLECTIONS.attempts,
-  COLLECTIONS.documents,
 ] as const;
 
 /** Colecciones solo-servidor. */
@@ -50,6 +64,7 @@ export const SERVER_ONLY_COLLECTIONS = [
   COLLECTIONS.usernames,
   COLLECTIONS.activationTokens,
   COLLECTIONS.answerKeys,
+  COLLECTIONS.documents,
   COLLECTIONS.pdfChunks,
   COLLECTIONS.meta,
 ] as const;

@@ -55,6 +55,8 @@ describe("reglas de Firestore", () => {
     expect(rules).toMatch(/match \/meta\/\{[^}]+\}\s*\{\s*allow read, write: if false;/);
     expect(rules).toMatch(/match \/usernames\/\{[^}]+\}\s*\{\s*allow read, write: if false;/);
     expect(rules).toMatch(/match \/pdfChunks\/\{[^}]+\}\s*\{\s*allow read, write: if false;/);
+    // Esquema v2: los metadatos de documentos tampoco los lee el cliente.
+    expect(rules).toMatch(/match \/documents\/\{[^}]+\}\s*\{\s*allow read, write: if false;/);
     expect(rules).toMatch(/match \/activationTokens\/\{[^}]+\}\s*\{\s*allow read, write: if false;/);
   });
 
@@ -94,6 +96,10 @@ describe("índices", () => {
     expect(signature("attempts")).toContain("uid,at");
     expect(signature("attempts")).toContain("courseId,version,at");
     expect(signature("documents")).toContain("courseId,version,topicId");
+    // Matrículas activas de un curso: la consulta de `listByCourse` hace
+    // where(courseId) + where(status) y necesita este índice compuesto.
+    expect(signature("enrollments")).toContain("uid,courseId");
+    expect(signature("enrollments")).toContain("courseId,status");
   });
 });
 

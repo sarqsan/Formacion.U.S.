@@ -88,12 +88,13 @@ Firestore a través de los adaptadores, con autorización comprobada en servidor
 | Cursos por alumno con progreso | `/panel` | `enrollments`, `courses`, `courses/*/versions`, `progress` |
 | Detalle del curso, temas y documentos | `/cursos/[courseId]` | `courses`, `courses/*/versions`, `progress` |
 | Lectura de documentos y registro del avance | `/cursos/[courseId]/documentos/[documentId]` | `progress`, `documents`, `pdfChunks` |
+| Apertura del PDF completo con el visor del navegador (bloque 07) | `GET /api/documents/[documentId]/file` | `documents`, `pdfChunks`, `courses/*/versions`, `enrollments` |
 | Cuestionarios y examen final | `/cursos/[courseId]/temas/*`, `/examen` | `courses`, `answerKeys`, `progress`, `attempts` |
 | Matrículas y revocaciones | `/admin/matriculas` | `enrollments` |
 | Borradores y publicación de versiones | `/admin/cursos/*` | `courses`, `courses/*/versions`, `answerKeys` |
 | Resumen y progreso de administración | `/admin`, `/admin/progreso` | `accounts`, `enrollments`, `progress`, `attempts` |
 | Importación de personas (vista previa y confirmación) | `/admin/importar`, `/api/admin/import/*` | `usernames`, `accounts`, `activationTokens`, `audits` |
-| Subida de PDF por fragmentos (sin Storage) | `POST /api/admin/documents` | `documents`, `pdfChunks`, `meta/storage` |
+| Subida de PDF por fragmentos (sin Storage, bloque 06) | `/api/admin/documents/uploads/*`, `/api/admin/documents/[id]/attach` | `documents`, `pdfChunks`, `meta/storage` |
 | Comprobación de conexión | `/estado` | lectura de `meta` |
 
 Todas las transacciones que ya estaban escritas siguen igual: matrícula
@@ -108,7 +109,9 @@ Solo bajo `DEMO_MODE=1`, y siempre rotulado en la interfaz:
 
 - Cuentas ficticias (`demo-admin`, `demo-alumno-1`, `demo-alumno-2`), sus
   matrículas, su progreso y sus intentos.
-- Contenido sintético de dos cursos y **pantallas de texto** en lugar de PDF.
+- Contenido sintético de dos cursos y PDF de ejemplo **generados en memoria** al
+  arrancar (el repositorio no guarda binarios); el alumnado los abre con el visor
+  del navegador sobre la misma ruta que en producción.
 - La vista previa de importación lee un `.xlsx` real, pero confirmar la
   importación **falla a propósito** con `DEMO_NOT_CONNECTED`: crear cuentas
   exige Firebase Authentication y no se simula.
@@ -155,7 +158,7 @@ sin autorización expresa.
 | --- | --- |
 | `npm run typecheck` | pasa |
 | `npm run lint` | pasa (0 errores, 0 avisos) |
-| `npm test` | **547 pruebas pasan**, 4 omitidas |
+| `npm test` | **757 pruebas pasan**, 4 omitidas (cifra actualizada en el bloque 07; al cerrar la fase 8 eran 547) |
 | `npm run build` | compila; 25 rutas |
 | `npm run check:demo` (HTTP real, demo intacta) | PASSED (19 comprobaciones) |
 | Pruebas nuevas del portal (`tests/server/portal.test.ts`) | 14 |
@@ -188,7 +191,8 @@ Qué demuestran las pruebas nuevas:
 | `npm run test:firestore` — 4 pruebas de integración | **BLOCKED** | mismo motivo |
 | Cualquier ejecución contra `formacionus-63555` | **NO EJECUTADA** | sin credenciales; además escribir en el proyecto real requiere autorización expresa del usuario |
 | `npm run check:firebase` con credenciales reales | **PENDIENTE** | depende de los pasos del apartado 5 |
-| Subida y lectura de un PDF real | **NO EJECUTADA** | no hay documentos reales ni emulador; el código está probado con dobles |
+| Subida y lectura de un PDF real | **NO EJECUTADA** | no hay documentos reales ni emulador; el código está probado con dobles y en la demostración |
+| Apertura del PDF en un dispositivo Android real | **NO EJECUTADA** | no hay dispositivo en el entorno; el enlace a pestaña nueva está en la interfaz, sin medir |
 
 Ninguna de estas se declara superada.
 
@@ -300,3 +304,24 @@ que se cambió.
 Comprobado también que la cookie se emite con `HttpOnly`, `SameSite=Lax`,
 `Secure` en producción, `Path=/` y sin `Domain` (requisito del prefijo
 `__Host-`).
+
+---
+
+## 12. Estado tras los bloques 03–07 (22/10/2026)
+
+Esta fase dejó la aplicación conectada «en código» a Firestore real. Los bloques
+posteriores añadieron funcionalidad **sobre la misma capa**, sin abrir una
+segunda:
+
+| Bloque | Añadido | Sigue en memoria (demo) | Sigue sin ejecutar contra Firebase real |
+| --- | --- | --- | --- |
+| 03 | Ciclo de versiones y reglas de acceso al contenido | — | transacciones de publicación |
+| 04 | Editor de estructura de borradores con revisión | — | escrituras reales |
+| 05 | Cuestionarios y examen final con claves separadas | — | transacciones de guardado |
+| 06 | Subida de PDF por partes, cuota y asociación | fragmentos y reservas | reservas y activación |
+| 07 | Apertura del PDF completo con el visor nativo | PDF de ejemplo generado | lectura de fragmentos y entrega |
+
+Lo que sigue siendo cierto y no se ha relajado: nada se ha escrito en
+`formacionus-63555`, no se han publicado reglas ni índices, no hay despliegue y
+las pruebas de reglas siguen **bloqueadas** por falta de JVM. Ver `PRUEBAS.md`
+§18 y §19 para los números exactos de cada bloque.

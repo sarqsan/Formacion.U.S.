@@ -159,6 +159,57 @@ export function validateAccountDocument(doc: Record<string, unknown>): void {
   }
 }
 
+/**
+ * Ficha del curso (`courses/{courseId}`).
+ *
+ * `publishedVersion` y `lastDraftVersion` son punteros: el primero dice qué ve
+ * el alumnado, el segundo cuál fue el último borrador guardado. Un curso recién
+ * creado tiene **los dos a null**: no hay versión publicada ni borrador.
+ */
+export interface CourseDocumentShape {
+  courseId: string;
+  title: string;
+  publishedVersion: number | null;
+  lastDraftVersion: number | null;
+  createdAt: string;
+  createdBy: string;
+}
+
+function isVersionPointer(value: unknown): boolean {
+  return value === null || (typeof value === "number" && Number.isInteger(value) && value >= 1);
+}
+
+export function validateCourseDocument(doc: Record<string, unknown>): void {
+  if (typeof doc.courseId !== "string" || !ID_SEGMENT.test(doc.courseId)) {
+    throw new DomainError(
+      "SCHEMA_COURSE_INVALID",
+      "La ficha del curso no tiene un identificador válido.",
+      500,
+    );
+  }
+  if (typeof doc.title !== "string" || !doc.title.trim()) {
+    throw new DomainError("SCHEMA_COURSE_INVALID", "La ficha del curso no tiene título.", 500);
+  }
+  for (const field of ["publishedVersion", "lastDraftVersion"]) {
+    if (!isVersionPointer(doc[field])) {
+      throw new DomainError(
+        "SCHEMA_COURSE_INVALID",
+        `«${field}» debe ser null o un entero mayor o igual que 1.`,
+        500,
+      );
+    }
+  }
+  for (const field of ["createdAt", "createdBy"]) {
+    if (typeof doc[field] !== "string" || !doc[field]) {
+      throw new DomainError(
+        "SCHEMA_COURSE_INVALID",
+        `La ficha del curso no tiene el campo obligatorio «${field}».`,
+        500,
+      );
+    }
+  }
+}
+
 export interface ProgressDocumentShape {
   uid: string;
   courseId: string;

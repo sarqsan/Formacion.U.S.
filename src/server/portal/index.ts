@@ -3,12 +3,17 @@ import { assertAdmin, type Actor } from "@/domain/auth/authorization";
 import type { CourseVersionDefinition } from "@/domain/courses/content";
 import type { ImportPreview } from "@/domain/people/import-rows";
 import type { ImportDependencies } from "@/server/import/service";
+import type { DraftStructure, SaveAssessmentsResult } from "@/server/courses/editor";
+import type { QuizQuestionDefinition } from "@/domain/assessments/scoring";
+import type { CreateUploadInput, StorageUsage } from "@/server/documents/service";
+import type { PdfDocumentMeta } from "@/server/documents/store";
+import type { AttachResult } from "@/server/documents/attach";
 import { submitAssessment } from "@/server/assessments/service";
 import { parsePeopleWorkbook } from "@/server/import/excel";
 import { buildImportPreview } from "@/server/import/service";
 import { isDemoMode } from "@/demo/session";
 import * as demo from "@/demo/service";
-import { definitionOf as demoDefinitionOf, demoState, listVersionsOf } from "@/demo/store";
+import { definitionOf as demoDefinitionOf, demoState } from "@/demo/store";
 import * as firebase from "@/server/portal/firebase";
 
 /**
@@ -71,6 +76,33 @@ export async function readingView(
     return { kind: "screens" as const, ...view };
   }
   return firebase.learnerReadingView(actor, input);
+}
+
+/**
+ * PDF completo para el visor nativo del navegador.
+ *
+ * Misma función en demostración y en producción: el servicio comprueba
+ * identidad, matrícula, versión publicada, referencia del documento e
+ * integridad. Lo único que cambia es de dónde salen los bytes.
+ */
+export async function documentFile(actor: Actor, documentId: string) {
+  return portalMode() === "demo"
+    ? demo.documentFile(actor, documentId)
+    : firebase.documentFile(actor, documentId);
+}
+
+/** ¿Se puede ofrecer el visor? (no lee los bytes) */
+export async function documentFileAvailable(actor: Actor, documentId: string): Promise<boolean> {
+  return portalMode() === "demo"
+    ? demo.documentFileAvailable(actor, documentId)
+    : firebase.documentFileAvailable(actor, documentId);
+}
+
+/** Título, páginas y tamaño si el documento es accesible; `null` si no. */
+export async function documentFileSummary(actor: Actor, documentId: string) {
+  return portalMode() === "demo"
+    ? demo.documentFileSummary(actor, documentId)
+    : firebase.documentFileSummary(actor, documentId);
 }
 
 /** Marca una página como leída. Devuelve la siguiente permitida. */
@@ -208,6 +240,25 @@ export async function definitionOf(
 // Administración (escritura)
 // ---------------------------------------------------------------------------
 
+/**
+ * Crea un curso vacío a partir de la plantilla vacía.
+ *
+ * Es la primera pieza del ciclo de vida: nace sin versiones
+ * (`publishedVersion` y `lastDraftVersion` a null). No hay conmutación
+ * silenciosa: en modo real escribe en Firestore, en demostración en memoria, y
+ * un fallo de Firestore se muestra como error (503), nunca se sustituye por el
+ * almacén de la demostración.
+ */
+export async function adminCreateCourse(
+  actor: Actor,
+  input: { courseId: string; title: string; description?: string },
+) {
+  assertAdmin(actor);
+  return portalMode() === "demo"
+    ? demo.adminCreateCourse(actor, input)
+    : firebase.adminCreateCourse(actor, input);
+}
+
 export async function adminEnroll(actor: Actor, uid: string, courseId: string) {
   return portalMode() === "demo"
     ? demo.adminEnroll(actor, uid, courseId)
@@ -220,38 +271,152 @@ export async function adminRevokeEnrollment(actor: Actor, uid: string, courseId:
     : firebase.adminRevokeEnrollment(actor, uid, courseId);
 }
 
-export async function adminSaveDraft(actor: Actor, definition: CourseVersionDefinition) {
+/** Abre (o reanuda) el borrador del curso. No publica nada. */
+export async function adminStartDraft(actor: Actor, courseId: string) {
+  assertAdmin(actor);
   return portalMode() === "demo"
-    ? demo.adminSaveDraft(actor, definition)
-    : firebase.adminSaveDraft(actor, definition);
+    ? demo.adminStartDraft(actor, courseId)
+    : firebase.adminStartDraft(actor, courseId);
 }
 
-export async function adminUpdateDraft(actor: Actor, definition: CourseVersionDefinition) {
+/** Guarda la estructura del borrador (título, descripción y temas). */
+export async function adminSaveDraftStructure(
+  actor: Actor,
+  input: {
+    courseId: string;
+    version: number;
+    expectedRevision: number;
+    structure: DraftStructure;
+  },
+) {
+  assertAdmin(actor);
   return portalMode() === "demo"
-    ? demo.adminUpdateDraft(actor, definition)
-    : firebase.adminUpdateDraft(actor, definition);
+    ? demo.adminSaveDraftStructure(actor, input)
+    : firebase.adminSaveDraftStructure(actor, input);
+}
+
+/** Guarda cuestionarios y examen final del borrador (versión + claves juntas). */
+export async function adminSaveDraftAssessments(
+  actor: Actor,
+  input: {
+    courseId: string;
+    version: number;
+    expectedRevision: number;
+    topicQuizzes?: Record<string, QuizQuestionDefinition[]>;
+    finalExam?: QuizQuestionDefinition[];
+  },
+): Promise<SaveAssessmentsResult> {
+  assertAdmin(actor);
+  return portalMode() === "demo"
+    ? demo.adminSaveDraftAssessments(actor, input)
+    : firebase.adminSaveDraftAssessments(actor, input);
+}
+
+// ---------------------------------------------------------------------------
+// Documentos PDF (bloque 06)
+// ---------------------------------------------------------------------------
+
+/**
+ * Subida por partes y asociación al borrador.
+ *
+ * Estas operaciones son de administración y escriben: siempre exigen sesión de
+ * administrador **aquí** (además de en el servicio) y se enrutan al almacén de
+ * la demostración o a Firestore según el modo. El identificador del documento
+ * lo calcula el servidor.
+ */
+export async function adminCreatePdfUpload(actor: Actor, input: Omit<CreateUploadInput, "actor">) {
+  assertAdmin(actor);
+  return portalMode() === "demo"
+    ? demo.adminCreatePdfUpload(actor, input)
+    : firebase.adminCreatePdfUpload(actor, input);
+}
+
+export async function adminUploadPdfDocument(
+  actor: Actor,
+  input: {
+    courseId: string;
+    version: number;
+    topicId: string;
+    title: string;
+    pageCount: number;
+    bytes: Uint8Array;
+  },
+) {
+  assertAdmin(actor);
+  return portalMode() === "demo"
+    ? demo.adminUploadPdfDocument(actor, input)
+    : firebase.adminUploadPdfDocument(actor, input);
+}
+
+export async function adminPutPdfPart(
+  actor: Actor,
+  input: { documentId: string; index: number; bytes: Uint8Array },
+) {
+  assertAdmin(actor);
+  return portalMode() === "demo"
+    ? demo.adminPutPdfPart(actor, input)
+    : firebase.adminPutPdfPart(actor, input);
+}
+
+export async function adminFinalizePdfUpload(actor: Actor, documentId: string) {
+  assertAdmin(actor);
+  return portalMode() === "demo"
+    ? demo.adminFinalizePdfUpload(actor, documentId)
+    : firebase.adminFinalizePdfUpload(actor, documentId);
+}
+
+export async function adminAbortPdfUpload(actor: Actor, documentId: string) {
+  assertAdmin(actor);
+  return portalMode() === "demo"
+    ? demo.adminAbortPdfUpload(actor, documentId)
+    : firebase.adminAbortPdfUpload(actor, documentId);
+}
+
+export async function adminArchivePdfDocument(actor: Actor, documentId: string) {
+  assertAdmin(actor);
+  return portalMode() === "demo"
+    ? demo.adminArchivePdfDocument(actor, documentId)
+    : firebase.adminArchivePdfDocument(actor, documentId);
+}
+
+export async function adminPdfStorage(actor: Actor): Promise<StorageUsage> {
+  assertAdmin(actor);
+  return portalMode() === "demo" ? demo.adminPdfStorage() : firebase.adminPdfStorage(actor);
+}
+
+export async function adminPendingPdfUploads(
+  actor: Actor,
+  courseId: string,
+  version: number,
+): Promise<PdfDocumentMeta[]> {
+  assertAdmin(actor);
+  return portalMode() === "demo"
+    ? demo.adminPendingPdfUploads(courseId, version)
+    : firebase.adminPendingPdfUploads(actor, courseId, version);
+}
+
+export async function adminAttachDocument(
+  actor: Actor,
+  input: { documentId: string; expectedRevision: number },
+): Promise<AttachResult> {
+  assertAdmin(actor);
+  return portalMode() === "demo"
+    ? demo.adminAttachDocument(actor, input)
+    : firebase.adminAttachDocument(actor, input);
+}
+
+/** Datos del editor de estructura. Solo lectura; nunca publica. */
+export async function adminDraftEditor(actor: Actor, courseId: string, version?: number) {
+  assertAdmin(actor);
+  return portalMode() === "demo"
+    ? demo.adminDraftEditor(courseId, version)
+    : firebase.adminDraftEditor(actor, courseId, version);
 }
 
 export async function adminPublish(actor: Actor, courseId: string, version: number) {
   return portalMode() === "demo"
     ? demo.adminPublish(actor, courseId, version)
     : firebase.adminPublish(actor, courseId, version);
-}
-
-/** Crea el borrador siguiente a partir de una versión existente. */
-export async function adminNewDraft(actor: Actor, courseId: string, fromVersion: number) {
-  assertAdmin(actor);
-
-  if (portalMode() === "firebase") {
-    return firebase.adminNewDraft(actor, courseId, fromVersion);
-  }
-
-  const base = demoDefinitionOf(courseId, fromVersion);
-  if (!base) {
-    throw new DomainError("VERSION_NOT_FOUND", "No se encontró la versión base.", 404);
-  }
-  const nextVersion = Math.max(...listVersionsOf(courseId).map((item) => item.version), 0) + 1;
-  return demo.adminSaveDraft(actor, { ...base, version: nextVersion });
 }
 
 // ---------------------------------------------------------------------------

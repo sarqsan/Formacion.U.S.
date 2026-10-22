@@ -554,3 +554,294 @@ Sigue **sin ejecutarse** contra el proyecto `formacionus-63555`: no hay credenci
 este entorno y no se escribe en el proyecto real sin autorización. El ID del
 proyecto está confirmado por el usuario; `apiKey` y `appId` no, porque dependen
 de la app web registrada.
+
+## 15. Bloque 03 — cimientos del ciclo de vida de los cursos (21/10/2026)
+
+Alcance ejecutado: esquema v2 (retirada de `documents` de las colecciones
+legibles por el cliente), índice compuesto de matrículas, módulo de plantillas,
+servicio de creación de cursos y página `/admin/cursos/nuevo`.
+
+| Comprobación | Comando | Resultado |
+| --- | --- | --- |
+| Cadena completa | `npm run verify` | **exit 0**: tipado 0 errores, lint 0 avisos, **579 pruebas en verde**, build con `/admin/cursos/nuevo` entre las rutas |
+| Pruebas totales | `npm test` | **579 pasan**, 4 omitidas (integración con emulador), 38 ficheros |
+| Recorrido de la demostración | `DEMO_MODE=1 npx next start -p 3100` + `node scripts/demo-smoke.mjs http://127.0.0.1:3100` | **PASSED** (19 comprobaciones), igual que antes del bloque |
+| Alta de curso por HTTP | guion propio contra el servidor anterior: formulario real, acciones de servidor sin JavaScript | **18 comprobaciones, PASSED** (detalle abajo) |
+| Reglas de Firestore | `npm run test:rules` | **BLOQUEADO**: sin JVM el emulador no arranca. 41 pruebas escritas, **0 ejecutadas** |
+| Integración con emulador | `npm run test:firestore` | **BLOQUEADO** por el mismo motivo (4 pruebas omitidas) |
+| Conexión real | `npm run check:firebase` | **BLOQUEADO**: TLS hacia Google se corta desde el sandbox. Sin credenciales usadas |
+
+Pruebas nuevas:
+
+| Fichero | Pruebas | Qué fijan |
+| --- | ---: | --- |
+| `tests/domain/course-template.test.ts` | 15 | La definición vacía no es publicable (y se guarda igual); clonación profunda con independencia en los dos sentidos; metadatos nuevos sin publicación |
+| `tests/server/course-editor.test.ts` | 12 | Curso nuevo con `publishedVersion` y `lastDraftVersion` a null; no sobrescribe; permisos; paridad demo/real |
+| `tests/server/schema.test.ts` (ampliado) | +5 | `documents` ya no es legible por el cliente; validación de la ficha del curso |
+| `tests/server/schema-drift.test.ts` (ampliado) | +2 | Reglas cierran `documents`; el índice `enrollments(courseId,status)` está declarado y no falta ninguno previo |
+
+Comprobaciones por HTTP de la página nueva (18, todas en verde): el alumno es
+redirigido a `/panel` y sin sesión a `/login`; el administrador ve el formulario;
+crear devuelve 303 a `/admin/cursos/{id}?ok=creado`; la ficha confirma el alta y
+dice «Este curso no tiene versiones»; el curso aparece en el listado marcado
+como sin versiones; no aparece en el panel del alumno; un identificador repetido
+se rechaza **sin sobrescribir** el curso existente; un identificador inválido se
+rechaza en el servidor aunque el navegador no lo hubiera validado.
+
+Lo que estas pruebas **no** demuestran: que Firestore escriba la ficha (los
+dobles son en memoria), que `create()` traduzca ALREADY_EXISTS en el servicio
+real, ni que las reglas se comporten así al desplegarlas. Eso sigue pendiente de
+un entorno con JDK y credenciales.
+
+## 16. Bloque 04 — editor de estructura y borradores (21/10/2026)
+
+Alcance ejecutado: apertura del primer borrador (creado o reanudado), guardado y
+recuperación de la estructura (título, descripción, temas), validación en tres
+niveles, concurrencia optimista y errores reales en la interfaz. **Nada de este
+bloque publica, sube PDF ni edita cuestionarios.**
+
+| Comprobación | Comando | Resultado |
+| --- | --- | --- |
+| Cadena completa | `npm run verify` | **exit 0**: tipado 0 errores, lint 0 avisos, **638 pruebas en verde**, build con `/admin/cursos/[courseId]/editar` |
+| Pruebas totales | `npm test` | **638 pasan**, 4 omitidas (integración con emulador), 40 ficheros + 1 omitido |
+| Recorrido de la demostración | `DEMO_MODE=1 npx next start -p 3000` + `npm run check:demo` | **PASSED**, **46 comprobaciones** (antes 19) |
+| Reglas de Firestore | `npm run test:rules` | **BLOQUEADO**: sin JVM el emulador no arranca. 0 ejecutadas |
+| Integración con emulador | `npm run test:firestore` | **BLOQUEADO** por el mismo motivo |
+| Conexión real | `npm run check:firebase` | **BLOQUEADO**: TLS hacia Google se corta desde el sandbox. Sin credenciales usadas |
+
+Pruebas nuevas (59):
+
+| Fichero | Pruebas | Qué fijan |
+| --- | ---: | --- |
+| `tests/domain/courses-draft.test.ts` | 17 | El borrador vacío **no** genera errores de estructura; límites de título/descripción/temas; ids únicos y válidos; órdenes enteros sin repetir; `mandatory` booleano; avisos sin bloquear; orden normalizado y determinista; tamaño UTF-8 real |
+| `tests/server/draft-editor.test.ts` | 29 | Primer borrador v1 de un curso sin versiones; reanudar sin duplicar; guardar vacío e incompleto y recuperarlo; crear/editar/reordenar conservando ids, documentos y cuestionarios; obligatorio/opcional en ambos sentidos; la publicada queda idéntica campo a campo; `DRAFT_STALE`, `DRAFT_CONFLICT` y `VERSION_CONFLICT`; carrera de dos aperturas; fallo de persistencia sin escritura ni éxito falso; paridad demo ↔ dobles; el alumnado sigue viendo la versión publicada |
+| `tests/server/draft-form.test.ts` | 13 | Lectura del `FormData` real: reordenar por número, eliminar por casilla o por ausencia, añadir tema, rechazar duplicados, recortar espacios; de formulario a almacén y vuelta; rutas de las acciones con `error` frente a `ok` |
+
+Recorrido HTTP añadido a `scripts/demo-smoke.mjs` (27 comprobaciones nuevas,
+todas en verde):
+
+- el botón «Nueva versión en borrador» crea la v2 y lleva al editor;
+- el editor carga, guarda y **al reabrir aparece lo guardado** (título y tema nuevo);
+- guardar con la revisión vieja devuelve **error** y no toca el contenido bueno;
+- la versión publicada sigue publicada y no lleva el título del borrador;
+- el alumnado no ve el borrador ni en su panel ni en el catálogo;
+- un curso recién creado ofrece «Preparar el primer borrador», la v1 nace sin
+  temas, se guarda vacía y el curso no aparece al alumnado.
+
+Lo que estas pruebas **no** demuestran (y por eso no se afirma):
+
+- que la transacción de Firestore (`createDraftVersion`, `replaceDraftContent`)
+  se comporte así contra un proyecto real: los dobles y la demo son memoria y el
+  emulador no arranca sin JVM;
+- que las reglas permitan o denieguen nada: no se han ejecutado ni desplegado;
+- que el editor funcione con Firebase real (TLS cortado desde este entorno).
+
+Cómo cerrarlo cuando haya entorno:
+
+```bash
+npm run test:rules        # requiere JDK
+npm run test:firestore    # requiere JDK
+npm run check:firebase    # requiere red hacia Google y credenciales
+```
+
+## 17. Bloque 05 — cuestionarios y examen final con claves separadas (22/10/2026)
+
+Alcance ejecutado: crear, editar y eliminar preguntas en el cuestionario de cada
+tema y en el examen final de un **borrador**, con las respuestas correctas en su
+documento solo-servidor y guardado conjunto de contenido y claves. **No** se ha
+tocado la publicación, el visor ni la subida de PDF.
+
+| Comprobación | Comando | Resultado |
+| --- | --- | --- |
+| Cadena completa | `npm run verify` | **exit 0**: tipado 0 errores, lint 0 avisos, **689 pruebas en verde**, build OK |
+| Pruebas totales | `npm test` | **689 pasan**, 4 omitidas (emulador), 43 ficheros + 1 omitido (44) |
+| Recorrido de la demostración | `DEMO_MODE=1 npx next start -p 3000` + `npm run check:demo` | **PASSED**, **56 comprobaciones** (antes 46) |
+| Reglas de Firestore | `npm run test:rules` | **BLOQUEADO**: sin JVM |
+| Integración con emulador | `npm run test:firestore` | **BLOQUEADO**: sin JVM |
+| Conexión real | `npm run check:firebase` | **BLOQUEADO**: TLS hacia Google cortado; sin credenciales |
+
+Pruebas nuevas (51):
+
+| Fichero | Pruebas | Qué fijan |
+| --- | ---: | --- |
+| `tests/domain/courses-quiz.test.ts` | 19 | Estructura de una pregunta (enunciado, 2–8 opciones, identificadores válidos y únicos, una correcta que exista, tipo coherente); cuestionario vacío permitido; límites; aviso —no error— de opción sin texto; `validateCourseVersion` y `validateQuizDefinition` siguen igual de estrictas |
+| `tests/server/draft-quiz.test.ts` | 19 | Guardar contenido y claves fuera de la versión; editar conservando identificadores; eliminaciones sin claves huérfanas; una sola operación del almacén; fallo del almacén sin escritura parcial; cuestionario vacío guardado con avisos; una opción sin texto se guarda con aviso (no bloquea); `COURSE_QUIZ_INVALID`, `TOPIC_NOT_FOUND`, `DRAFT_STALE`, `VERSION_NOT_EDITABLE`; publicada y sus claves intactas; alumnado sin respuestas; paridad demo ↔ dobles |
+| `tests/server/draft-editor.test.ts` | +1 (30) | Eliminar un tema del borrador arrastra sus claves: no quedan respuestas correctas huérfanas y la versión publicada conserva las suyas |
+| `tests/server/quiz-form.test.ts` | 12 | Lectura del `FormData` real: editar enunciado/tipo/etiquetas, cambiar la correcta (única y múltiple), quitar y añadir opciones, eliminar y añadir preguntas, ámbitos separados (tema vs examen final), bloques a medias rechazados, ida y vuelta por el almacén |
+
+Recorrido HTTP añadido a `scripts/demo-smoke.mjs` (10 comprobaciones nuevas):
+
+- el editor incluye el formulario de cuestionarios y examen final;
+- guardar devuelve `ok=cuestionarios` y, al reabrir, la pregunta del tema y la del
+  examen final están ahí y el contador las suma;
+- un guardado con la revisión vieja devuelve **error** y no pisa el cuestionario;
+- el alumnado no ve ninguna de las preguntas del borrador.
+
+Corrección del propio guion (no del producto): `forms()` ahora imita lo que hace
+un navegador con casillas y desplegables (una casilla sin marcar no se envía; un
+`select` envía su opción seleccionada). Antes, un guardado «real» desde el guion
+habría borrado las respuestas correctas de las preguntas existentes.
+
+Lo que **no** demuestran estas pruebas: que la transacción de Firestore escriba
+los dos documentos de forma atómica en un proyecto real, ni que las reglas
+permitan o denieguen nada. Dobles y demo son memoria; el emulador no arranca sin
+JVM y la conexión real está cortada.
+
+## 18. Bloque 06 — subida privada de PDF y control de cuota (22/10/2026)
+
+Alcance ejecutado: abrir una subida pendiente con reserva de cuota, enviar el
+PDF por partes, finalizar verificando tamaño y SHA-256, cancelar liberando la
+reserva, y asociar el documento **activo** al tema de un borrador. **No** se ha
+tocado la publicación, el visor por páginas ni ningún bloque posterior.
+
+| Comprobación | Comando | Resultado |
+| --- | --- | --- |
+| Cadena completa | `npm run verify` | **exit 0**: tipado 0 errores, lint 0 avisos, **725 pruebas en verde**, build OK |
+| Pruebas totales | `npm test` | **725 pasan**, 4 omitidas (emulador), 45 ficheros + 1 omitido (46) |
+| Recorrido de la demostración | `DEMO_MODE=1 npx next start -p 3000` + `npm run check:demo` | **PASSED**, **79 comprobaciones** (antes 56) |
+| Reglas de Firestore | `npm run test:rules` | **BLOQUEADO**: sin JVM |
+| Integración con emulador | `npm run test:firestore` | **BLOQUEADO**: sin JVM |
+| Conexión real | `npm run check:firebase` | **BLOQUEADO**: TLS hacia Google cortado; sin credenciales |
+
+Pruebas nuevas (36):
+
+| Fichero | Pruebas | Qué fijan |
+| --- | ---: | --- |
+| `tests/domain/pdf-upload.test.ts` | 12 | Tamaño declarado (0, exacto 8 MiB, exceso), forma del SHA-256, páginas declaradas y su relación con los bytes, identificador `doc_` + 32 hex, material de identidad, tamaño de cada parte (la última puede ser corta), orden (`write`/`retry`/fuera de orden), progreso sin pasarse de 100 %, partes ausentes, cabecera `%PDF-` (incluida tras relleno) y rechazo de HTML/vacío |
+| `tests/server/document-upload.test.ts` | 24 | Ciclo completo y activación solo tras verificar; 8 MiB exactos en 11 partes; parte 0 que no es PDF; versión publicada; tema inexistente y páginas imposibles; autor ajeno y alumno; parte adelantada, corta o fuera de rango; reenvío idempotente y conflicto con contenido distinto; finalización incompleta con números; SHA-256 incorrecto y fragmento corrompido en el almacén; interrupción y reanudación sin reescribir; creación y finalización idempotentes; cancelación que libera y borra una sola vez; archivo de un activo; volver a subir tras cancelar; reserva antes de recibir bytes; dos aperturas simultáneas que no caben; reserva convertida en uso; asociación idempotente, rechazo de pendientes y de versiones publicadas, revisión obsoleta; inmutabilidad del activo; paridad demo ↔ dobles |
+| `tests/server/document-service.test.ts` | reescrito (36) | La batería anterior de lectura, límites y cuota, ahora sobre el ciclo nuevo: incluye presupuesto agotado sin reserva, fallo a mitad con reintento y concurrencia de dos ficheros distintos |
+
+Recorrido HTTP añadido a `scripts/demo-smoke.mjs` (23 comprobaciones nuevas):
+
+- el editor incluye la sección de PDF, avisa de que el número de páginas **no se
+  verifica** y pide confirmarlo, y muestra la cuota;
+- abrir la subida devuelve **201** y un `documentId` que asigna el servidor; un
+  cuerpo con `documentId` propio se rechaza con **400**;
+- una parte que no es PDF se rechaza con **400** y finalizar antes de tiempo con
+  **409**;
+- la subida pendiente aparece en el editor y **no** se lista como documento
+  asociado;
+- finalizar verifica la huella (**200**), el documento queda activo y cuenta en
+  la cuota; asociarlo lo deja en el tema y reasociarlo no lo duplica;
+- una segunda subida reserva cuota antes de recibir bytes y, al cancelarla,
+  libera exactamente lo reservado (la reserva vuelve a cero);
+- el alumnado no recibe el documento del borrador.
+
+Corrección encontrada al ejecutar el recorrido: las rutas nuevas llamaban a
+`getServerConfig()` para comprobar el origen y en la demostración devolvían
+**503** por falta de `FIREBASE_PROJECT_ID`. Ahora usan `configuredAppOrigin()`
+(solo lee `APP_ORIGIN`) y `requirePortalActor()` (sesión de Firebase en modo
+real, cookie de la demo en la demostración). El endurecimiento de producción no
+se relaja: el camino real sigue exigiendo la configuración completa.
+
+Lo que **no** demuestran estas pruebas: que la transacción de Firestore reserve
+de verdad sin carreras en un proyecto real (dobles y demo son memoria, sin
+concurrencia real) ni que la lectura de fragmentos fuera de la transacción no
+pueda dejar un estado intermedio visible. El emulador sigue sin arrancar por
+falta de JVM, así que la subida se declara **verificada en dominio, servicio y
+demostración**, y **no verificada** contra Firestore real.
+
+## 19. Bloque 07 — visor PDF privado (22/10/2026)
+
+Alcance ejecutado: el alumnado con matrícula activa abre el **PDF completo** de un
+documento **publicado** por la puerta del portal, servido con autorización en
+servidor, integridad comprobada y cabeceras privadas; en pantalla lo abre el
+visor nativo del navegador (con enlace a pestaña nueva para Android). **No** se
+ha tocado el progreso por páginas, ni la publicación, ni la subida del bloque 06,
+ni las reglas de seguridad.
+
+| Comprobación | Comando | Resultado |
+| --- | --- | --- |
+| Cadena completa | `npm run verify` | **exit 0**: tipado 0 errores, lint 0 avisos, **757 pruebas en verde**, build OK |
+| Pruebas totales | `npm test` | **757 pasan**, 4 omitidas (emulador), 47 ficheros + 1 omitido (48) |
+| Recorrido de la demostración | `DEMO_MODE=1 npx next start -p 3000` + `npm run check:demo` | **PASSED**, **104 comprobaciones** (antes 79) |
+| Reglas de Firestore | `npm run test:rules` | **BLOQUEADO**: sin JVM |
+| Integración con emulador | `npm run test:firestore` | **BLOQUEADO**: sin JVM |
+| Conexión real | `npm run check:firebase` | **BLOQUEADO**: TLS hacia Google cortado; sin credenciales |
+
+Pruebas nuevas (32):
+
+| Fichero | Pruebas | Qué fijan |
+| --- | ---: | --- |
+| `tests/server/document-file.test.ts` | 25 | Acceso correcto con matrícula activa; sin matrícula; autenticado sin matrícula en ese curso; documento que solo está en un borrador; versión antigua no referenciada por la publicada vigente; pendiente, abortado, archivado e incompleto; curso sin versión publicada; cruce entre cursos distintos; identificadores manipulados (mayúsculas, `..`, barra, id inventado); fragmento ausente, fragmento alterado y firma `%PDF-` rota; SHA-256 global incorrecto; tamaño declarado distinto del real; fallo del almacén sin filtrar datos; coste por fragmento con el límite agotado; paridad demo ↔ dobles; administración sin matrícula tampoco recibe el fichero |
+| `tests/demo/demo-pdf.test.ts` | 7 | El PDF de ejemplo es un PDF 1.4 **estructuralmente válido** (cabecera, `xref` con desplazamientos reales, `startxref`, `%%EOF`); número de páginas; escapado de paréntesis y acentos ASCII; la siembra deja todos los documentos `active`, con sus fragmentos y su huella correcta; el alumno matriculado recibe el PDF completo; al revocar la matrícula deja de recibirlo; un documento que solo está en el borrador no se entrega aunque el PDF siga en el almacén |
+
+Recorrido HTTP añadido a `scripts/demo-smoke.mjs` (25 comprobaciones nuevas):
+
+- la página del documento ofrece la ruta del visor; el alumno matriculado recibe
+  **200** con `application/pdf`, cabecera `%PDF-`, `no-store` + `private`,
+  `inline` y sin rutas internas;
+- sin sesión **401**; cuenta pendiente **401**; sin matrícula en ese curso
+  **403**; id inventado y ruta manipulada **404**;
+- en el editor del borrador se sube un PDF real por la API del bloque 06 y se
+  comprueba que **antes de finalizar** devuelve **404**, que finalizado pero sin
+  asociar sigue devolviendo **404** y que **mientras la versión no se publica**
+  el alumnado tampoco lo recibe;
+- tras publicar, el alumno recibe **200** y los bytes entregados son
+  **exactamente** los subidos; la página del curso muestra el enlace al visor.
+
+Defecto corregido durante el bloque: la comprobación de «documento referenciado»
+recorría todos los temas de todas las versiones y aceptaba un documento de una
+versión antigua; ahora se limita a la versión **publicada vigente** del curso, y
+la prueba de la versión antigua lo fija.
+
+Lo que **no** demuestran estas pruebas: que Firestore real entregue los
+fragmentos con la misma latencia y atomicidad, ni que las reglas impidan leer
+`pdfChunks` desde un cliente. Dobles y demostración son memoria. Tampoco se ha
+abierto un PDF real en un dispositivo Android: la alternativa (enlace a pestaña
+nueva) está en la interfaz, pero **no se ha medido** en un teléfono.
+
+## 20. Bloque 08 — publicación como puerta del servidor (22/10/2026)
+
+Alcance ejecutado: publicar deja de ser un botón desactivado y pasa a ser una
+comprobación del servidor. Antes de escribir nada se valida el contenido (la
+misma `validateCourseVersion` que usa el editor, aplicada a la definición
+reconstruida con sus claves) y se exige que **cada documento** de la versión
+exista, esté `active`, tenga todas sus partes y sea de ese curso. Al publicar, la
+versión anterior pasa a `archived` en la misma transacción. No se ha tocado el
+visor, la subida, el progreso, las reglas de seguridad ni el modelo de datos.
+
+| Comprobación | Comando | Resultado |
+| --- | --- | --- |
+| Cadena completa | `npm run verify` | **exit 0**: tipado 0 errores, lint 0 avisos, **774 pruebas en verde**, build OK |
+| Pruebas totales | `npm test` | **774 pasan**, 4 omitidas (emulador), 48 ficheros + 1 omitido (49) |
+| Recorrido de la demostración | `DEMO_MODE=1 npx next start -p 3000` + `npm run check:demo` | **PASSED**, **109 comprobaciones** (antes 104) |
+| Reglas de Firestore | `npm run test:rules` | **BLOQUEADO**: sin JVM |
+| Integración con emulador | `npm run test:firestore` | **BLOQUEADO**: sin JVM |
+| Conexión real | `npm run check:firebase` | **BLOQUEADO**: TLS hacia Google cortado; sin credenciales |
+
+Pruebas nuevas (17, en `tests/server/publish-gate.test.ts`):
+
+| Grupo | Qué fija |
+| --- | --- |
+| Contenido | Una versión sin temas, con un tema obligatorio sin cuestionario o sin examen final se rechaza con `COURSE_CONTENT_INVALID` (400) y **no se escribe nada**: sigue en borrador, el curso no cambia de versión publicada y el almacén no recibe la llamada de publicación. Un alumno no publica (`FORBIDDEN`). |
+| Documentos | Se publica cuando el documento está activo y completo; se rechaza con `DOCUMENT_NOT_PUBLISHABLE` (409) si no existe, si está `pending`/`aborted`/`archivado`, si le faltan partes, si es de otro curso o si el identificador no es seguro. Cuando hay varios problemas se devuelven **todos** de una vez. |
+| Coherencia | Publicar dos veces la misma versión da `VERSION_ALREADY_PUBLISHED` (409), no un 500. Los dobles archivan la anterior y dejan **una sola** publicada, de modo que la v3 se puede publicar. |
+| Demostración | `adminPublish` archiva la v1 y deja la v2 publicada con `lastDraftVersion` a `null`; si un documento asociado al borrador se archiva después, la publicación se rechaza y la v1 sigue siendo la publicada. |
+| Firestore (fuente) | La transacción de `publishVersion` lee el puntero, marca `archived` la anterior, actualiza versión, puntero y `lastDraftVersion`, y hace todas las lecturas antes de la primera escritura. **Comprobación sobre el código, no una ejecución.** |
+
+Recorrido HTTP añadido a `scripts/demo-smoke.mjs` (5 comprobaciones nuevas): el
+borrador vacío ofrece el formulario de publicar; el **servidor** rechaza
+publicarlo (303 con `error=`, sin `ok=publicada`) aunque la petición se envíe sin
+pasar por el botón desactivado; el curso sigue en borrador; y no aparece al
+alumnado.
+
+### Dos defectos encontrados al ejecutar
+
+1. **`validateCourseVersion` habría bloqueado cualquier curso con PDF real.**
+   Exigía identificadores con forma de slug, pero el servidor los genera como
+   `doc_` + 32 hex (bloque 06): la publicación de la demostración falló en el
+   recorrido con «Identificador de documento no válido». Se ha alineado esa
+   comprobación con la regla canónica del almacén (`isSafeDocumentId`), que
+   sigue rechazando formas de ruta. No se ha relajado ninguna otra regla.
+2. **El adaptador de Firestore no archivaba la versión anterior.** Dobles y
+   demostración sí, así que las pruebas estaban en verde y el fallo solo habría
+   aparecido en producción: tras publicar la v2 habría quedado la v1
+   `published` y la siguiente publicación habría respondido 500 «estado
+   inconsistente». Corregido en la transacción y fijado con una prueba sobre la
+   fuente (no ejecutada contra Firestore).
+
+Lo que **no** demuestran estas pruebas: que la transacción real archive y mueva
+el puntero de forma atómica (sin emulador no se ejecuta), ni que Firestore
+entregue los metadatos de los documentos con la misma latencia. El bloqueo de
+B09 sigue vigente y declarado en `/estado` y en `ENTORNO-PRUEBAS.md`.
