@@ -1018,3 +1018,56 @@ Pruebas nuevas:
 - Que Firebase Auth deshabilite de verdad una cuenta (eso es `disabled` en
   Authentication, no una regla). Aquí solo se demuestra que, deshabilitada en
   Firestore, las reglas dejan de dar acceso.
+
+## 24. Fase 2 de integración de Firebase — intento de ejecutar el emulador (22/10/2026)
+
+Objetivo: **ejecutar de verdad** las 57 pruebas de reglas y las 9 de integración.
+Resultado: **no se ha ejecutado ninguna**. El bloqueo es externo (descarga del
+jar) y está aislado: Java, CLI y dependencias están resueltos.
+
+| Comprobación | Comando (ejecutado de verdad) | Resultado |
+| --- | --- | --- |
+| Entorno | `JAVA_HOME=…jdk4py… npm run check:env` | **BLOCKED** (exit 2): Node, dependencias, **Java 25 PASSED**, CLI 15.34.0 PASSED; el jar no está |
+| Reglas | `npm run test:rules` | **BLOCKED** (exit 2): `Failed to make request to https://storage.googleapis.com/…/cloud-firestore-emulator-v1.22.0.jar`. 0 pruebas ejecutadas |
+| Integración | `npm run test:firestore` | **BLOCKED** (exit 2): mismo error. 0 pruebas ejecutadas |
+| Índices contra el emulador | `npm run db:check` | **no ejecutado**: sin emulador no hay destino; contra Firebase real sería escritura/credenciales y está fuera de alcance |
+| Cadena completa | `npm run verify` | **exit 0**: tipado, lint, **862 pruebas en verde**, build OK (9 omitidas, 871 en total) |
+| Recorrido de la demostración | `npm run check:demo` | **PASSED**, 140 comprobaciones |
+
+### Diagnóstico de la descarga (sin desactivar TLS)
+
+| Origen probado | Resultado |
+| --- | --- |
+| `storage.googleapis.com` (URL oficial) | `SSL_connect: SSL_ERROR_SYSCALL` — host no permitido por el proxy |
+| Releases de GitHub | `github.com` da 302 y redirige a `release-assets.githubusercontent.com`, también cortado |
+| npm: `cloud-firestore-emulator`, `firestore-emulator`, `firebase-emulator`, `firestore-emulator-jar`, `firebase-emulators-jar`, `emulator-jars` | **404** (no existen) |
+| PyPI: `firestore-emulator`, `firebase-emulator`, `cloud-firestore-emulator`, `firebase-tools` | **404** |
+| Repos de GitHub con los jars (offline/airgap/tamaño > 100 MB) | **0 resultados**; `gitsd-labs/firebase-emulator-cache` está vacío |
+
+No se ha inventado ni reutilizado ningún archivo: **sin jar no hay motor**, y una
+reimplementación de terceros (`hidane`, `@firestore-emulator/server`) no evalúa
+`firestore.rules`, así que no sustituye al emulador oficial.
+
+### Lo que sí se ha añadido (verificable hoy)
+
+1. **Preflight de integridad del jar** en `scripts/lib/env-checks.mjs`: si hay una
+   copia local, se comprueba nombre, tamaño y **SHA-256** contra la ficha del CLI
+   instalado (`downloadableEmulatorInfo.json`). Antes bastaba con que existiera un
+   fichero con el nombre correcto. Probado con dos falsos positivos:
+   - 1 024 bytes → `FAILED` («se esperaban 136707194»);
+   - tamaño exacto lleno de ceros → `FAILED` («SHA-256 … ≠ 9b6498b7…», «no es el
+     jar oficial»).
+2. **5 pruebas del preflight** (`tests/server/emulator-preflight.test.ts`): la
+   ficha oficial sale de `firebase-tools` con versión, tamaño y SHA-256; un jar
+   truncado o con otro nombre sale **FAILED**; sin ruta o sin caché, **BLOCKED**
+   con el tamaño exigido en el mensaje. Así una copia mala no puede colarse como
+   si el emulador estuviera listo.
+3. **Lint estructural de `firestore.rules`** (5 comprobaciones más en
+   `tests/server/rules-policy.test.ts`, 22 → 27): llaves y paréntesis
+   equilibrados, un bloque por colección, operaciones de `allow` válidas,
+   funciones invocadas definidas y `rules_version = '2'`. Detecta un error de
+   sintaxis que hoy solo aparecería al desplegar. **No es el motor**: no dice si
+   Firestore acepta una petición.
+4. Documentación del bloqueo con el hash y el tamaño exactos, para que quien tenga
+   red pueda traer el jar y comprobarlo (`ENTORNO-PRUEBAS.md` §2 bis y
+   `CONEXION-FIREBASE.md` §6.1).

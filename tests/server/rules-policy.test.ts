@@ -30,6 +30,13 @@ import {
 const RULES = readFileSync(join(process.cwd(), "firestore.rules"), "utf8");
 
 /**
+ * Reglas sin comentarios. Las comprobaciones de forma (llamadas, operaciones de
+ * `allow`) miran el código: un comentario que mencione «claves (…)» no debe
+ * parecer una función invocada.
+ */
+const CODE = RULES.replace(/\/\/[^\n]*/g, "");
+
+/**
  * Extrae el bloque de una colección contando llaves, para no depender de la
  * indentación ni de que el bloque esté en una sola línea.
  */
@@ -59,6 +66,106 @@ function allowLines(source: string): Array<{ line: string; condition: string }> 
     condition: match[2].trim(),
   }));
 }
+
+describe("0. estructura del fichero (sintaxis, no motor)", () => {
+  // Un error de sintaxis en `firestore.rules` no lo detecta el tipado, ni el
+  // lint, ni el build: hoy solo aparecería al desplegar. Estas comprobaciones
+  // son un lint estructural del fichero. NO son el motor de reglas: que esto
+  // pase no significa que Firestore acepte las reglas, solo que el texto tiene
+  // forma de reglas bien escritas.
+
+  it("llaves y paréntesis equilibrados", () => {
+    const count = (character: string) => CODE.split(character).length - 1;
+    expect(count("{")).toBe(count("}"));
+    expect(count("(")).toBe(count(")"));
+  });
+
+  it("cada `match` abre y cierra su bloque", () => {
+    const opens = CODE.match(/match\s+\/[^\n]*\{/g) ?? [];
+    // Un `match` por colección declarada (el comodín final no cuenta aquí: lo
+    // comprueba el bloque 1) más la cabecera `match /databases/{database}/documents`.
+    expect(opens.length).toBeGreaterThanOrEqual(Object.values(COLLECTIONS).length + 1);
+    expect(RULES.trimEnd().endsWith("}")).toBe(true);
+  });
+
+  it("solo usa operaciones de `allow` válidas", () => {
+    const operations = [
+      ...CODE.matchAll(/allow\s+([^:]+):/g),
+    ].flatMap((match) => match[1].split(",").map((piece) => piece.trim()));
+
+    const allowed = new Set(["read", "write", "create", "update", "delete", "get", "list"]);
+    expect(operations.filter((operation) => !allowed.has(operation))).toEqual([]);
+  });
+
+  it("toda función invocada está definida en el fichero", () => {
+    const defined = new Set(
+      [...CODE.matchAll(/function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)].map((match) => match[1]),
+    );
+    // Funciones propias del lenguaje de reglas.
+    const builtin = new Set([
+      "get",
+      "exists",
+      "getAfter",
+      "existsAfter",
+      "debug",
+      "duration",
+      "timestamp",
+      "int",
+      "float",
+      "string",
+      "bool",
+      "bytes",
+      "path",
+      "map",
+      "list",
+      "set",
+      "math",
+      "hashing",
+      "debug",
+      "is",
+      "hasAll",
+      "hasAny",
+      "hasOnly",
+      "size",
+      "keys",
+      "values",
+      "matches",
+      "toSet",
+      "toLower",
+      "toUpper",
+      "trim",
+      "split",
+      "join",
+      "concat",
+      "date",
+      "let",
+    ]);
+
+    const called = new Set(
+      [...CODE.matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)].map((match) => match[1]),
+    );
+    const unknown = [...called].filter(
+      (name) =>
+        !defined.has(name) &&
+        !builtin.has(name) &&
+        ![
+          "match",
+          "allow",
+          "function",
+          "if",
+          "return",
+          "service",
+          "functions",
+          "rules_version",
+        ].includes(name),
+    );
+    expect(unknown, `funciones usadas sin definir: ${unknown.join(", ")}`).toEqual([]);
+  });
+
+  it("declara la versión de reglas que exige la sintaxis usada", () => {
+    expect(RULES.startsWith("rules_version = '2';")).toBe(true);
+  });
+});
 
 describe("1. denegar por defecto", () => {
   it("tiene un comodín final que cierra todo lo no declarado", () => {

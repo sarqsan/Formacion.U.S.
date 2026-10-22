@@ -142,30 +142,68 @@ Comprueba: Node ≥ 22, dependencias (`firebase-tools`, `@firebase/rules-unit-te
 
 ---
 
-## 2 bis. Estado real del bloqueo (comprobado el 22/10/2026)
+## 2 bis. Estado real del bloqueo (comprobado el 22/10/2026, fase 2)
 
 | Paso | Estado | Evidencia |
 | --- | --- | --- |
-| JVM ≥ 17 | **RESUELTO** | `pip download jdk4py` + `unzip` deja `openjdk 25.0.2` en `/tmp/jdkpkg/x/jdk4py/java-runtime`; con `JAVA_HOME` y `PATH` apuntando ahí, `npm run test:rules` ya no se queja de Java |
-| Firebase CLI | **RESUELTO** | `firebase-tools` 15.x instalado con `npm ci` |
-| Jar del emulador | **BLOQUEADO** | `firebase emulators:exec` falla con `Error: Failed to make request to https://storage.googleapis.com/firebase-preview-drop/emulator/cloud-firestore-emulator-v1.22.0.jar` |
+| JVM ≥ 17 | **RESUELTO** | `pip download jdk4py -d /tmp/jdkpkg --no-deps && cd /tmp/jdkpkg && unzip -q jdk4py-*.whl` deja `openjdk 25.0.2`; con `JAVA_HOME` y `PATH` apuntando a `…/jdk4py/java-runtime`, `npm run check:env` marca **Java PASSED** |
+| Firebase CLI | **RESUELTO** | `firebase-tools` 15.34.0 instalado con `npm ci` |
+| Jar del emulador | **BLOQUEADO** | dos hosts posibles, los dos con TLS cortado (abajo) |
 
-Salida literal del intento:
+### Qué se ha intentado para conseguir el jar
+
+| Origen | Resultado |
+| --- | --- |
+| URL oficial `https://storage.googleapis.com/firebase-preview-drop/emulator/cloud-firestore-emulator-v1.22.0.jar` | `SSL_connect: SSL_ERROR_SYSCALL` (el proxy del entorno no permite `*.googleapis.com`) |
+| Releases de GitHub (`github.com/.../releases/download/...`) | `github.com` responde **302**, pero el asset vive en `release-assets.githubusercontent.com`, que también da `SSL_ERROR_SYSCALL`. Se comprobó con un asset cualquiera del propio `firebase/firebase-tools` |
+| Paquetes npm con el jar dentro (`cloud-firestore-emulator`, `firestore-emulator`, `firebase-emulator`, `firestore-emulator-jar`, `firebase-emulators-jar`, `emulator-jars`) | **404**: no existen. El buscador solo devuelve `firebase-tools`, `@firebase/rules-unit-testing` y reimplementaciones de terceros (`@firestore-emulator/server`, `hidane`), que **no** son el emulador oficial ni evalúan `firestore.rules` |
+| Paquetes PyPI (`firestore-emulator`, `firebase-emulator`, `cloud-firestore-emulator`, `firebase-tools`) | **404** |
+| Repositorios de GitHub que empaqueten los jars (`firebase emulator offline`, `airgap`, `jars`, filtros por tamaño > 100 MB) | **0 resultados**; `gitsd-labs/firebase-emulator-cache` (el único que se anuncia para eso) está **vacío**: solo tiene un README |
+
+Salida literal de los dos comandos obligatorios:
 
 ```
+$ npm run test:rules
 i  firestore: downloading cloud-firestore-emulator-v1.22.0.jar...
-⚠  Unable to fetch the CLI MOTD and remote config. ...
 Error: Failed to make request to https://storage.googleapis.com/firebase-preview-drop/emulator/cloud-firestore-emulator-v1.22.0.jar
+RESULTADO: BLOCKED   (exit 2)
 
-RESULTADO: BLOCKED
-El emulador no pudo arrancar: no se ha ejecutado ninguna prueba.
+$ npm run test:firestore
+Error: Failed to make request to https://storage.googleapis.com/firebase-preview-drop/emulator/cloud-firestore-emulator-v1.22.0.jar
+RESULTADO: BLOCKED   (exit 2)
 ```
 
-Consecuencia: sigue siendo **imposible** ejecutar reglas e integración aquí. La
-diferencia con respecto a la situación anterior es que el bloqueo está aislado:
-es **solo** la descarga del jar. Llevar ese fichero a
-`~/.cache/firebase/emulators/` (o definir `FIRESTORE_EMULATORS_PATH`) es lo único
-que falta para que esta máquina pueda ejecutarlo todo.
+No se ha desactivado TLS, no se ha aceptado ningún certificado sin verificar y no
+se ha usado ningún archivo sin comprobar su integridad: **no hay jar y por eso no
+se ha ejecutado ninguna prueba del motor**.
+
+### Cómo desbloquearlo (una sola cosa)
+
+Llevar el jar oficial a la caché. `npm run check:env` **lo verifica** antes de
+usarlo (`scripts/lib/env-checks.mjs`):
+
+| Comprobación | Valor exigido |
+| --- | --- |
+| Nombre | `cloud-firestore-emulator-v1.22.0.jar` (la versión que espera el CLI instalado) |
+| Tamaño | **136 707 194** bytes |
+| SHA-256 | **`9b6498b7f62714d67f48f59b3818883cd682dbcd46b9f59511de81c97bb5166c`** |
+| MD5 (referencia del CLI) | `5d74cc6bee9e18560d2eae2c6440fd13` |
+
+```bash
+# En una máquina con red hacia storage.googleapis.com
+curl -O https://storage.googleapis.com/firebase-preview-drop/emulator/cloud-firestore-emulator-v1.22.0.jar
+sha256sum cloud-firestore-emulator-v1.22.0.jar   # debe coincidir con el valor de arriba
+# Copiar a la caché de la máquina de pruebas:
+mkdir -p ~/.cache/firebase/emulators && cp cloud-firestore-emulator-v1.22.0.jar ~/.cache/firebase/emulators/
+# O, sin tocar la caché:
+export FIRESTORE_EMULATOR_BINARY_PATH=/ruta/cloud-firestore-emulator-v1.22.0.jar
+npm run check:env      # el jar debe salir PASSED con «SHA-256 verificado»
+```
+
+Un archivo con el nombre correcto pero truncado o distinto **no** pasa: `check:env`
+lo marca `FAILED` con el tamaño o el hash que ha encontrado. Probado con un
+fichero de 1 024 bytes (falla por tamaño) y con uno del tamaño exacto lleno de
+ceros (falla por SHA-256).
 
 ---
 

@@ -405,14 +405,21 @@ motor** ni se han publicado.
    unzip -q jdk4py-*.whl && export JAVA_HOME=/tmp/jdkpkg/jdk4py/java-runtime &&
    export PATH="$JAVA_HOME/bin:$PATH" && java -version`. Comprobado aquí: deja
    OpenJDK 25 funcional.
-2. `npm ci` y `npm run check:env`: debe quedar en **PASSED** (hoy se detiene en
-   el jar).
-3. `npm run test:rules` → esperado **PASSED, 57 pruebas**. Si algo falla, el
+2. Conseguir el jar oficial. La descarga automática no es la única vía: si la
+   máquina no alcanza `storage.googleapis.com`, basta con copiar
+   `cloud-firestore-emulator-v1.22.0.jar` (136 707 194 bytes, SHA-256
+   `9b6498b7f62714d67f48f59b3818883cd682dbcd46b9f59511de81c97bb5166c`) a
+   `~/.cache/firebase/emulators/` o apuntar `FIRESTORE_EMULATOR_BINARY_PATH` a
+   la copia.
+3. `npm ci` y `npm run check:env`: debe quedar en **PASSED**, y la línea del jar
+   tiene que decir «SHA-256 verificado». Un archivo truncado o de otra versión
+   sale **FAILED** (no se acepta por el nombre).
+4. `npm run test:rules` → esperado **PASSED, 57 pruebas**. Si algo falla, el
    fallo es real: **no se toca `firestore.rules` para que pase** (ADR-017), se
    documenta y se decide.
-4. `npm run test:firestore` → esperado **PASSED, 9 pruebas**, incluidas las 5 del
+5. `npm run test:firestore` → esperado **PASSED, 9 pruebas**, incluidas las 5 del
    histórico (normalización de `archivedAt` y filtro por `uid`).
-5. `npm run db:check` con `FIRESTORE_EMULATOR_HOST` apuntando al emulador: debe
+6. `npm run db:check` con `FIRESTORE_EMULATOR_HOST` apuntando al emulador: debe
    informar `INDEXES_OK`, incluida la consulta `progressHistory(uid)` sin
    `orderBy`.
 
