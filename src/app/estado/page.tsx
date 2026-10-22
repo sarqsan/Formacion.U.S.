@@ -69,7 +69,13 @@ const ROWS: Row[] = [
     feature: "Lectura de PDF por páginas",
     state: "pending",
     detail:
-      "El servidor sirve rangos de páginas autorizados por matrícula y en orden, pero falta el visor: la página no dibuja el PDF y la demostración usa pantallas de texto. No se ha ejecutado con documentos reales.",
+      "El servidor sirve rangos de páginas autorizados por matrícula y en orden. La página no dibuja el PDF: el alumnado abre el documento completo con la aplicación de PDF del dispositivo. No se ha ejecutado con documentos reales.",
+  },
+  {
+    feature: "Apertura del PDF privado",
+    state: "demo",
+    detail:
+      "Implementada y probada con dobles y en la demostración: el servidor comprueba cuenta activa, matrícula, versión publicada y que el documento esté referenciado en ella, y verifica tamaño y SHA-256 antes de enviar el fichero completo (sin caché compartida). El hash demuestra integridad, no que el PDF sea inocuo. No se ha ejecutado contra Firestore real ni en un móvil Android.",
   },
   {
     feature: "Reglas de Firestore",

@@ -8,6 +8,7 @@ import { FirestoreEnrollmentStore } from "@/server/firebase/enrollment-store";
 import { FirestoreLearningStore } from "@/server/firebase/learning-store";
 import { pdfLimiter, uploadLimiter } from "@/server/ratelimit/limiter";
 import type { DocumentDependencies } from "@/server/documents/service";
+import type { DocumentFileDependencies } from "@/server/documents/file";
 import type { EnrollmentDependencies } from "@/server/enrollments/service";
 import { ACTIVATION_TOKEN_TTL_HOURS } from "@/domain/auth/activation";
 import type { ImportDependencies } from "@/server/import/service";
@@ -58,6 +59,22 @@ export function documentDependencies(): DocumentDependencies {
     //   - `uploadLimiter` cobra abrir y finalizar subidas (20/hora por admin).
     limiter: pdfLimiter(),
     uploadLimiter: uploadLimiter(),
+  };
+}
+
+/**
+ * Lectura del PDF completo por el alumnado (bloque 07).
+ *
+ * Comparte el mismo adaptador de documentos que la subida: no hay un segundo
+ * almacén ni una segunda copia. Solo se cablean las dependencias que la lectura
+ * necesita (documentos, catálogo, matrículas y el límite de descargas).
+ */
+export function documentFileDependencies(): DocumentFileDependencies {
+  return {
+    documents: new FirestorePdfDocumentStore(),
+    catalog: new FirestoreCourseCatalogStore(),
+    enrollments: new FirestoreEnrollmentStore(),
+    limiter: pdfLimiter(),
   };
 }
 

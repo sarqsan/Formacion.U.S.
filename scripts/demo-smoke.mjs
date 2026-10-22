@@ -79,6 +79,18 @@ async function get(path, headers) {
   return { status: response.status, location: response.headers.get("location"), html: await response.text() };
 }
 
+async function getFile(path, headers) {
+  const response = await fetch(`${BASE}${path}`, { headers, redirect: "manual" });
+  const body = Buffer.from(await response.arrayBuffer());
+  return {
+    status: response.status,
+    contentType: response.headers.get("content-type"),
+    cacheControl: response.headers.get("cache-control"),
+    disposition: response.headers.get("content-disposition"),
+    body,
+  };
+}
+
 async function postForm(path, headers, fields) {
   const body = new FormData();
   for (const [key, value] of Object.entries(fields)) body.set(key, value);
@@ -144,6 +156,64 @@ const topicPage = await get(`/cursos/${COURSE}/temas/riesgos?lectura=completa`, 
 assert(
   topicPage.html.includes("Lectura completada") || topicPage.html.includes("Corregir intento"),
   "el cuestionario se abre al terminar la lectura",
+);
+
+// ---------------------------------------------------------------------------
+// 1 bis. Visor PDF privado (bloque 07): la puerta del alumnado
+// ---------------------------------------------------------------------------
+
+const pdfPage = await get(`/cursos/${COURSE}/documentos/doc-riesgos`, learner);
+assert(
+  pdfPage.html.includes(`/api/documents/doc-riesgos/file`),
+  "la página del documento ofrece abrir el PDF con el visor del navegador",
+);
+
+const seededPdf = await getFile("/api/documents/doc-riesgos/file", learner);
+assert(seededPdf.status === 200, `el alumno matriculado descarga el PDF (HTTP ${seededPdf.status})`);
+assert(
+  seededPdf.contentType?.includes("application/pdf"),
+  `el PDF se sirve como application/pdf (${seededPdf.contentType})`,
+);
+assert(
+  seededPdf.body.subarray(0, 5).toString("latin1") === "%PDF-",
+  "lo descargado es un PDF completo, no un fragmento",
+);
+assert(
+  seededPdf.cacheControl?.includes("no-store") && seededPdf.cacheControl?.includes("private"),
+  `la respuesta privada no se cachea (${seededPdf.cacheControl})`,
+);
+assert(
+  seededPdf.disposition?.startsWith("inline"),
+  `la disposición permite abrirlo en el navegador (${seededPdf.disposition})`,
+);
+assert(
+  !seededPdf.body.toString("latin1").includes("pdfChunks"),
+  "la respuesta no expone rutas ni metadatos internos del almacén",
+);
+
+const anonymousPdf = await getFile("/api/documents/doc-riesgos/file", {});
+assert(anonymousPdf.status === 401, `sin sesión no hay PDF (HTTP ${anonymousPdf.status})`);
+
+const pendingPdf = await getFile("/api/documents/doc-riesgos/file", cookieFor("demo-pendiente"));
+assert(
+  pendingPdf.status === 401 || pendingPdf.status === 403,
+  `una cuenta pendiente no descarga el PDF (HTTP ${pendingPdf.status})`,
+);
+
+// Curso en el que este alumno todavía no está matriculado.
+const otherCoursePdf = await getFile("/api/documents/doc-datos/file", learner);
+assert(
+  otherCoursePdf.status === 403,
+  `sin matrícula el PDF de otro curso queda cerrado (HTTP ${otherCoursePdf.status})`,
+);
+
+const forgedPdf = await getFile("/api/documents/no-existe/file", learner);
+assert(forgedPdf.status === 404, `un identificador inventado no devuelve nada (HTTP ${forgedPdf.status})`);
+
+const traversalPdf = await getFile("/api/documents/..%2F..%2Fetc%2Fpasswd/file", learner);
+assert(
+  traversalPdf.status === 404,
+  `una ruta manipulada no devuelve nada (HTTP ${traversalPdf.status})`,
 );
 
 // ---------------------------------------------------------------------------
@@ -610,6 +680,94 @@ if (createForm) {
 }
 
 // ---------------------------------------------------------------------------
+// 3 ter. PDF subido al borrador y abierto tras publicar (bloques 06 y 07)
+// ---------------------------------------------------------------------------
+
+const DATA_COURSE = "curso-proteccion-datos";
+const uploadEditor = await get(`/admin/cursos/${DATA_COURSE}/editar?v=2`, admin);
+const revisionMatch = /expectedRevision" value="(\d+)"/.exec(uploadEditor.html);
+assert(Boolean(revisionMatch), "el editor del borrador expone su revisión");
+assert(
+  uploadEditor.html.includes("Documentos PDF de esta versión") &&
+    uploadEditor.html.includes("Cuota de PDF:"),
+  "el editor muestra la sección de PDF y la cuota",
+);
+
+let uploadedDocumentId = null;
+if (revisionMatch) {
+  const revision = Number(revisionMatch[1]);
+  // Se sube un PDF real: los bytes del PDF de ejemplo ya descargado.
+  const pdfBytes = seededPdf.body;
+  const sha256 = createHash("sha256").update(pdfBytes).digest("hex");
+
+  const created = await fetch(`${BASE}/api/admin/documents/uploads`, {
+    method: "POST",
+    headers: { ...admin, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      courseId: DATA_COURSE,
+      version: 2,
+      topicId: "soportes",
+      title: "PDF del recorrido automático",
+      pageCount: 3,
+      bytes: pdfBytes.length,
+      sha256,
+    }),
+  });
+  const createdBody = await created.json();
+  uploadedDocumentId = createdBody.upload?.documentId ?? null;
+  assert(created.status === 201, `abre la subida del PDF (HTTP ${created.status})`);
+  assert(Boolean(uploadedDocumentId), "el servidor asigna el identificador del documento");
+
+  if (uploadedDocumentId) {
+    const put = await fetch(
+      `${BASE}/api/admin/documents/uploads/${uploadedDocumentId}/parts/0`,
+      {
+        method: "PUT",
+        headers: { ...admin, "Content-Type": "application/octet-stream" },
+        body: pdfBytes,
+      },
+    );
+    assert(put.status === 200, `sube la parte 0 (HTTP ${put.status})`);
+
+    // Antes de finalizar, el PDF no se sirve a nadie.
+    const beforeFinalize = await getFile(
+      `/api/documents/${uploadedDocumentId}/file`,
+      learner,
+    );
+    assert(
+      beforeFinalize.status === 404,
+      `un documento pendiente no se entrega (HTTP ${beforeFinalize.status})`,
+    );
+
+    const finalized = await fetch(
+      `${BASE}/api/admin/documents/uploads/${uploadedDocumentId}/finalize`,
+      { method: "POST", headers: admin },
+    );
+    assert(finalized.status === 200, `finaliza y verifica la huella (HTTP ${finalized.status})`);
+
+    // Activo pero aún no asociado: tampoco está en la versión publicada.
+    const notAttached = await getFile(`/api/documents/${uploadedDocumentId}/file`, learner);
+    assert(
+      notAttached.status === 404,
+      `un activo sin asociar no se sirve por el portal (HTTP ${notAttached.status})`,
+    );
+
+    const attached = await fetch(`${BASE}/api/admin/documents/${uploadedDocumentId}/attach`, {
+      method: "POST",
+      headers: { ...admin, "Content-Type": "application/json" },
+      body: JSON.stringify({ expectedRevision: revision }),
+    });
+    assert(attached.status === 200, `asocia el PDF al tema del borrador (HTTP ${attached.status})`);
+
+    const draftStillClosed = await getFile(`/api/documents/${uploadedDocumentId}/file`, learner);
+    assert(
+      draftStillClosed.status === 404,
+      `mientras el borrador no se publica, el alumnado no lo recibe (HTTP ${draftStillClosed.status})`,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 4. Publicación de un borrador
 // ---------------------------------------------------------------------------
 
@@ -631,6 +789,27 @@ if (publishForm) {
     panel.html.includes("Versión 2") || panel.html.includes("curso-proteccion-datos"),
     "el alumno ve la versión nueva en su panel",
   );
+
+  if (uploadedDocumentId) {
+    const publishedPdf = await getFile(`/api/documents/${uploadedDocumentId}/file`, learner);
+    assert(
+      publishedPdf.status === 200,
+      `tras publicar, el alumno abre el PDF del curso (HTTP ${publishedPdf.status})`,
+    );
+    assert(
+      publishedPdf.body.equals(seededPdf.body),
+      "los bytes entregados son exactamente los que se subieron",
+    );
+
+    const documentPage = await get(
+      `/cursos/${DATA_COURSE}/documentos/${uploadedDocumentId}`,
+      learner,
+    );
+    assert(
+      documentPage.html.includes(`/api/documents/${uploadedDocumentId}/file`),
+      "la página del curso ofrece abrir ese PDF en el visor",
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------

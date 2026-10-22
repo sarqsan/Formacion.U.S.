@@ -86,6 +86,7 @@ describe("inventario de endpoints", () => {
       "admin/import/confirm/route.ts",
       "admin/import/preview/route.ts",
       "auth/session/route.ts",
+      "documents/[documentId]/file/route.ts",
       "documents/[documentId]/pages/route.ts",
       "health/route.ts",
       "me/route.ts",

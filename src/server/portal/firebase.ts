@@ -13,7 +13,19 @@ import { enrollStudent, revokeEnrollment } from "@/server/enrollments/service";
 import { submitAssessment } from "@/server/assessments/service";
 import { parsePeopleWorkbook } from "@/server/import/excel";
 import { buildImportPreview } from "@/server/import/service";
-import { courseEditorDependencies, documentDependencies, importDependencies } from "@/server/deps";
+import {
+  courseEditorDependencies,
+  documentDependencies,
+  documentFileDependencies,
+  importDependencies,
+} from "@/server/deps";
+import {
+  documentFileSummary as documentFileSummaryFor,
+  isDocumentFileAvailable,
+  readDocumentFile,
+  type DocumentFileResult,
+  type DocumentFileSummary,
+} from "@/server/documents/file";
 import {
   abortPdfUpload,
   archivePdfDocument,
@@ -184,6 +196,27 @@ export interface PdfReadingView {
  * del fichero; los bytes se piden al endpoint autorizado
  * `/api/documents/{id}/pages`, que también registra la lectura.
  */
+/**
+ * Lectura del PDF completo por el alumnado (bloque 07).
+ *
+ * Usa `readDocumentFile`, que comprueba sesión, matrícula, versión publicada,
+ * referencia expresa del documento y SHA-256 antes de devolver un solo byte.
+ */
+export async function documentFile(actor: Actor, documentId: string): Promise<DocumentFileResult> {
+  return readDocumentFile({ actor, documentId }, documentFileDependencies());
+}
+
+export async function documentFileAvailable(actor: Actor, documentId: string): Promise<boolean> {
+  return isDocumentFileAvailable({ actor, documentId }, documentFileDependencies());
+}
+
+export async function documentFileSummary(
+  actor: Actor,
+  documentId: string,
+): Promise<DocumentFileSummary | null> {
+  return documentFileSummaryFor({ actor, documentId }, documentFileDependencies());
+}
+
 export async function learnerReadingView(
   actor: Actor,
   input: { courseId: string; documentId: string; page?: number },

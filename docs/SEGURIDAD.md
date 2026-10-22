@@ -96,8 +96,10 @@ ejecuten, la barrera 2 está implementada pero **no verificada**.
 Con el plan Spark no existe Cloud Storage, así que el riesgo de "URL firmada =
 permiso temporal de portador" **desaparece**: no hay ninguna URL que compartir.
 En su lugar, el binario se sirve por páginas desde `/api/documents/{id}/pages`
-con `Cache-Control: no-store` (≤ 20 páginas y ≤ 768 KiB por petición), y el
-cliente nunca recibe el fichero completo de una sola respuesta.
+con `Cache-Control: no-store` (≤ 20 páginas y ≤ 768 KiB por petición) y, desde el
+bloque 07, **también entero** en `GET /api/documents/{id}/file` para que el
+navegador lo abra con su visor nativo. Lo segundo es una decisión expresa de ese
+bloque (experiencia Android sin `pdf.js`), no un descuido: ver 5.3 quater.
 
 Lo que queda es un control de aplicación, no DRM (ver 5.3): un alumno **con
 matrícula activa** en ese curso puede descargar las páginas del PDF que está
@@ -150,6 +152,60 @@ Lo que la subida por partes **no** resuelve, dicho sin adornos:
   precaución, no una medición hecha en producción.
 - **Un `pending` no se sirve a nadie**: ni al alumnado, ni al administrador por
   la API de lectura. Para inspeccionarlo hay que finalizarlo o cancelarlo.
+
+### 5.3 quater Lectura del PDF completo: qué se comprueba y qué no
+
+`GET /api/documents/{id}/file` entrega el fichero entero para que lo abra la
+aplicación de PDF del dispositivo. Antes de enviar un byte, el servidor
+comprueba, en este orden y sin fiarse de nada del cliente:
+
+1. cuenta **activa** (una cookie no basta; `status` sale de la base de datos);
+2. forma del identificador (`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`, sin `..`):
+   así el id no puede convertirse en una ruta ni en una consulta;
+3. documento **existente y `active`**: ni `pending`, ni `aborted`, ni
+   `archived`, ni con partes incompletas;
+4. curso con **versión publicada** (no vale «el fichero existe»);
+5. **matrícula activa** del actor en ese curso;
+6. el documento está **referenciado expresamente** en la definición de esa
+   versión publicada: un PDF de un borrador o de una versión antigua no se
+   entrega aunque su id sea correcto y sus bytes sigan en el almacén;
+7. las partes cubren el tamaño declarado (`bytes`) y el **SHA-256 global**
+   coincide con el que se verificó al activar el documento.
+
+Denegaciones y respuestas: los casos «no existe», «no está en la versión
+publicada» y «documento no servible» devuelven **el mismo 404**
+(`DOCUMENT_NOT_FOUND`), para no revelar qué documentos hay en borradores ni en
+versiones antiguas; sin matrícula, **403** (`COURSE_NOT_AUTHORIZED`); cuenta no
+activa, **403**; integridad rota (parte ausente, tamaño, firma o SHA-256), **409**
+(`DOCUMENT_CORRUPTED`), sin devolver un PDF aparentemente válido. Ningún error
+incluye rutas del almacén, claves de respuesta ni datos de otros documentos.
+
+Cabeceras de la respuesta correcta: `Content-Type: application/pdf`,
+`Content-Disposition: inline; filename="…"` con un nombre ASCII derivado del
+título (nunca la ruta interna), `Cache-Control: no-store, max-age=0, private`,
+`X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` y
+`Content-Length`. No hay caché compartida: la respuesta es privada por
+`Cache-Control` y `private`, y el proxy de sesión no la almacena.
+
+**Lo que esto no es:**
+
+- **No es un antivirus.** El SHA-256 demuestra que los bytes son los que se
+  subieron y que no se han alterado en el almacén, **no** que el PDF sea inocuo.
+  Un PDF con código incrustado puede tener el hash correcto. La mitigación sigue
+  siendo que solo administración sube ficheros y que el alumnado abre el PDF con
+  el lector del sistema (con su propio aislamiento), no con código de la
+  aplicación.
+- **No evita que quien tiene matrícula guarde el fichero.** Entregar el PDF
+  completo implica exactamente eso: una persona autorizada puede guardarlo. El
+  control es de acceso (quién), no de uso (qué hace después). El límite por
+  usuario y el global encarecen la descarga masiva, no la impiden.
+- **No demuestra nada contra Firestore real.** La batería se ejecuta con dobles y
+  con la demostración; el emulador sigue sin JVM. Que las reglas cierren
+  `pdfChunks` a todo cliente es una afirmación del fichero de reglas, **no** una
+  prueba ejecutada.
+- **La versión antigua no se sirve aunque sea pública en su momento**: solo vale
+  la versión publicada vigente del curso. Es lo que evita que un enlace guardado
+  siga dando acceso a material retirado.
 
 ### 5.3 bis Copias de seguridad: cifradas, pero sin instantánea global
 

@@ -20,6 +20,7 @@ import type { PdfDocumentMeta, StoredChunk } from "@/server/documents/store";
  */
 export class InMemoryPdfDocumentStore extends MemoryPdfDocumentStore {
   private failOnPartIndex: number | null = null;
+  private readFailure: Error | null = null;
 
   constructor() {
     super(createPdfMemoryState());
@@ -41,6 +42,35 @@ export class InMemoryPdfDocumentStore extends MemoryPdfDocumentStore {
   /** Programa un fallo en la escritura de la parte indicada. */
   failOnPart(index: number): void {
     this.failOnPartIndex = index;
+  }
+
+  /**
+   * Hace que la próxima lectura de un fragmento falle (caída del almacén). Se
+   * usa para comprobar que la ruta responde con un error seguro y sin bytes.
+   */
+  failNextRead(
+    error: Error = new DomainError("FIRESTORE_UNAVAILABLE", "La base de datos no responde.", 503),
+  ): void {
+    this.readFailure = error;
+  }
+
+  override async readChunk(documentId: string, index: number): Promise<Uint8Array | null> {
+    if (this.readFailure) {
+      const error = this.readFailure;
+      this.readFailure = null;
+      throw error;
+    }
+    return super.readChunk(documentId, index);
+  }
+
+  /**
+   * Modifica los metadatos sin pasar por el ciclo de subida (para simular un
+   * documento incompleto o con el tamaño declarado mal).
+   */
+  mutateMeta(documentId: string, mutate: (meta: PdfDocumentMeta) => void): void {
+    const meta = this.state.metas.get(documentId);
+    if (!meta) throw new Error(`No existe el documento ${documentId}`);
+    mutate(meta);
   }
 
   /** Nº de fragmentos almacenados (para comprobar que no quedan restos). */

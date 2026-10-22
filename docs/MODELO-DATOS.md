@@ -253,9 +253,18 @@ Storage** (requiere Blaze). Detalles que importan:
 - Solo los lee y escribe el servidor con el Admin SDK. Las reglas los cierran
   (`allow read, write: if false`), así que conocer el id no sirve de nada.
 - El cliente pide páginas a `/api/documents/{id}/pages?from=&to=` (máximo 20
-  páginas y 768 KiB por petición); nunca recibe el fichero completo de una vez
-  ni un enlace reutilizable. La lectura exige matrícula activa y respetar el
-  orden de páginas.
+  páginas y 768 KiB por petición) para el progreso de lectura; la lectura exige
+  matrícula activa y respetar el orden de páginas.
+- Desde el bloque 07 también puede pedir el **fichero completo** a
+  `GET /api/documents/{id}/file` para abrirlo con el visor del navegador. No es
+  una ruta alternativa de almacenamiento: usa el mismo `PdfDocumentStore`, los
+  mismos fragmentos y el mismo `sha256` del registro `documents/{id}`. Para
+  servirla se reconstruyen las partes y se recalculan tamaño y huella; si algo
+  no cuadra, no se devuelve el fichero. La autorización no mira el `courseId` de
+  la URL: busca en qué curso y versión publicada está referenciado el documento y
+  exige matrícula activa en **ese** curso. La versión del documento no se guarda
+  aparte: se deduce del `documentId` de las versiones publicadas, así que no hay
+  dos fuentes de verdad que puedan contradecirse.
 
 ### `audits/{autoId}` — auditoría administrativa
 

@@ -16,6 +16,7 @@ import type { CourseEditorStore } from "@/server/courses/editor";
 import type { EnrollmentStore } from "@/server/enrollments/store";
 import type { AttemptRecord, LearningStore, StoredProgress } from "@/server/learning/store";
 import { createPdfMemoryState, type PdfMemoryState } from "@/demo/pdf-store";
+import { seedDemoPdfs } from "@/demo/pdf-sample";
 import {
   DEMO_ACCOUNTS,
   DEMO_COURSES,
@@ -123,6 +124,13 @@ function seedState(): DemoState {
       record.summary.lastDraftVersion = definition.version;
     }
   }
+
+  // PDF de ejemplo para los documentos del contenido: se generan al arrancar y
+  // quedan en memoria con el mismo estado que produce una subida verificada.
+  seedDemoPdfs(
+    state.pdf,
+    DEMO_COURSES.map((course) => course.definition),
+  );
 
   for (const enrollment of DEMO_ENROLLMENTS) {
     const course = state.courses.get(enrollment.courseId);

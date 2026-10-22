@@ -146,11 +146,20 @@ POST /api/admin/documents/uploads/{id}/finalize  → verifica y activa (idempote
 POST /api/admin/documents/uploads/{id}/abort     → cancela y libera la reserva
 POST /api/admin/documents/{id}/attach            → { expectedRevision } → tema del borrador
 GET  /api/admin/documents                        → cuota usada / reservada / libre
+GET  /api/documents/{id}/file                    → PDF completo (portal del alumnado)
 ```
 
 Todas exigen sesión de administración, origen verificado y rol comprobado en el
 servicio (`assertAdmin`). El identificador del documento lo calcula el servidor:
 el cliente no lo elige y no puede modificar registros ajenos.
+- **Entrega al alumnado** (bloque 07): la página del documento ofrece el PDF con
+  el **visor nativo del navegador** (`<object type="application/pdf">` y, siempre,
+  un enlace a una pestaña nueva, porque Android Chrome no incrusta PDF en todos
+  los casos). No hay `pdf.js` ni visor propio. El fichero se pide a
+  `GET /api/documents/{id}/file`, que exige cuenta activa, matrícula activa,
+  versión publicada vigente y que el documento esté **referenciado** en ella;
+  antes de responder comprueba tamaño y SHA-256 globales. La lectura por páginas
+  (`/pages`) y el progreso no cambian: son cosas distintas y siguen como estaban.
 - **Acceso por matrícula** (`enrollments/{uid}_{courseId}`): estar publicado ya
   no da acceso. Matricular y revocar es cosa de administración; toda lectura de
   contenido pasa por `assertCourseAccess`.

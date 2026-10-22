@@ -50,6 +50,12 @@ import {
   type AttachResult,
 } from "@/server/documents/attach";
 import type { PdfDocumentMeta } from "@/server/documents/store";
+import {
+  documentFileSummary as documentFileSummaryFor,
+  isDocumentFileAvailable,
+  readDocumentFile,
+  type DocumentFileDependencies,
+} from "@/server/documents/file";
 import { MemoryPdfDocumentStore } from "@/demo/pdf-store";
 import { budgetBytesFromMiB } from "@/domain/storage/pdf-chunks";
 import type { AttemptRecord, StoredProgress } from "@/server/learning/store";
@@ -99,14 +105,6 @@ function demoCourseEditorDeps(): CourseEditorDependencies {
 }
 
 /**
- * Dependencias de la subida de PDF en demostración.
- *
- * Los bytes viven en memoria (`demoState().pdf`) pero el ciclo de vida es el
- * real: reserva de cuota, partes en orden, verificación de SHA-256 y activación.
- * No se aplican límites de peticiones: en la demostración hay un solo proceso y
- * el límite haría fallar una sesión larga sin proteger nada real.
- */
-/**
  * Dependencias de la subida en la demostración.
  *
  * La demo no lee la configuración del servidor: no hay Firebase y no debe
@@ -122,6 +120,35 @@ function demoUploadDeps(): UploadDependencies {
     catalog: catalogStore(),
     budgetBytes: budgetBytesFromMiB(mib),
   };
+}
+
+/**
+ * Dependencias de lectura del PDF completo en la demostración.
+ *
+ * Mismo servicio que en producción (`readDocumentFile`), con los bytes en
+ * memoria. Sin límite de descargas: un solo proceso y nada real que proteger.
+ */
+function demoFileDeps(): DocumentFileDependencies {
+  return {
+    documents: new MemoryPdfDocumentStore(demoState().pdf),
+    catalog: catalogStore(),
+    enrollments: new DemoEnrollmentStore(),
+  };
+}
+
+/** ¿Puede este actor abrir el PDF de este documento? (sin leer los bytes) */
+export async function documentFileAvailable(actor: Actor, documentId: string): Promise<boolean> {
+  return isDocumentFileAvailable({ actor, documentId }, demoFileDeps());
+}
+
+/** Resumen para la interfaz (título, páginas y tamaño), o `null` si no es accesible. */
+export async function documentFileSummary(actor: Actor, documentId: string) {
+  return documentFileSummaryFor({ actor, documentId }, demoFileDeps());
+}
+
+/** PDF completo verificado, listo para entregar con `application/pdf`. */
+export async function documentFile(actor: Actor, documentId: string) {
+  return readDocumentFile({ actor, documentId }, demoFileDeps());
 }
 
 export function accountLabel(uid: string): string {

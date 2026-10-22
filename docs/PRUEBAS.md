@@ -740,3 +740,53 @@ concurrencia real) ni que la lectura de fragmentos fuera de la transacción no
 pueda dejar un estado intermedio visible. El emulador sigue sin arrancar por
 falta de JVM, así que la subida se declara **verificada en dominio, servicio y
 demostración**, y **no verificada** contra Firestore real.
+
+## 19. Bloque 07 — visor PDF privado (22/10/2026)
+
+Alcance ejecutado: el alumnado con matrícula activa abre el **PDF completo** de un
+documento **publicado** por la puerta del portal, servido con autorización en
+servidor, integridad comprobada y cabeceras privadas; en pantalla lo abre el
+visor nativo del navegador (con enlace a pestaña nueva para Android). **No** se
+ha tocado el progreso por páginas, ni la publicación, ni la subida del bloque 06,
+ni las reglas de seguridad.
+
+| Comprobación | Comando | Resultado |
+| --- | --- | --- |
+| Cadena completa | `npm run verify` | **exit 0**: tipado 0 errores, lint 0 avisos, **757 pruebas en verde**, build OK |
+| Pruebas totales | `npm test` | **757 pasan**, 4 omitidas (emulador), 47 ficheros + 1 omitido (48) |
+| Recorrido de la demostración | `DEMO_MODE=1 npx next start -p 3000` + `npm run check:demo` | **PASSED**, **104 comprobaciones** (antes 79) |
+| Reglas de Firestore | `npm run test:rules` | **BLOQUEADO**: sin JVM |
+| Integración con emulador | `npm run test:firestore` | **BLOQUEADO**: sin JVM |
+| Conexión real | `npm run check:firebase` | **BLOQUEADO**: TLS hacia Google cortado; sin credenciales |
+
+Pruebas nuevas (32):
+
+| Fichero | Pruebas | Qué fijan |
+| --- | ---: | --- |
+| `tests/server/document-file.test.ts` | 25 | Acceso correcto con matrícula activa; sin matrícula; autenticado sin matrícula en ese curso; documento que solo está en un borrador; versión antigua no referenciada por la publicada vigente; pendiente, abortado, archivado e incompleto; curso sin versión publicada; cruce entre cursos distintos; identificadores manipulados (mayúsculas, `..`, barra, id inventado); fragmento ausente, fragmento alterado y firma `%PDF-` rota; SHA-256 global incorrecto; tamaño declarado distinto del real; fallo del almacén sin filtrar datos; coste por fragmento con el límite agotado; paridad demo ↔ dobles; administración sin matrícula tampoco recibe el fichero |
+| `tests/demo/demo-pdf.test.ts` | 7 | El PDF de ejemplo es un PDF 1.4 **estructuralmente válido** (cabecera, `xref` con desplazamientos reales, `startxref`, `%%EOF`); número de páginas; escapado de paréntesis y acentos ASCII; la siembra deja todos los documentos `active`, con sus fragmentos y su huella correcta; el alumno matriculado recibe el PDF completo; al revocar la matrícula deja de recibirlo; un documento que solo está en el borrador no se entrega aunque el PDF siga en el almacén |
+
+Recorrido HTTP añadido a `scripts/demo-smoke.mjs` (25 comprobaciones nuevas):
+
+- la página del documento ofrece la ruta del visor; el alumno matriculado recibe
+  **200** con `application/pdf`, cabecera `%PDF-`, `no-store` + `private`,
+  `inline` y sin rutas internas;
+- sin sesión **401**; cuenta pendiente **401**; sin matrícula en ese curso
+  **403**; id inventado y ruta manipulada **404**;
+- en el editor del borrador se sube un PDF real por la API del bloque 06 y se
+  comprueba que **antes de finalizar** devuelve **404**, que finalizado pero sin
+  asociar sigue devolviendo **404** y que **mientras la versión no se publica**
+  el alumnado tampoco lo recibe;
+- tras publicar, el alumno recibe **200** y los bytes entregados son
+  **exactamente** los subidos; la página del curso muestra el enlace al visor.
+
+Defecto corregido durante el bloque: la comprobación de «documento referenciado»
+recorría todos los temas de todas las versiones y aceptaba un documento de una
+versión antigua; ahora se limita a la versión **publicada vigente** del curso, y
+la prueba de la versión antigua lo fija.
+
+Lo que **no** demuestran estas pruebas: que Firestore real entregue los
+fragmentos con la misma latencia y atomicidad, ni que las reglas impidan leer
+`pdfChunks` desde un cliente. Dobles y demostración son memoria. Tampoco se ha
+abierto un PDF real en un dispositivo Android: la alternativa (enlace a pestaña
+nueva) está en la interfaz, pero **no se ha medido** en un teléfono.

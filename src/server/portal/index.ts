@@ -78,6 +78,33 @@ export async function readingView(
   return firebase.learnerReadingView(actor, input);
 }
 
+/**
+ * PDF completo para el visor nativo del navegador.
+ *
+ * Misma función en demostración y en producción: el servicio comprueba
+ * identidad, matrícula, versión publicada, referencia del documento e
+ * integridad. Lo único que cambia es de dónde salen los bytes.
+ */
+export async function documentFile(actor: Actor, documentId: string) {
+  return portalMode() === "demo"
+    ? demo.documentFile(actor, documentId)
+    : firebase.documentFile(actor, documentId);
+}
+
+/** ¿Se puede ofrecer el visor? (no lee los bytes) */
+export async function documentFileAvailable(actor: Actor, documentId: string): Promise<boolean> {
+  return portalMode() === "demo"
+    ? demo.documentFileAvailable(actor, documentId)
+    : firebase.documentFileAvailable(actor, documentId);
+}
+
+/** Título, páginas y tamaño si el documento es accesible; `null` si no. */
+export async function documentFileSummary(actor: Actor, documentId: string) {
+  return portalMode() === "demo"
+    ? demo.documentFileSummary(actor, documentId)
+    : firebase.documentFileSummary(actor, documentId);
+}
+
 /** Marca una página como leída. Devuelve la siguiente permitida. */
 export async function readPage(
   actor: Actor,
