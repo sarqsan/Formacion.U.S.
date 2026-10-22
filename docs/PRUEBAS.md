@@ -1193,3 +1193,27 @@ correo de servicio, solo el dominio; de la clave privada, solo si se puede leer.
 `.env.example` sigue siendo la **plantilla vacía** con los seis nombres exactos;
 su cabecera ahora dice explícitamente que se rellena la copia, nunca el ejemplo
 versionado.
+
+### 27 bis. Autorización para escribir los valores públicos (22/10/2026)
+
+Tras la autorización expresa del usuario, los cuatro valores del SDK web se han
+escrito en `.env.local` de este espacio de trabajo (permisos `600`), junto a
+`NEXT_PUBLIC_AUTH_EMAIL_DOMAIN=formacion.invalid` y
+`FIREBASE_PROJECT_ID=formacionus-63555`. **Ningún valor se repite** en docs,
+informes, diffs ni commits.
+
+| Comprobación | Resultado |
+| --- | --- |
+| Las seis variables están presentes y con la forma esperada | sí (comprobación estructural: presencia, longitud y patrón, sin imprimir valores) |
+| `git check-ignore -v .env.local` | `.gitignore:45:.env.*` → excluido |
+| `git status --short` | 0 entradas para `.env.local`; no entra en el commit |
+| `git ls-files --error-unmatch .env.local` | error «did not match any file(s)» → nunca ha estado indexado |
+| `npm run check:web` | **PASSED (exit 0)**: los cinco valores pasan forma y coherencia con `FIREBASE_PROJECT_ID` |
+| `npm run check:setup` | **FAILED (exit 2)**: falta solo `FIREBASE_CLIENT_EMAIL` (y su clave), marcado `[SECRETA]` |
+| `npm run verify` | **exit 0**: 900 pasan / 9 omitidas, lint sin avisos, build OK |
+| `npm run check:demo` | **PASSED**, 140 comprobaciones |
+| `GET /api/health` | `configured:false`, `ready:false`, `mode:"unconfigured"`: la configuración web no basta, faltan credenciales de servidor |
+| `npm run check:firebase` | **no ejecutado**: sin credenciales y sin salida de red hacia Google |
+
+La demostración sigue en `DEMO_MODE=1` sin cambios y no usa ninguno de estos
+valores.

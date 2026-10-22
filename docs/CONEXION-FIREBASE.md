@@ -433,12 +433,35 @@ La CLI ayuda a no equivocarse: `npm run check:setup` marca cada acción pendient
 con `[pública]`, `[SECRETA]` o `[configuración]` y avisa de que las secretas no
 se pegan en el chat.
 
-### 4.6 Valores públicos recibidos y NO escritos (fase 4, 22/10/2026)
+### 4.6 Valores públicos: escritos tras autorización expresa (fase 4, 22/10/2026)
 
-Se recibió del usuario la configuración del SDK web de `formacionus-63555`
-(`apiKey`, `authDomain`, `projectId`, `appId`). **No se ha escrito ninguno en un
-fichero de este espacio de trabajo**, y esta es la razón, con las comprobaciones
-hechas:
+**Estado final de esta fase:** el usuario autorizó expresamente escribir los
+cuatro valores públicos del SDK web en `.env.local` de este espacio de trabajo,
+conociendo que el fichero queda visible en el explorador y en las instantáneas.
+Está hecho: seis variables, permisos `600`, excluido por `.gitignore` y **fuera
+del commit** (comprobado con `git check-ignore`, `git status` y
+`git ls-files --error-unmatch`). Ningún valor aparece en la documentación, en el
+diff ni en los commits; tampoco se repite en la salida de los diagnósticos.
+
+Lo que sigue siendo cierto y conviene no olvidar:
+
+| Comprobación | Resultado |
+| --- | --- |
+| `projectId` recibido | `formacionus-63555` — coincide con `.firebaserc` y con `FIREBASE_PROJECT_ID` |
+| Forma de los cuatro valores frente a los patrones de `public-config.ts` | los cuatro pasan; `npm run check:web` → **PASSED (exit 0)** |
+| ¿Es un almacén privado este entorno? | **no**: ficheros en instantáneas y visibles en el explorador |
+| ¿Basta `.gitignore`? | para el **repositorio** sí; no protege la instantánea del espacio de trabajo |
+
+Los cuatro valores **no son secretos** (viajan en el bundle de cualquier
+despliegue; la seguridad la dan las reglas de Firestore y la verificación del
+token en el servidor). La autorización se apoyó en eso.
+
+**Lo que sigue pendiente es el secreto de verdad:** `FIREBASE_CLIENT_EMAIL` y
+`FIREBASE_PRIVATE_KEY`. No se guardan aquí. `.env.local` es aceptable para los
+valores públicos; **no** lo es para la clave privada.
+
+Cómo se comportaba el entorno antes de la autorización (se conserva como
+referencia de por qué no se escribe nada sin permiso):
 
 | Comprobación | Resultado |
 | --- | --- |
@@ -453,9 +476,11 @@ token en el servidor). Aun así, el entorno **no permite mantener el fichero en
 privado**, así que no se han escrito: se han tratado como datos que solo deben
 vivir en el entorno de ejecución.
 
-**Consecuencia práctica:** `npm run check:web` y `npm run check:setup` siguen en
-**FAILED (exit 2)** en este entorno. No es un error de los valores: es que no
-están puestos donde la aplicación los lee.
+**Consecuencia práctica antes de la autorización:** `npm run check:web` y
+`npm run check:setup` daban **FAILED (exit 2)**. No era un error de los valores:
+era que no estaban puestos donde la aplicación los lee. Hoy `check:web` está en
+**PASSED** y `check:setup` sigue en **FAILED** por una sola razón: faltan las
+credenciales de la cuenta de servicio.
 
 **Dónde ponerlos (dos vías, ninguna en este espacio de trabajo sin permiso
 explícito):**
