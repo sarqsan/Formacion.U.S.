@@ -22,7 +22,12 @@ import {
   type PublicDocument,
 } from "@/server/courses/catalog";
 import type { CourseVersionSummary } from "@/domain/courses/versioning";
-import type { AttemptRecord, LearningStore, StoredProgress } from "@/server/learning/store";
+import type {
+  ArchivedProgress,
+  AttemptRecord,
+  LearningStore,
+  StoredProgress,
+} from "@/server/learning/store";
 import type { Actor } from "@/domain/auth/authorization";
 import { DomainError } from "@/domain/text";
 import type { CourseEditorStore } from "@/server/courses/editor";
@@ -407,7 +412,7 @@ export class InMemoryCourseEditorStore implements CourseEditorStore {
 
 export class InMemoryLearningStore implements LearningStore {
   progress = new Map<string, StoredProgress>();
-  archive = new Map<string, StoredProgress>();
+  archive = new Map<string, ArchivedProgress>();
   attempts: AttemptRecord[] = [];
   commits = 0;
 
@@ -427,10 +432,7 @@ export class InMemoryLearningStore implements LearningStore {
   }): Promise<void> {
     this.commits += 1;
     if (input.archive) {
-      this.archive.set(
-        `${input.archive.uid}@${input.archive.courseId}@v${input.archive.version}`,
-        structuredClone(input.archive),
-      );
+      this.archiveAt(input.archive, input.progress.updatedAt);
     }
     this.attempts.push(structuredClone(input.attempt));
     this.progress.set(
@@ -444,10 +446,7 @@ export class InMemoryLearningStore implements LearningStore {
     archive: StoredProgress | null = null,
   ): Promise<void> {
     if (archive) {
-      this.archive.set(
-        `${archive.uid}@${archive.courseId}@v${archive.version}`,
-        structuredClone(archive),
-      );
+      this.archiveAt(archive, progress.updatedAt);
     }
     this.progress.set(this.progressKey(progress.uid, progress.courseId), structuredClone(progress));
   }
@@ -462,6 +461,23 @@ export class InMemoryLearningStore implements LearningStore {
     return [...this.progress.values()].filter((entry) => entry.uid === uid);
   }
 
+  /** Igual que Firestore: archivar sella la fecha y sobrescribe la misma versión. */
+  private archiveAt(progress: StoredProgress, archivedAt: string): void {
+    this.archive.set(`${progress.uid}@${progress.courseId}@v${progress.version}`, {
+      ...structuredClone(progress),
+      archivedAt,
+    });
+  }
+
+  /**
+   * Histórico archivado, sin orden garantizado — igual que el puerto real.
+   * `archivedAt` se sella al archivar, así que el resumen no tiene que
+   * inventarlo.
+   */
+  async listArchivedProgress(uid: string): Promise<ArchivedProgress[]> {
+    return [...this.archive.values()].filter((entry) => entry.uid === uid).map((entry) => structuredClone(entry));
+  }
+
   async listAttemptsByUser(uid: string): Promise<AttemptRecord[]> {
     return this.attempts.filter((attempt) => attempt.uid === uid);
   }
@@ -474,5 +490,10 @@ export class InMemoryLearningStore implements LearningStore {
 
   seedProgress(progress: StoredProgress): void {
     this.progress.set(this.progressKey(progress.uid, progress.courseId), structuredClone(progress));
+  }
+
+  /** Siembra el histórico sin pasar por un intento (para probar la lectura). */
+  seedArchived(progress: StoredProgress, archivedAt: string): void {
+    this.archiveAt(progress, archivedAt);
   }
 }

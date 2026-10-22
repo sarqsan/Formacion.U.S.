@@ -3,6 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { DomainError } from "@/domain/text";
 import { getUiSession } from "@/demo/session";
 import {
+  accountCourseHistory,
   accounts as listAccounts,
   adminActivationSummary,
   adminProgress,
@@ -12,6 +13,13 @@ import { disableAccountAction, enableAccountAction } from "@/app/actions/demo";
 import { ReissueActivation } from "./account-actions";
 
 export const dynamic = "force-dynamic";
+
+function formatDate(value: string | null): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return new Intl.DateTimeFormat("es-ES", { dateStyle: "medium", timeZone: "UTC" }).format(date);
+}
 
 /**
  * FICHA DE UNA CUENTA (bloque 09)
@@ -79,9 +87,13 @@ export default async function PersonPage({
 
   let progress: Awaited<ReturnType<typeof adminProgress>>;
   let activations: Awaited<ReturnType<typeof adminActivationSummary>>;
+  let history: Awaited<ReturnType<typeof accountCourseHistory>>;
   try {
-    progress = await adminProgress(session.actor);
-    activations = await adminActivationSummary(session.actor, uid);
+    [progress, activations, history] = await Promise.all([
+      adminProgress(session.actor),
+      adminActivationSummary(session.actor, uid),
+      accountCourseHistory(session.actor, uid),
+    ]);
   } catch (caught) {
     if (isUnavailable(caught)) {
       return <DataUnavailable detail={caught instanceof Error ? caught.message : undefined} />;
@@ -255,6 +267,70 @@ export default async function PersonPage({
               </li>
             ))}
           </ul>
+        )}
+      </section>
+
+      {/*
+        Historial (bloque 10). La autorización la decide el servicio
+        (`assertCanReadProgress`), no esta pantalla: aquí solo se pinta lo que
+        el servidor ha aceptado devolver.
+      */}
+      <section className="card space-y-3 p-5">
+        <div className="flex flex-wrap items-end justify-between gap-2">
+          <h2 className="text-sm font-semibold">Historial de versiones</h2>
+          {history.entries.length > 0 ? (
+            <span className="pill pill-off">{history.entries.length} registros</span>
+          ) : null}
+        </div>
+        <p className="muted text-xs leading-relaxed">
+          Versiones anteriores que esta persona cursó. Se archivan al publicarse una versión nueva
+          del curso y se conservan aunque la cuenta se deshabilite.
+        </p>
+
+        {history.entries.length === 0 ? (
+          <p className="muted text-sm">Sin versiones anteriores registradas.</p>
+        ) : (
+          <div className="table-wrap">
+            <table className="data">
+              <thead>
+                <tr>
+                  <th scope="col">Curso</th>
+                  <th scope="col">Versión</th>
+                  <th scope="col">Resultado</th>
+                  <th scope="col">Temas</th>
+                  <th scope="col">Examen</th>
+                  <th scope="col">Fecha</th>
+                </tr>
+              </thead>
+              <tbody>
+                {history.entries.map((entry) => (
+                  <tr key={`${entry.courseId}-v${entry.version}`}>
+                    <td className="font-medium">{entry.courseTitle}</td>
+                    <td>
+                      <span className="pill pill-off">v{entry.version}</span>
+                    </td>
+                    <td>
+                      {entry.completed ? (
+                        <span className="pill pill-ok">Completado</span>
+                      ) : (
+                        <span className="pill pill-off">Incompleto</span>
+                      )}
+                    </td>
+                    <td className="mono text-xs">
+                      {entry.topicsPassed}/{entry.topicsTotal}
+                    </td>
+                    <td className="mono text-xs">
+                      {entry.finalExamPassed ? "Apto" : "No apto"}
+                      {entry.finalScore > 0 ? ` · ${entry.finalScore}%` : ""}
+                    </td>
+                    <td className="muted text-xs">
+                      {formatDate(entry.completedAt ?? entry.archivedAt)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </section>
 

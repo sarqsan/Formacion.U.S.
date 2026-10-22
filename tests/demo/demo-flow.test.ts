@@ -4,6 +4,7 @@ import { updateDraftVersion } from "@/server/courses/catalog";
 import { DomainError } from "@/domain/text";
 import type { Actor } from "@/domain/auth/authorization";
 import {
+  accountCourseHistory,
   adminEnroll,
   adminProgress,
   adminPublish,
@@ -11,6 +12,7 @@ import {
   courseViewForLearner,
   coursesForLearner,
   demoDeps,
+  learnerCourseHistory,
   readScreen,
   screenView,
 } from "@/demo/service";
@@ -271,6 +273,141 @@ describe("demostración: administración", () => {
   it("un alumno no puede publicar ni matricular", async () => {
     await expect(adminPublish(LEARNER, DATA_COURSE, 2)).rejects.toMatchObject({ code: "FORBIDDEN" });
     await expect(adminEnroll(LEARNER, "demo-alumno-2", DATA_COURSE)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+  });
+});
+
+/**
+ * HISTORIAL DE FORMACIÓN (bloque 10)
+ * ==================================
+ *
+ * La promesa del panel es que al publicarse una versión nueva «se repite desde
+ * el principio sin perder el histórico». Antes de este bloque era falsa en la
+ * demostración: el archivo se calculaba y se descartaba (`void archive`). Estas
+ * pruebas fijan el comportamiento correcto de punta a punta con los servicios.
+ */
+describe("demostración: historial de formación", () => {
+  beforeEach(() => {
+    resetDemoState();
+  });
+
+  const OTHER_LEARNER: Actor = { uid: "demo-alumno-2", role: "learner", status: "active" };
+
+  async function completeDataV1() {
+    await adminEnroll(ADMIN, LEARNER.uid, DATA_COURSE);
+    await readWholeTopic(DATA_COURSE, "doc-datos", 2);
+
+    const view = await courseViewForLearner(LEARNER, DATA_COURSE);
+    const topic = view.topics[0];
+    const topicResult = await submitAssessment(
+      {
+        actor: LEARNER,
+        courseId: DATA_COURSE,
+        assessmentType: "topic",
+        topicId: topic.id,
+        answers: answersFor(DATA_COURSE, 1, topic.questions, true),
+      },
+      demoDeps(),
+    );
+    expect(topicResult.passed).toBe(true);
+
+    const unlocked = await courseViewForLearner(LEARNER, DATA_COURSE);
+    const exam = await submitAssessment(
+      {
+        actor: LEARNER,
+        courseId: DATA_COURSE,
+        assessmentType: "final",
+        answers: answersFor(DATA_COURSE, 1, unlocked.finalExam.questions, true),
+      },
+      demoDeps(),
+    );
+    expect(exam.courseCompleted).toBe(true);
+  }
+
+  async function publishDataV2() {
+    const definition = definitionOf(DATA_COURSE, 2);
+    expect(definition).not.toBeNull();
+    await updateDraftVersion(
+      {
+        actor: ADMIN,
+        definition: { ...definition!, title: "Protección de datos (v2 revisada)" },
+      },
+      demoDeps(),
+    );
+    await adminPublish(ADMIN, DATA_COURSE, 2);
+  }
+
+  it("no archiva nada mientras la versión cursada sigue siendo la publicada", async () => {
+    await completeDataV1();
+
+    await expect(learnerCourseHistory(LEARNER)).resolves.toEqual({ entries: [], unresolved: 0 });
+  });
+
+  it("conserva la versión completada al publicarse una nueva y empezar de cero", async () => {
+    await completeDataV1();
+    await publishDataV2();
+
+    // El progreso vivo vuelve a cero en la versión 2…
+    const restarted = await courseViewForLearner(LEARNER, DATA_COURSE);
+    expect(restarted.version).toBe(2);
+    expect(restarted.completed).toBe(false);
+    expect(restarted.topics[0].documents[0].lastPageViewed).toBe(0);
+
+    // …y el histórico sigue vacío hasta que se vuelve a tocar el curso: el
+    // archivo es perezoso, igual que en Firestore.
+    expect((await learnerCourseHistory(LEARNER)).entries).toEqual([]);
+
+    await readScreen(LEARNER, { courseId: DATA_COURSE, documentId: "doc-datos", page: 1 });
+
+    const history = await learnerCourseHistory(LEARNER);
+    expect(history.unresolved).toBe(0);
+    expect(history.entries).toEqual([
+      expect.objectContaining({
+        courseId: DATA_COURSE,
+        courseTitle: "Protección de datos y confidencialidad",
+        version: 1,
+        completed: true,
+        topicsPassed: 1,
+        topicsTotal: 1,
+        finalExamPassed: true,
+        finalScore: 100,
+        supersededBy: 2,
+      }),
+    ]);
+    expect(history.entries[0].completedAt).not.toBeNull();
+    expect(history.entries[0].archivedAt).not.toBeNull();
+  });
+
+  it("archiva también lo que quedó a medias, sin disfrazarlo de completado", async () => {
+    await adminEnroll(ADMIN, OTHER_LEARNER.uid, DATA_COURSE);
+    await readScreen(OTHER_LEARNER, { courseId: DATA_COURSE, documentId: "doc-datos", page: 1 });
+
+    await publishDataV2();
+    await readScreen(OTHER_LEARNER, { courseId: DATA_COURSE, documentId: "doc-datos", page: 1 });
+
+    const history = await learnerCourseHistory(OTHER_LEARNER);
+    expect(history.entries).toHaveLength(1);
+    expect(history.entries[0]).toMatchObject({
+      courseId: DATA_COURSE,
+      version: 1,
+      completed: false,
+      completedAt: null,
+      topicsPassed: 0,
+      topicsTotal: 1,
+      supersededBy: 2,
+    });
+  });
+
+  it("administración puede consultar el histórico de una persona; otra persona no", async () => {
+    await completeDataV1();
+    await publishDataV2();
+    await readScreen(LEARNER, { courseId: DATA_COURSE, documentId: "doc-datos", page: 1 });
+
+    const asAdmin = await accountCourseHistory(ADMIN, LEARNER.uid);
+    expect(asAdmin.entries).toHaveLength(1);
+
+    await expect(accountCourseHistory(OTHER_LEARNER, LEARNER.uid)).rejects.toMatchObject({
       code: "FORBIDDEN",
     });
   });

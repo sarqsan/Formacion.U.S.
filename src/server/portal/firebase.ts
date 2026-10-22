@@ -7,6 +7,7 @@ import type { ImportPreview } from "@/domain/people/import-rows";
 import type { AccountRole, AccountStatus, PersonRol } from "@/domain/roles";
 import { COLLECTIONS } from "@/server/db/schema.constants";
 import { mandatoryTopicsOf } from "@/server/courses/catalog";
+import { accountHistory, learnerHistory } from "@/server/learning/history";
 import { definitionFromDocuments } from "@/server/courses/definition";
 import { publishCourseVersion } from "@/server/courses/catalog";
 import { enrollStudent, revokeEnrollment } from "@/server/enrollments/service";
@@ -799,6 +800,20 @@ export async function adminPublish(actor: Actor, courseId: string, version: numb
     { actor, courseId, version },
     { store: deps.catalog, documents: deps.documents },
   );
+}
+
+// ---------------------------------------------------------------------------
+// Historial de formación (bloque 10)
+// ---------------------------------------------------------------------------
+
+/** Histórico de versiones anteriores del propio alumno. */
+export async function learnerCourseHistory(actor: Actor) {
+  return learnerHistory(firestoreDeps(), actor);
+}
+
+/** Histórico de una persona: la suya, o cualquiera si es administración. */
+export async function accountCourseHistory(actor: Actor, uid: string) {
+  return accountHistory(firestoreDeps(), { actor, uid });
 }
 
 // ---------------------------------------------------------------------------

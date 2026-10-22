@@ -809,3 +809,55 @@ cerrar sin tocar la consola de Firebase.
 - Lo que no se ha podido verificar: que Firebase Auth revoque de verdad y que las
   claims se propaguen. La batería usa dobles y la demostración; el bloqueo de B09
   (reglas y emulador) sigue declarado.
+
+---
+
+## ADR-029 · El histórico se lee y se ordena en memoria (bloque 10)
+
+**Contexto.** Cada publicación de una versión nueva archiva el progreso anterior
+en `progressHistory/{uid}_{courseId}_v{n}` (ADR-010). El documento se escribía
+desde el bloque 03, pero **ninguna parte de la aplicación lo leía**: no había
+puerto, servicio ni pantalla. En la demostración era peor: el archivo se
+calculaba y se descartaba (`void archive`), así que la frase del panel —«se
+repite desde el principio sin perder el histórico»— era falsa. La prioridad de
+producto incluye expresamente «persistencia y consulta del progreso, historial y
+resultados».
+
+**Decisión.**
+
+1. **Un puerto, dos implementaciones.** `LearningStore.listArchivedProgress(uid)`
+   devuelve los archivados de una persona **sin prometer orden**. Firestore y el
+   almacén en memoria de la demostración lo cumplen igual, de modo que las dos
+   rutas se comportan igual.
+2. **Una sola consulta, sin índice compuesto.** Se filtra **solo por `uid`**
+   (con `limit(200)`). Añadir `orderBy("archivedAt")` o `orderBy("completedAt")`
+   exigiría un índice compuesto nuevo y publicar índices es una operación
+   reservada a la sesión de Firebase. El orden se resuelve en memoria con
+   `sortHistory`, que además da un orden determinista cuando las fechas coinciden
+   (versión descendente y luego curso).
+3. **El resumen es puro y compartido** (`src/domain/progress/history.ts`): cuenta
+   temas obligatorios superados, mejor nota del examen final y decide
+   `completed` por `completedAt`, no recalculando con las reglas de la versión
+   vigente.
+4. **Se muestran también los archivos incompletos**, marcados como tales. Un
+   histórico que solo enseña aprobados no sirve para responder qué había hecho
+   alguien antes de que se publicara la versión nueva.
+5. **La autorización es la del dominio.** Se usa por fin
+   `assertCanReadProgress`: el alumno ve su historial y administración el de
+   cualquier persona; un `uid` vacío se trata como cuenta inexistente en vez de
+   dejar una consulta ancha.
+6. **El título es el de la versión archivada** y, si ya no está, el del curso.
+   El título actual del curso no reescribe el pasado.
+
+**Consecuencias.**
+
+- `progressHistory` deja de ser un archivo muerto: tiene lectura, servicio,
+  pantalla de alumno y ficha de administración, y pruebas que fijan que al
+  publicar una v2 lo completado en la v1 **no se pierde**.
+- El archivo sigue siendo **perezoso**: la entrada aparece la primera vez que la
+  persona vuelve a tocar el curso después de la publicación. La interfaz lo dice
+  («todavía no hay versiones anteriores») en vez de inventar entradas.
+- No se publican índices, no se tocan reglas y no se añaden dependencias: el
+  bloqueo de B02 (emulador, reglas, Firebase real) sigue vigente.
+- Los cursos borrados del catálogo no rompen la página: se cuentan como
+  `unresolved` y se avisa, sin rellenar huecos con datos inventados.

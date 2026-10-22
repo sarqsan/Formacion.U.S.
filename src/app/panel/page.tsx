@@ -1,10 +1,18 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getUiSession } from "@/demo/session";
-import { accountProfile, coursesForLearner } from "@/server/portal";
+import { accountProfile, coursesForLearner, learnerCourseHistory } from "@/server/portal";
 import { DataUnavailable, isUnavailable } from "@/app/components/data-unavailable";
 
 export const dynamic = "force-dynamic";
+
+/** Fecha corta y estable: el servidor no debe depender de la zona del navegador. */
+function formatDate(value: string | null): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return new Intl.DateTimeFormat("es-ES", { dateStyle: "medium", timeZone: "UTC" }).format(date);
+}
 
 export default async function PanelPage() {
   const session = await getUiSession();
@@ -31,8 +39,13 @@ export default async function PanelPage() {
   // activo decide de dónde vienen los datos.
   let account: Awaited<ReturnType<typeof accountProfile>> = null;
   let courses: Awaited<ReturnType<typeof coursesForLearner>> = [];
+  let history: Awaited<ReturnType<typeof learnerCourseHistory>> = { entries: [], unresolved: 0 };
   try {
-    [account, courses] = await Promise.all([accountProfile(actor), coursesForLearner(actor)]);
+    [account, courses, history] = await Promise.all([
+      accountProfile(actor),
+      coursesForLearner(actor),
+      learnerCourseHistory(actor),
+    ]);
   } catch (error) {
     if (isUnavailable(error)) {
       return <DataUnavailable detail={error instanceof Error ? error.message : undefined} />;
@@ -126,6 +139,90 @@ export default async function PanelPage() {
           ))}
         </section>
       )}
+
+      {/*
+        Historial: lo archivado al publicarse una versión nueva. Se lee de
+        `progressHistory`, que antes se escribía y no se mostraba en ninguna
+        parte. No sustituye al progreso vivo: lo conserva.
+      */}
+      <section className="card p-5" aria-labelledby="historial-titulo">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 id="historial-titulo" className="text-sm font-semibold">
+              Historial de formación
+            </h2>
+            <p className="muted mt-1 text-xs leading-relaxed">
+              Lo que ya cursaste en versiones anteriores de cada curso. Se conserva aunque el curso
+              se actualice, y no se puede modificar.
+            </p>
+          </div>
+          {history.entries.length > 0 ? (
+            <span className="pill pill-off">{history.entries.length} registros</span>
+          ) : null}
+        </div>
+
+        {history.entries.length === 0 ? (
+          <p className="muted mt-3 text-sm leading-relaxed">
+            Todavía no hay versiones anteriores. Cuando se publique una versión nueva de un curso que
+            estés cursando, aquí quedará el registro de la anterior con su resultado.
+          </p>
+        ) : (
+          <div className="table-wrap mt-3">
+            <table className="data">
+              <thead>
+                <tr>
+                  <th scope="col">Curso</th>
+                  <th scope="col">Versión</th>
+                  <th scope="col">Resultado</th>
+                  <th scope="col">Temas</th>
+                  <th scope="col">Examen final</th>
+                  <th scope="col">Fecha</th>
+                </tr>
+              </thead>
+              <tbody>
+                {history.entries.map((entry) => (
+                  <tr key={`${entry.courseId}-v${entry.version}`}>
+                    <td className="font-medium">
+                      {entry.courseTitle}
+                      {entry.supersededBy != null ? (
+                        <span className="muted block text-xs">
+                          sustituido por la versión {entry.supersededBy}
+                        </span>
+                      ) : null}
+                    </td>
+                    <td>
+                      <span className="pill pill-off">v{entry.version}</span>
+                    </td>
+                    <td>
+                      {entry.completed ? (
+                        <span className="pill pill-ok">Completado</span>
+                      ) : (
+                        <span className="pill pill-off">Incompleto</span>
+                      )}
+                    </td>
+                    <td className="mono text-xs">
+                      {entry.topicsPassed}/{entry.topicsTotal}
+                    </td>
+                    <td className="mono text-xs">
+                      {entry.finalExamPassed ? "Apto" : "No apto"}
+                      {entry.finalScore > 0 ? ` · ${entry.finalScore}%` : ""}
+                    </td>
+                    <td className="muted text-xs">{formatDate(entry.completedAt ?? entry.archivedAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {history.unresolved > 0 ? (
+          <p className="muted mt-3 text-xs">
+            {history.unresolved === 1
+              ? "Hay 1 registro de un curso que ya no está en el catálogo y no se muestra."
+              : `Hay ${history.unresolved} registros de cursos que ya no están en el catálogo y no se muestran.`}
+          </p>
+        ) : null}
+      </section>
 
       <section className="card p-5 text-xs muted">
         <p className="font-semibold text-[var(--foreground)]">Cómo funciona el progreso</p>

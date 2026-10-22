@@ -60,6 +60,12 @@ const ROWS: Row[] = [
       "Panel de alumno y de administración con el estado real del progreso guardado.",
   },
   {
+    feature: "Historial de formación",
+    state: "demo",
+    detail:
+      "El progreso archivado al publicarse una versión nueva se lee y se muestra en el panel del alumno y en la ficha de cada persona. La consulta filtra solo por uid y el orden se resuelve en memoria, así que no se publica ningún índice. Probado con dobles y en la demostración; la consulta real a Firestore no se ha ejecutado.",
+  },
+  {
     feature: "Importación de Excel (Rol y Apellido)",
     state: "pending",
     detail:

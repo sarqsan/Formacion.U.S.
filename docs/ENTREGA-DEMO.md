@@ -111,6 +111,15 @@ auditoría. Lo que **no** ocurre: no se habla con Firebase Auth, así que la
 revocación de refresh tokens y la propagación de claims son un registro local,
 no una llamada real.
 
+**Historial de formación (bloque 10).** Al publicar una versión nueva de un
+curso, lo cursado en la versión anterior se archiva y el alumno empieza de cero.
+Ese archivo se lee: el panel muestra **Historial de formación** con la versión,
+el resultado (completado o incompleto), los temas superados, el examen final y la
+fecha, y la ficha de administración muestra el mismo registro de cada persona.
+Antes de este bloque el archivo se escribía y no se leía; en la demostración
+incluso se descartaba. Lo que se ve ahora sí ocurre dentro del proceso; lo que
+**no** se ha ejecutado es la consulta contra Firestore real (sin emulador).
+
 **Simulado (y así se indica en pantalla):**
 
 - El almacenamiento: un diccionario en memoria del proceso. Al reiniciar el

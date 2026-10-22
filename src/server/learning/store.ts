@@ -26,6 +26,16 @@ export interface StoredProgress extends CourseProgress {
   updatedAt: string;
 }
 
+/**
+ * Progreso de una versión anterior, tal y como quedó archivado.
+ *
+ * `archivedAt` lo pone el almacén al mover el documento (es la fecha en que se
+ * publicó la versión siguiente, no la de la última actividad).
+ */
+export interface ArchivedProgress extends StoredProgress {
+  archivedAt: string | null;
+}
+
 export interface AttemptRecord {
   uid: string;
   courseId: string;
@@ -67,6 +77,17 @@ export interface LearningStore {
   ): Promise<Array<Pick<StoredProgress, "uid" | "completedAt" | "version">>>;
 
   listProgressByUser(uid: string): Promise<StoredProgress[]>;
+
+  /**
+   * Histórico de versiones anteriores de un usuario, de todas sus formaciones.
+   *
+   * Contrato: devuelve lo archivado, **incluido lo que quedó a medias** (un
+   * histórico que solo muestra aprobados no responde «qué había»). Sin orden
+   * garantizado por la implementación: el orden lo fija `sortHistory`, para que
+   * Firestore y la demostración se comporten igual sin depender de un índice
+   * compuesto.
+   */
+  listArchivedProgress(uid: string): Promise<ArchivedProgress[]>;
 
   listAttemptsByUser(uid: string): Promise<AttemptRecord[]>;
 

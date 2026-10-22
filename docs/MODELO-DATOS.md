@@ -287,6 +287,28 @@ versión nueva. Es un histórico inmutable: permite responder qué había
 completado alguien en la v1 cuando ya va por la v3. Sin regla de lectura para
 el cliente, salvo la propia del usuario (ver §3).
 
+**Se lee de verdad desde el bloque 10.** Antes se escribía y ninguna pantalla lo
+consultaba. El puerto `LearningStore.listArchivedProgress(uid)` lo expone y el
+servidor (`src/server/learning/history.ts`) lo resume con
+`src/domain/progress/history.ts`:
+
+- la consulta filtra **solo por `uid`** (`limit(200)`, sin `orderBy`): Firestore
+  indexa ese campo por sí solo, así que **no hace falta ningún índice compuesto
+  nuevo**;
+- el orden (más reciente primero, desempate por versión y curso) se aplica **en
+  memoria** con `sortHistory`; el puerto no promete orden. Mismo criterio en la
+  demostración, para que las dos rutas no diverjan;
+- se devuelven también los archivos **incompletos**: un histórico que solo
+  enseña aprobados no responde «¿qué había hecho esta persona?»;
+- `completed` se decide por `completedAt`, no recalculando con las reglas de la
+  versión actual;
+- el título que se muestra es el de la **versión archivada** (`courses/{id}/versions/{n}`)
+  y, si falta, el del curso: un título nuevo no reescribe el pasado;
+- un archivo cuyo curso ya no existe se cuenta (`unresolved`) y no rompe la
+  página;
+- quién puede leerlo lo decide `assertCanReadProgress`: cada persona ve el suyo
+  y administración ve el de cualquiera.
+
 ### `meta/storage` — contadores de cuota de PDF
 
 `{ usedBytes, reservedBytes, updatedAt }`
