@@ -80,6 +80,49 @@ describe("el diagnóstico no escribe", () => {
   });
 });
 
+describe("modo sin red (--setup)", () => {
+  it("existe el comando y no intenta conectar", () => {
+    expect(code).toContain("--setup");
+    expect(code).toContain("setupOnly");
+    // El intento de conexión tiene que quedar detrás de la condición: si se
+    // llamara siempre, `check:setup` no sería seguro antes de tener credenciales.
+    expect(code).toMatch(/configOnly \|\| setupOnly/);
+  });
+
+  it("usa la misma valoración de preparación que la pantalla de acceso", () => {
+    expect(code).toContain("assessFirebaseReadiness");
+  });
+
+  it("avisa de que las secretas no se pegan en el chat", () => {
+    // La salida se copia y se pega en conversaciones e informes: el aviso tiene
+    // que estar en el propio comando, no solo en la documentación.
+    expect(code).toContain("pendingSecrets");
+    expect(code).toContain("[SECRETA]");
+    expect(code).toContain("se pegan en el chat");
+  });
+
+  it("la comprobación de preparación no importa nada de Firestore", () => {
+    const readiness = readFileSync(
+      fileURLToPath(new URL("../../src/server/firebase/readiness.ts", import.meta.url)),
+      "utf8",
+    );
+    // Se analiza el CÓDIGO, no los comentarios: el módulo puede nombrar
+    // `firebase-adminsdk` al explicar el correo de una cuenta de servicio sin
+    // que eso signifique que importe nada de Firestore.
+    const readinessCode = stripComments(readiness);
+    expect(readinessCode).not.toContain("firebase-admin");
+    expect(readinessCode).not.toContain("getFirestore");
+    expect(readinessCode).not.toContain("getAdminDb");
+  });
+
+  it("el script npm existe y apunta al modo sin red", () => {
+    const pkg = JSON.parse(
+      readFileSync(fileURLToPath(new URL("../../package.json", import.meta.url)), "utf8"),
+    ) as { scripts: Record<string, string> };
+    expect(pkg.scripts["check:setup"]).toContain("--setup");
+  });
+});
+
 describe("validación de la configuración pública", () => {
   const valid = {
     FIREBASE_PROJECT_ID: "formacionus-63555",

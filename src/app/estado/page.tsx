@@ -60,6 +60,12 @@ const ROWS: Row[] = [
       "Panel de alumno y de administración con el estado real del progreso guardado.",
   },
   {
+    feature: "Preparación de la conexión",
+    state: "real",
+    detail:
+      "`npm run check:setup` comprueba sin red qué valores faltan o están mal, y marca cada uno como público, secreto o de configuración: proyecto, credenciales, clave RSA, configuración web y endurecimiento de producción. La pantalla de acceso usa la misma valoración, así que no muestra el formulario si falta algo. No demuestra que la conexión funcione: eso exige red y credenciales (npm run check:firebase).",
+  },
+  {
     feature: "Historial de formación",
     state: "demo",
     detail:
@@ -93,7 +99,7 @@ const ROWS: Row[] = [
     feature: "Reglas de Firestore",
     state: "pending",
     detail:
-      "41 pruebas escritas, 0 ejecutadas: el emulador oficial no se pudo descargar en este entorno. Ver docs/ENTORNO-PRUEBAS.md.",
+      "57 pruebas escritas, 0 ejecutadas: la JVM ya se puede preparar, pero el emulador oficial no se puede descargar en este entorno (storage.googleapis.com bloqueado). 27 comprobaciones estáticas de la política y la sintaxis de las reglas sí se ejecutan en cada verify. Ver docs/ENTORNO-PRUEBAS.md.",
   },
   {
     feature: "Copia de seguridad cifrada",

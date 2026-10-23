@@ -114,7 +114,7 @@ export function checkPublicFirebaseConfig(env: PublicConfigEnv): PublicConfigChe
       field: "NEXT_PUBLIC_FIREBASE_PROJECT_ID",
       ok: false,
       detail: "No está definida.",
-      fix: "Es el mismo valor que FIREBASE_PROJECT_ID.",
+      fix: `Copia el mismo valor de FIREBASE_PROJECT_ID${serverProject ? ` (${serverProject})` : ""}; si no coinciden, el login falla con «sesión no válida» sin pista alguna.`,
     });
   } else if (!PROJECT_ID_PATTERN.test(projectId)) {
     issues.push({

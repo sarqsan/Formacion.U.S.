@@ -1,5 +1,6 @@
 import { jsonOk } from "@/server/http";
 import { getServerConfig } from "@/server/config";
+import { assessFirebaseReadiness } from "@/server/firebase/readiness";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,10 +21,21 @@ export async function GET() {
     configured = false;
   }
 
+  // `ready` responde a «¿está todo rellenado?», no a «¿funciona la conexión?»:
+  // eso último exige red y lo responde `npm run check:firebase`. No se exponen
+  // nombres de variables ni valores: solo un booleano.
+  let ready = false;
+  try {
+    ready = assessFirebaseReadiness(process.env).ready;
+  } catch {
+    ready = false;
+  }
+
   return jsonOk({
     ok: true,
     app: "formacion-us",
     configured,
+    ready,
     mode,
     time: new Date().toISOString(),
   });

@@ -27,6 +27,7 @@
     "check:env": "node scripts/check-environment.mjs",
     "check:firebase": "tsx scripts/firebase-check.ts",
     "check:web": "tsx scripts/firebase-check.ts --config-only",
+    "check:setup": "tsx scripts/firebase-check.ts --setup",
     "test:emulator": "node scripts/run-emulator-checks.mjs all",
     "seed:synthetic": "tsx scripts/seed-synthetic.ts",
     "rehearse:backup": "tsx scripts/rehearse-backup.ts"

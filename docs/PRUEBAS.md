@@ -965,3 +965,291 @@ Recorrido HTTP añadido a `scripts/demo-smoke.mjs` (8 comprobaciones nuevas):
   de `progressHistory` en el formato esperado ni el comportamiento del
   `limit(200)`. La batería usa dobles y la demostración; el bloqueo de B02–B09
   (reglas, emulador, Firebase real) sigue declarado en `/estado`.
+
+## 23. Fase 1 de integración de Firebase — reglas de seguridad (22/10/2026)
+
+Alcance ejecutado: **revisión** de `firestore.rules` contra el código que escribe
+y lee cada colección, **corrección** de dos defectos encontrados, **16 pruebas de
+reglas nuevas** (BLOQUEADAS sin emulador), **5 pruebas de integración nuevas**
+(BLOQUEADAS), **22 comprobaciones estáticas de la política** que sí se ejecutan en
+cada `verify`, y documentación. No se ha publicado nada en Firebase, no se ha
+escrito ni borrado ningún dato, no se ha tocado Authentication, ni índices, ni
+variables de entorno.
+
+| Comprobación | Comando | Resultado |
+| --- | --- | --- |
+| Cadena completa | `npm run verify` | **exit 0**: tipado 0 errores, lint 0 avisos, **852 pruebas en verde**, build OK |
+| Pruebas totales | `npm test` | **852 pasan**, 9 omitidas (4 + 5 de emulador), 52 ficheros + 1 omitido (53) |
+| Política de las reglas (sin Firebase) | incluida en `npm test` | **22 pruebas en verde** (`tests/server/rules-policy.test.ts`) |
+| Reglas en el emulador | `npm run test:rules` | **BLOQUEADO**: `Failed to make request to https://storage.googleapis.com/.../cloud-firestore-emulator-v1.22.0.jar` (la JVM ya se resuelve con `jdk4py`) |
+| Integración con emulador | `npm run test:firestore` | **BLOQUEADO**: mismo motivo |
+| Índices contra el proyecto real | `npm run db:check` | **BLOQUEADO**: sin credenciales y con TLS a Google cortado (no ejecutado) |
+| Conexión real | `npm run check:firebase` | **BLOQUEADO** (no ejecutado) |
+
+Pruebas nuevas:
+
+| Fichero | Cuántas | Qué fija |
+| --- | --- | --- |
+| `tests/rules/firestore.rules.test.ts` | **16** | `progressHistory`: el alumno lee el suyo, **no** el de otra persona, no puede listar el archivo entero, sí puede consultar filtrando por `uid`, no escribe ni borra (es inmutable) y administración lee y lista sin poder modificarlo; cuenta pendiente, deshabilitada y claims desfasadas **no** leen ni el propio histórico. Auditoría e intentos: el alumno no los lee, administración sí, nadie los modifica ni borra, y un token de administrador sin ficha tampoco abre la auditoría. Documentos privados: los fragmentos y el contador de cuota se deniegan **con el documento sembrado** (la denegación es de las reglas, no del «no existe») |
+| `tests/server/rules-policy.test.ts` | **22** | Estático, sin Firebase: comodín final, escrituras siempre `if false`, colecciones de servidor cerradas, claves de corrección ilegibles incluso para administración, PDF y fragmentos cerrados, datos personales con `resource.data.uid == request.auth.uid` **y** `isActive()`, matrícula por documento/estado/uid, versión publicada, `isActive`/`isAdmin`/`claimsMatchAccount` cruzando token y ficha, y que el histórico no dependa de `archivedAt` (no se puede ordenar desde el cliente) |
+| `tests/integration/firestore-emulator.test.ts` | **5** | Contra el emulador: `listArchivedProgress` devuelve solo el `uid` pedido, normaliza un `archivedAt` antiguo guardado como `Timestamp`, lo que escribe el servidor vuelve a leerse como cadena ISO (los dos caminos: `saveProgress` y `commitAttempt`), y un archivo inválido no deja histórico suelto |
+| `tests/server/schema.test.ts` | **5** | `validateProgressHistoryDocument`: acepta ISO, rechaza `archivedAt` ausente, objeto/`Timestamp` o fecha ilegible, y sigue exigiendo un progreso válido |
+
+### Defectos corregidos
+
+1. **`archivedAt` con dos tipos.** `saveProgress` escribía `serverTimestamp()` y
+   `commitAttempt` una cadena ISO: la misma colección guardaba `Timestamp` y
+   `string`. Ahora ambos escriben ISO con validación en la escritura; la lectura
+   tolera lo antiguo.
+2. **Sonda de índices especulativa en `db:check`.** Consultaba `accounts` por
+   `status` + `orderBy(createdAt)`, que ningún código ejecuta y que no tiene
+   índice declarado: habría dado `MISSING_INDEXES` y empujado a desplegar un
+   índice innecesario. Retirada; en su lugar se comprueba la consulta real de
+   `progressHistory` (`uid` + `limit(200)`, sin `orderBy`), que no necesita
+   índice compuesto.
+
+### Lo que NO demuestra esta batería
+
+- Que las reglas **compilen** y que el motor permita o deniegue lo previsto: eso
+  es `npm run test:rules`, bloqueado por la descarga del jar.
+- Que el proyecto real no necesite índices nuevos: el emulador los crea solo, así
+  que una prueba verde allí no lo probaría. Se comprueba con `db:check` contra el
+  proyecto real o leyendo la consola.
+- Que Firebase Auth deshabilite de verdad una cuenta (eso es `disabled` en
+  Authentication, no una regla). Aquí solo se demuestra que, deshabilitada en
+  Firestore, las reglas dejan de dar acceso.
+
+## 24. Fase 2 de integración de Firebase — intento de ejecutar el emulador (22/10/2026)
+
+Objetivo: **ejecutar de verdad** las 57 pruebas de reglas y las 9 de integración.
+Resultado: **no se ha ejecutado ninguna**. El bloqueo es externo (descarga del
+jar) y está aislado: Java, CLI y dependencias están resueltos.
+
+| Comprobación | Comando (ejecutado de verdad) | Resultado |
+| --- | --- | --- |
+| Entorno | `JAVA_HOME=…jdk4py… npm run check:env` | **BLOCKED** (exit 2): Node, dependencias, **Java 25 PASSED**, CLI 15.34.0 PASSED; el jar no está |
+| Reglas | `npm run test:rules` | **BLOCKED** (exit 2): `Failed to make request to https://storage.googleapis.com/…/cloud-firestore-emulator-v1.22.0.jar`. 0 pruebas ejecutadas |
+| Integración | `npm run test:firestore` | **BLOCKED** (exit 2): mismo error. 0 pruebas ejecutadas |
+| Índices contra el emulador | `npm run db:check` | **no ejecutado**: sin emulador no hay destino; contra Firebase real sería escritura/credenciales y está fuera de alcance |
+| Cadena completa | `npm run verify` | **exit 0**: tipado, lint, **862 pruebas en verde**, build OK (9 omitidas, 871 en total) |
+| Recorrido de la demostración | `npm run check:demo` | **PASSED**, 140 comprobaciones |
+
+### Diagnóstico de la descarga (sin desactivar TLS)
+
+| Origen probado | Resultado |
+| --- | --- |
+| `storage.googleapis.com` (URL oficial) | `SSL_connect: SSL_ERROR_SYSCALL` — host no permitido por el proxy |
+| Releases de GitHub | `github.com` da 302 y redirige a `release-assets.githubusercontent.com`, también cortado |
+| npm: `cloud-firestore-emulator`, `firestore-emulator`, `firebase-emulator`, `firestore-emulator-jar`, `firebase-emulators-jar`, `emulator-jars` | **404** (no existen) |
+| PyPI: `firestore-emulator`, `firebase-emulator`, `cloud-firestore-emulator`, `firebase-tools` | **404** |
+| Repos de GitHub con los jars (offline/airgap/tamaño > 100 MB) | **0 resultados**; `gitsd-labs/firebase-emulator-cache` está vacío |
+
+No se ha inventado ni reutilizado ningún archivo: **sin jar no hay motor**, y una
+reimplementación de terceros (`hidane`, `@firestore-emulator/server`) no evalúa
+`firestore.rules`, así que no sustituye al emulador oficial.
+
+### Lo que sí se ha añadido (verificable hoy)
+
+1. **Preflight de integridad del jar** en `scripts/lib/env-checks.mjs`: si hay una
+   copia local, se comprueba nombre, tamaño y **SHA-256** contra la ficha del CLI
+   instalado (`downloadableEmulatorInfo.json`). Antes bastaba con que existiera un
+   fichero con el nombre correcto. Probado con dos falsos positivos:
+   - 1 024 bytes → `FAILED` («se esperaban 136707194»);
+   - tamaño exacto lleno de ceros → `FAILED` («SHA-256 … ≠ 9b6498b7…», «no es el
+     jar oficial»).
+2. **5 pruebas del preflight** (`tests/server/emulator-preflight.test.ts`): la
+   ficha oficial sale de `firebase-tools` con versión, tamaño y SHA-256; un jar
+   truncado o con otro nombre sale **FAILED**; sin ruta o sin caché, **BLOCKED**
+   con el tamaño exigido en el mensaje. Así una copia mala no puede colarse como
+   si el emulador estuviera listo.
+3. **Lint estructural de `firestore.rules`** (5 comprobaciones más en
+   `tests/server/rules-policy.test.ts`, 22 → 27): llaves y paréntesis
+   equilibrados, un bloque por colección, operaciones de `allow` válidas,
+   funciones invocadas definidas y `rules_version = '2'`. Detecta un error de
+   sintaxis que hoy solo aparecería al desplegar. **No es el motor**: no dice si
+   Firestore acepta una petición.
+4. Documentación del bloqueo con el hash y el tamaño exactos, para que quien tenga
+   red pueda traer el jar y comprobarlo (`ENTORNO-PRUEBAS.md` §2 bis y
+   `CONEXION-FIREBASE.md` §6.1).
+
+## 25. Fase 3 de integración de Firebase — preparación de la conexión (22/10/2026)
+
+Objetivo: dejar la aplicación **preparada** para conectar con `formacionus-63555`
+sin depender del emulador y sin escribir en Firebase. No hay credenciales en este
+entorno (no existe `.env.local` y no hay ninguna variable `FIREBASE_*` definida),
+así que **no se ha ejecutado ninguna comprobación de red**: eso sigue pendiente.
+
+| Comprobación | Comando (ejecutado) | Resultado |
+| --- | --- | --- |
+| Cadena completa | `npm run verify` | **exit 0**: tipado, lint, **890 pruebas en verde** (9 omitidas), build OK |
+| Recorrido de la demostración | `DEMO_MODE=1 npx next start` + `npm run check:demo` | **PASSED**, 140 comprobaciones |
+| Preparación, sin red | `npm run check:setup` | **FAILED (exit 2)**, 7 acciones numeradas (no hay `.env.local`; es lo esperado) |
+| Configuración web, sin red | `npm run check:web` | **FAILED (exit 2)**: faltan los cinco valores `NEXT_PUBLIC_*` |
+| Conexión real | `npm run check:firebase` | **no ejecutado**: sin credenciales no hay nada que probar (y no se inventan) |
+| Aplicación en modo real sin configurar | `next start` sin `DEMO_MODE` + `curl /login` y `/api/health` | **200**; `/login` no muestra el formulario y enumera lo que falta; `/api/health` → `{"configured":false,"ready":false,"mode":"unconfigured"}` |
+
+### Defecto corregido
+
+**La pantalla de acceso decidía con la mitad de la información.**
+`isFirebaseConfigured()` solo miraba las credenciales del servidor. Con
+`FIREBASE_*` puesto y la app web sin registrar —el orden natural de
+configuración—, `/login` mostraba el formulario, la persona escribía su usuario y
+contraseña, y el error («Firebase no está configurado en este entorno») aparecía
+al pulsar «Entrar», en el navegador y sin decir **qué** valor faltaba. Ahora la
+decisión sale de `assessFirebaseReadiness`, que exige las dos partes y enumera lo
+que falta.
+
+### Cambios y pruebas
+
+| Pieza | Qué hace |
+| --- | --- |
+| `src/server/firebase/readiness.ts` (nuevo) | Valoración pura de la configuración: proyecto, credenciales, **PEM RSA parseado de verdad**, presupuesto de PDF, endurecimiento de producción (`APP_ORIGIN` https, `__Host-`, sin emuladores), y la parte web reutilizando `checkPublicFirebaseConfig`. Devuelve hallazgos + **acciones ordenadas** que nombran la variable. No importa Firestore ni imprime secretos |
+| `scripts/firebase-check.ts` | Nuevo modo `--setup` (sin red) que imprime las acciones pendientes; `--config-only` y `check:web` siguen igual; la parte de configuración del servidor se delega en el módulo (una sola fuente de verdad) |
+| `npm run check:setup` (nuevo script) | Atajo de `--setup` |
+| `src/app/login/page.tsx` | Solo muestra el formulario si la configuración está completa; si no, enumera lo que falta y remite a `check:setup`; en demostración, mensaje propio |
+| `GET /api/health` | Añade `ready` (booleano), sin nombres ni valores |
+
+Pruebas nuevas (**28**):
+
+| Fichero | Cuántas | Qué fija |
+| --- | --- | --- |
+| `tests/server/readiness.test.ts` | **24** | Instalación vacía: no lista y acciones ordenadas nombrando la variable. Solo servidor / solo web: no listo. Ambas partes: listo. Proyecto distinto del previsto, cliente y servidor descuadrados, clave que no es PEM, **clave pública pegada como privada**, apiKey falsa. Clave con `\n` escapados aceptada. Producción: sin `APP_ORIGIN`, sin `__Host-`, con http, con emuladores → no listo; con https y `__Host-` → listo. Emulador sin credenciales → listo. Presupuesto de PDF inválido → rechazado. **No filtra la clave ni el correo completo** |
+| `tests/server/firebase-check.test.ts` | **+4** (22) | `--setup` existe, el intento de conexión queda detrás de la condición, usa el mismo módulo que la pantalla, y la valoración no importa Firestore |
+
+### Lo que NO demuestra esta fase
+
+- Que la conexión funcione: no hay credenciales ni se ha ejecutado nada con red.
+- Que la cuenta de servicio exista o tenga permisos, ni que Firestore esté creado.
+- Que el inicio de sesión real funcione: depende de Firebase Authentication y de
+  la app web registrada.
+
+## 26. Fase 4 — Configurar la app web y preparar el secreto (22/10/2026)
+
+Pregunta de la fase: **¿podemos dejar la configuración web puesta y preparar las
+credenciales de servidor sin escribir en Firebase?** Respuesta corta: la parte
+web sí se puede dejar puesta en cuanto existan los cuatro valores; las
+credenciales de servidor **no** en este entorno, porque no hay ningún almacén
+privado y persistente.
+
+### Comprobaciones ejecutadas (todas de solo lectura)
+
+| Comprobación | Resultado |
+| --- | --- |
+| `git status` / `git ls-remote` | árbol limpio en `23e4f32`; rama y remoto coinciden |
+| `.env.local` | **no existe** (la guía lo daba por hecho en su revisión del 21/10) |
+| `env` con `FIREBASE`/`GOOGLE*` | **0 variables** |
+| `/run/secrets`, `.arena/`, `.config/arena` | **no existen**: no hay almacén de secretos |
+| `curl` a `firebase.googleapis.com`, `identitytoolkit.googleapis.com`, `formacionus-63555.firebaseapp.com` | **000 / bloqueado** (sin salida a Google) |
+| `grep` de `AIza…` / `1:…:web:…` en el árbol y en el historial | solo marcadores de prueba; **ninguna credencial real** |
+| `.env.local` en el historial de Git | sin resultados: nunca se ha versionado |
+
+### Qué se ha cambiado
+
+| Pieza | Cambio |
+| --- | --- |
+| `src/server/firebase/readiness.ts` | Cada hallazgo declara su naturaleza: `publica`, `secreta` o `configuracion`. Las acciones pendientes terminan en `· [pública]`, `· [SECRETA]` o `· [configuración]`. Nuevo `pendingSecrets()`. El consejo de las credenciales deja de decir «cópialo todo a `.env.local`»: el correo sí, la clave **solo** al entorno privado |
+| `scripts/firebase-check.ts` | `check:setup` avisa de que lo marcado `[SECRETA]` no se pega en el chat ni se commitea |
+| `docs/CONEXION-FIREBASE.md` | §4.1 corregida (el fichero no existe hoy y no se conserva entre sesiones); §4.5 nueva con la tabla de comprobaciones; Paso 3 con el procedimiento para **reutilizar** la app web si ya existe; §6.2 alineada |
+| `tests/server/readiness.test.ts` | **+6** (30): clasificación sin huecos, secretas = cuenta de servicio, web = pública, origen/cookie = configuración, etiqueta en cada acción, `pendingSecrets` y **no se filtra la clave** |
+| `tests/server/firebase-check.test.ts` | **+1** (23): el aviso de «no se pega» está en la salida del propio comando |
+
+Resultado de la batería completa tras el cambio: `npm run verify` **exit 0**,
+**897 pruebas en verde** (9 omitidas), lint sin avisos y build correcto.
+
+### Lo que sigue sin poder afirmarse
+
+- Que exista la app web `formacion-web`: **no se puede consultar desde aquí**
+  (sin credenciales y sin red hacia Google). Solo lo dice la consola.
+- Que la conexión funcione: `npm run check:firebase` **no se ha ejecutado con
+  red**, y en este entorno acabaría en `BLOCKED` por la falta de salida a Google.
+
+## 27. Fase 4 — Configuración web recibida, no escrita en el espacio de trabajo (22/10/2026)
+
+Se recibieron los cuatro valores del SDK web de `formacionus-63555`. Decisión:
+**no escribirlos en ningún fichero de este entorno**, porque no es un almacén
+privado (instantáneas del espacio de trabajo + explorador de ficheros a la
+vista). Los valores son públicos por diseño, pero el criterio que se aplica es
+el que pidió el usuario: si el fichero no puede mantenerse privado, no se
+escribe.
+
+| Comprobación | Ejecutada | Resultado |
+| --- | --- | --- |
+| `projectId` recibido frente al previsto | sí (lectura de la orden) | coincide: `formacionus-63555` |
+| Forma de los cuatro valores frente a los patrones de `public-config.ts` | sí (`AIza…` ≥30, `1:\d{6,}:web:[0-9a-f]+`, `^[a-z0-9][a-z0-9-]{2,39}$`, `<proyecto>.firebaseapp.com`) | los cuatro encajan |
+| `.env.local` | `ls` | **no existe**; no se ha creado |
+| `npm run check:setup` | sí | **FAILED (exit 2)**: sin valores en el entorno (esperado) |
+| `npm run check:web` | sí | **FAILED (exit 2)**: sin los cinco `NEXT_PUBLIC_*` (esperado) |
+| `npm run check:firebase` | **no** | sin red hacia Google en este entorno; no aporta nada aún |
+
+### Salvaguarda añadida
+
+La salida de `check:web` / `check:setup` se copia y se pega en conversaciones e
+informes. Tres pruebas nuevas (33 en `readiness.test.ts`) fijan que **nunca se
+repite un valor**: del `apiKey` solo se dice la longitud; del `appId`, nada; del
+correo de servicio, solo el dominio; de la clave privada, solo si se puede leer.
+
+### Plantilla
+
+`.env.example` sigue siendo la **plantilla vacía** con los seis nombres exactos;
+su cabecera ahora dice explícitamente que se rellena la copia, nunca el ejemplo
+versionado.
+
+### 27 bis. Autorización para escribir los valores públicos (22/10/2026)
+
+Tras la autorización expresa del usuario, los cuatro valores del SDK web se han
+escrito en `.env.local` de este espacio de trabajo (permisos `600`), junto a
+`NEXT_PUBLIC_AUTH_EMAIL_DOMAIN=formacion.invalid` y
+`FIREBASE_PROJECT_ID=formacionus-63555`. **Ningún valor se repite** en docs,
+informes, diffs ni commits.
+
+| Comprobación | Resultado |
+| --- | --- |
+| Las seis variables están presentes y con la forma esperada | sí (comprobación estructural: presencia, longitud y patrón, sin imprimir valores) |
+| `git check-ignore -v .env.local` | `.gitignore:45:.env.*` → excluido |
+| `git status --short` | 0 entradas para `.env.local`; no entra en el commit |
+| `git ls-files --error-unmatch .env.local` | error «did not match any file(s)» → nunca ha estado indexado |
+| `npm run check:web` | **PASSED (exit 0)**: los cinco valores pasan forma y coherencia con `FIREBASE_PROJECT_ID` |
+| `npm run check:setup` | **FAILED (exit 2)**: falta solo `FIREBASE_CLIENT_EMAIL` (y su clave), marcado `[SECRETA]` |
+| `npm run verify` | **exit 0**: 900 pasan / 9 omitidas, lint sin avisos, build OK |
+| `npm run check:demo` | **PASSED**, 140 comprobaciones |
+| `GET /api/health` | `configured:false`, `ready:false`, `mode:"unconfigured"`: la configuración web no basta, faltan credenciales de servidor |
+| `npm run check:firebase` | **no ejecutado**: sin credenciales y sin salida de red hacia Google |
+
+La demostración sigue en `DEMO_MODE=1` sin cambios y no usa ninguno de estos
+valores.
+
+## 28. Fase 5 — Ejecución real fuera del sandbox (22/10/2026)
+
+Objetivo: dejar el camino para ejecutar `npm run check:firebase` con credenciales
+reales, **sin** tocar código ni añadir dependencias, y sin que el secreto pase
+por el chat, el repositorio ni un fichero compartido.
+
+### Lo que se ha comprobado en este entorno (sin red hacia Google)
+
+| Comprobación | Resultado |
+| --- | --- |
+| `npm run check:web` | **PASSED (exit 0)** |
+| `npm run check:setup` | **FAILED (exit 2)**: una sola acción, `[SECRETA]` (credenciales) |
+| `check:firebase` con credenciales **sintéticas** (`/tmp`, generadas y borradas en la misma sesión) | configuración entera en `✓` (proyecto, credenciales, PEM RSA y los cinco valores web) y **`BLOCKED` (exit 3)** al leer Firestore: `tiempo de espera agotado (listCollections)`. Confirma que el procedimiento funciona hasta el límite de red del sandbox |
+| `npm run verify` | **exit 0**: 903 pasan / 9 omitidas (54 ficheros + 1 omitido), lint sin avisos, build OK |
+| `npm run check:demo` | **PASSED**, 140 comprobaciones |
+| Fuga de valores en la salida del diagnóstico | ninguna: el `apiKey` solo como longitud, el correo solo por dominio, la clave solo «PEM correcto» |
+
+### Defecto corregido (lo encontró el ensayo en seco)
+
+`readiness.ts` comparaba el dominio del correo con `gserviceaccount.com`. Las
+cuentas de servicio reales de Firebase son
+`firebase-adminsdk-…@<proyecto>.iam.gserviceaccount.com`, así que la
+comprobación habría avisado «no es el habitual de una cuenta de servicio»
+**justo en la ejecución con credenciales buenas**, invitando a tocar lo que
+estaba bien. Ahora se aceptan `*.iam.gserviceaccount.com` y
+`*.gserviceaccount.com`, y solo se avisa cuando el dominio no es de Google.
+**+3 pruebas** (36 en `readiness.test.ts`).
+
+### Documentación
+
+`docs/CONEXION-FIREBASE.md` §8 (nuevo): requisitos, Plan A (ordenador con
+terminal, incluida la carga de credenciales desde el JSON sin escribir nada en
+un fichero ni en el historial), Plan B (móvil con Codespaces y secretos
+cifrados), Plan C (otra persona), tabla de qué se lee en compilación y qué en
+ejecución, y qué **no** se debe hacer nunca con la clave.

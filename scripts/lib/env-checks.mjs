@@ -1,8 +1,10 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createConnection } from "node:net";
-import { accessSync, constants, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { accessSync, constants, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /**
  * COMPROBACIÓN DEL ENTORNO DE PRUEBAS
@@ -145,26 +147,127 @@ function emulatorJarDirectories() {
   return [...directories];
 }
 
-function emulatorJarCheck() {
-  const override = process.env.FIRESTORE_EMULATOR_BINARY_PATH;
-  if (override) {
-    if (existsSync(override)) {
-      return {
-        id: "emulator-jar",
-        title: "Emulador de Firestore (jar)",
-        status: "PASSED",
-        detail: `FIRESTORE_EMULATOR_BINARY_PATH=${override}`,
-        fix: null,
-      };
-    }
+/**
+ * Ficha oficial del emulador que espera el CLI instalado
+ * (`firebase-tools/lib/emulator/downloadableEmulatorInfo.json`): versión,
+ * tamaño y hashes. Es la referencia para decidir si una copia local sirve.
+ */
+export function expectedEmulator() {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const file = join(
+      here,
+      "..",
+      "..",
+      "node_modules",
+      "firebase-tools",
+      "lib",
+      "emulator",
+      "downloadableEmulatorInfo.json",
+    );
+    const info = JSON.parse(readFileSync(file, "utf8"));
+    const firestore = info.firestore;
+    if (!firestore?.version) return null;
     return {
-      id: "emulator-jar",
-      title: "Emulador de Firestore (jar)",
+      version: firestore.version,
+      fileName: `cloud-firestore-emulator-v${firestore.version}.jar`,
+      expectedSize: Number(firestore.expectedSize),
+      sha256: String(firestore.expectedChecksumSHA256 ?? ""),
+      md5: String(firestore.expectedChecksum ?? ""),
+      remoteUrl: String(firestore.remoteUrl ?? ""),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** SHA-256 de un fichero, en streaming: el jar pesa ~130 MB. */
+function sha256Of(file) {
+  return new Promise((resolve) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(file);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("error", () => resolve(null));
+    stream.on("end", () => resolve(hash.digest("hex")));
+  });
+}
+
+/**
+ * Copia local del jar. No basta con que exista: se comprueba tamaño y SHA-256
+ * contra la ficha del CLI. Un jar truncado o de otra versión no debe pasar por
+ * bueno —ni presentarse como «el emulador funciona»—.
+ */
+async function checkJarFile(file, expected, origin) {
+  const base = { id: "emulator-jar", title: "Emulador de Firestore (jar)" };
+
+  if (!existsSync(file)) {
+    return {
+      ...base,
       status: "BLOCKED",
-      detail: `FIRESTORE_EMULATOR_BINARY_PATH apunta a un archivo que no existe (${override})`,
-      fix: "Corrige o elimina esa variable.",
+      detail: `${origin} apunta a un archivo que no existe (${file})`,
+      fix: "Corrige o elimina esa ruta.",
     };
   }
+
+  const size = statSync(file).size;
+  if (!expected) {
+    return {
+      ...base,
+      status: "FAILED",
+      detail: `${file} (${(size / (1024 * 1024)).toFixed(1)} MB): no se puede leer la ficha del CLI, así que no se puede verificar`,
+      fix: "Ejecuta `npm ci` para tener `firebase-tools` completo.",
+    };
+  }
+
+  const name = file.split("/").at(-1) ?? file;
+  if (name !== expected.fileName) {
+    return {
+      ...base,
+      status: "FAILED",
+      detail: `${file}: el CLI espera «${expected.fileName}» (v${expected.version})`,
+      fix: `Renombra la copia a ${expected.fileName} o usa la versión que corresponde.`,
+    };
+  }
+
+  if (size !== expected.expectedSize) {
+    return {
+      ...base,
+      status: "FAILED",
+      detail: `${file}: ${size} bytes, se esperaban ${expected.expectedSize} (copia incompleta o distinta)`,
+      fix: "Sustituye el archivo por una copia íntegra; no se acepta una descarga truncada.",
+    };
+  }
+
+  const digest = await sha256Of(file);
+  if (!digest) {
+    return {
+      ...base,
+      status: "FAILED",
+      detail: `${file}: no se pudo calcular el SHA-256`,
+      fix: "Comprueba permisos del archivo.",
+    };
+  }
+  if (expected.sha256 && digest !== expected.sha256) {
+    return {
+      ...base,
+      status: "FAILED",
+      detail: `${file}: SHA-256 ${digest} ≠ ${expected.sha256} (no es el jar oficial)`,
+      fix: "Borra el archivo: no es el emulador oficial aunque se llame igual.",
+    };
+  }
+
+  return {
+    ...base,
+    status: "PASSED",
+    detail: `${file} (${(size / (1024 * 1024)).toFixed(1)} MB, SHA-256 verificado)`,
+    fix: null,
+  };
+}
+
+async function emulatorJarCheck() {
+  const expected = expectedEmulator();
+  const override = process.env.FIRESTORE_EMULATOR_BINARY_PATH;
+  if (override) return checkJarFile(override, expected, "FIRESTORE_EMULATOR_BINARY_PATH");
 
   for (const directory of emulatorJarDirectories()) {
     if (!existsSync(directory)) continue;
@@ -172,15 +275,7 @@ function emulatorJarCheck() {
       (file) => file.startsWith(EMULATOR_FILE_PREFIX) && file.endsWith(".jar"),
     );
     if (found.length > 0) {
-      const file = join(directory, found.sort().at(-1));
-      const size = statSync(file).size;
-      return {
-        id: "emulator-jar",
-        title: "Emulador de Firestore (jar)",
-        status: "PASSED",
-        detail: `${file} (${(size / (1024 * 1024)).toFixed(1)} MB)`,
-        fix: null,
-      };
+      return checkJarFile(join(directory, found.sort().at(-1)), expected, directory);
     }
   }
 
@@ -188,9 +283,11 @@ function emulatorJarCheck() {
     id: "emulator-jar",
     title: "Emulador de Firestore (jar)",
     status: "BLOCKED",
-    detail: "no está en la caché de emuladores",
+    detail: `no está en la caché de emuladores (se espera v${expected?.version ?? "?"})`,
     fix:
-      "Con red hacia storage.googleapis.com, `npm run test:rules` lo descarga. Sin red, copia `cloud-firestore-emulator-v1.22.0.jar` desde otra máquina a `~/.cache/firebase/emulators/` (o define FIRESTORE_EMULATORS_PATH) y verifica su MD5 (ver docs/ENTORNO-PRUEBAS.md).",
+      `Con red hacia storage.googleapis.com, \`npm run test:rules\` lo descarga. Sin red, copia ${expected?.fileName ?? "cloud-firestore-emulator-vX.Y.Z.jar"} ` +
+      `desde otra máquina a \`~/.cache/firebase/emulators/\` y compruébalo: \`sha256sum\` debe dar ${expected?.sha256 || "(hash desconocido)"} ` +
+      `(el tamaño es ${expected?.expectedSize ?? "?"} bytes). \`npm run check:env\` lo verifica.`,
   };
 }
 
@@ -278,7 +375,7 @@ export async function checkEnvironment() {
     dependenciesCheck(),
     javaCheck(),
     firebaseCliCheck(),
-    emulatorJarCheck(),
+    await emulatorJarCheck(),
     await emulatorRunningCheck(),
     backupsDirectoryCheck(),
     passphraseCheck(),

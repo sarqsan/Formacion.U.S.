@@ -250,6 +250,34 @@ export function validateProgressDocument(doc: Record<string, unknown>): void {
   }
 }
 
+export interface ProgressHistoryDocumentShape extends ProgressDocumentShape {
+  archivedAt: string;
+}
+
+/**
+ * Documento de `progressHistory`: el progreso archivado **más** la fecha en que
+ * se archivó.
+ *
+ * `archivedAt` se valida como cadena ISO, igual que el resto de fechas del
+ * esquema (`completedAt`, `updatedAt`, `at`). Antes había dos caminos que
+ * escribían tipos distintos —`commitAttempt` una cadena y `saveProgress` un
+ * `serverTimestamp()`—, de modo que la misma colección mezclaba `string` y
+ * `Timestamp`. La lectura tolera lo antiguo (`toIsoString`), pero la escritura
+ * no vuelve a producir la mezcla.
+ */
+export function validateProgressHistoryDocument(doc: Record<string, unknown>): void {
+  validateProgressDocument(doc);
+
+  const archivedAt = doc.archivedAt;
+  if (typeof archivedAt !== "string" || !Number.isFinite(Date.parse(archivedAt))) {
+    throw new DomainError(
+      "SCHEMA_PROGRESS_HISTORY_INVALID",
+      "El histórico debe guardar archivedAt como fecha ISO.",
+      500,
+    );
+  }
+}
+
 export interface AttemptDocumentShape {
   uid: string;
   courseId: string;
