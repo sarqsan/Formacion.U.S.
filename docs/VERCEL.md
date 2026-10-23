@@ -30,8 +30,51 @@ Rama de producción: **`main`**
 | Node.js | **22.x** | `engines.node: ">=22"` |
 | Root directory | la raíz del repositorio | no es un monorepo |
 
-No hace falta `vercel.json`: no se usan rewrites, redirecciones ni cabeceras
-propias (las de seguridad se añaden en `next.config.ts`).
+### Por qué ahora sí hay `vercel.json` (incidencia del 23/10/2026)
+
+La detección automática **no es una garantía**: es un valor guardado en el
+proyecto, y si se queda en «Other» el despliegue cambia de naturaleza sin que
+nadie toque el código. Ocurrió en producción:
+
+| Síntoma | Dato real |
+| --- | --- |
+| `/` | 404 de **infraestructura** de Vercel (`NOT_FOUND`), no de Next.js |
+| `/login`, `/activar`, `/panel`, `/api/health` | el mismo 404 de Vercel |
+| `/favicon.ico` (lo genera Next, no está en `public/`) | 404 |
+| `/demo/personas-sinteticas.xlsx` (único fichero de `public/`) | **200, servido** |
+
+Con el preset **«Other»**, la documentación de Vercel dice literalmente:
+«This sets the output directory as `public` if it exists». Es decir: se publica
+`public/` como sitio estático y **la aplicación Next no se publica nunca**. El
+build termina «Listo» porque `next build` sí se ejecuta; lo que falla es qué se
+sirve después.
+
+`vercel.json` fija el preset desde el repositorio, que es la única palanca
+versionada (la documentación indica que `framework` «overrides the Framework in
+Project Settings»):
+
+```json
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "buildCommand": "npm run build",
+  "outputDirectory": ".next"
+}
+```
+
+`tests/server/vercel-config.test.ts` (7 pruebas) impide que esto se pierda: si
+alguien borra el fichero, cambia el framework o vuelve a apuntar la salida a
+`public/`, la batería falla.
+
+Complementos en el panel (no se pueden fijar desde el código, y ninguno se ha
+tocado desde aquí):
+
+- **Settings → Build & Development Settings → Framework Preset**: debe decir
+  **Next.js**; con `vercel.json` el preset efectivo ya es Next.js, pero conviene
+  que el panel coincida.
+- **Root Directory**: vacío (la raíz del repositorio).
+- **Production Branch**: `main`; y que el despliegue de `main` figure como
+  **Production**, no como Preview.
 
 ## 2. Variables de entorno en Vercel
 

@@ -1253,3 +1253,45 @@ terminal, incluida la carga de credenciales desde el JSON sin escribir nada en
 un fichero ni en el historial), Plan B (móvil con Codespaces y secretos
 cifrados), Plan C (otra persona), tabla de qué se lee en compilación y qué en
 ejecución, y qué **no** se debe hacer nunca con la clave.
+
+## 29. Incidencia de producción: el despliegue publicaba solo `public/` (23/10/2026)
+
+**Síntoma:** `https://formacionus.vercel.app/` mostraba «This page doesn't exist»
+con el código `NOT_FOUND` de Vercel. El despliegue de `main` (`fead9e1`) figuraba
+como **Listo**.
+
+**Prueba que lo acotó** (peticiones HTTP reales, sin claves):
+
+| Ruta | Respuesta |
+| --- | --- |
+| `/demo/personas-sinteticas.xlsx` — único fichero de `public/` | **200**, se sirve el contenido |
+| `/` · `/login` · `/activar` · `/panel` · `/api/health` | 404 de **Vercel** (`NOT_FOUND`), no de Next.js |
+| `/favicon.ico` — lo genera Next, no está en `public/` | 404 |
+
+Si el despliegue sirviera la aplicación, `/` respondería y `public/` también; si
+no sirviera nada, tampoco el `.xlsx`. Que funcione **solo** `public/` significa
+que Vercel está publicando esa carpeta como sitio estático: es el
+comportamiento del preset «Other», cuyo directorio de salida es `public/` si
+existe (documentado por Vercel). El build termina bien porque `next build` sí se
+ejecuta; lo que falla es qué se publica después.
+
+**Corrección:** `vercel.json` fija `framework: nextjs`, `buildCommand` y
+`outputDirectory: .next`. La documentación de Vercel indica que `framework`
+«overrides the Framework in Project Settings».
+
+**Pruebas añadidas** (`tests/server/vercel-config.test.ts`, **7**): el fichero
+existe y es válido, fija Next.js, publica `.next` y no `public/`, construye con
+`npm run build`, las seis rutas de la aplicación existen y no hay un `app/` ni
+`pages/` en la raíz que confundan la detección.
+
+**Batería completa:** `npm run verify` → **910 pasan / 9 omitidas** (55 ficheros
++ 1 omitido), lint sin avisos, build correcto. `npm run check:demo` → **PASSED**,
+140 comprobaciones.
+
+**Build de producción en local** (`next start`, sin `DEMO_MODE`): `/` 200,
+`/login` 200, `/activar` 200, `/panel` 307, `/api/health` 200,
+`/demo/personas-sinteticas.xlsx` 200, `/no-existe` 404 de Next.
+
+**Pendiente y no verificable desde aquí:** desplegar este commit y comprobar que
+el 404 desaparece. Mientras no se despliegue, la URL de producción sigue
+devolviendo `NOT_FOUND`, y así se declara.
