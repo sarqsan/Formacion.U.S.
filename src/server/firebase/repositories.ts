@@ -7,7 +7,7 @@ import type {
   CredentialService,
 } from "@/server/auth/activation-service";
 import type { ActivationRecord } from "@/domain/auth/activation";
-import { isAccountRole, isAccountStatus, type PersonRol } from "@/domain/roles";
+import { isAccountRole, isAccountStatus } from "@/domain/roles";
 import { getAdminAuth, getAdminDb } from "@/server/firebase/admin";
 
 /**
@@ -200,26 +200,32 @@ export class FirestoreActivationStore implements ActivationStore {
 
   async getAccount(uid: string): Promise<ActivationAccountSnapshot | null> {
     return guard(async () => {
-    const doc = await getAdminDb().collection("accounts").doc(uid).get();
-    if (!doc.exists) return null;
-    const data = doc.data() as {
-      username: string;
-      status: string;
-      claimsVersion: number;
-      personRol: string;
-      role: string;
-    };
+      const doc = await getAdminDb().collection("accounts").doc(uid).get();
+      if (!doc.exists) return null;
+      const data = doc.data() as {
+        username: string;
+        status: string;
+        claimsVersion: number;
+        personRol: string | null;
+        role: string;
+      };
 
-    if (!isAccountStatus(data.status) || !isAccountRole(data.role)) return null;
-    const personRol = data.personRol as PersonRol;
+      // El rol de cuenta se valida aquí (no se copia a ciegas) y se arrastra al
+      // snapshot: es el que decide los permisos después de la activación.
+      if (!isAccountStatus(data.status) || !isAccountRole(data.role)) return null;
+      // Las cuentas de administración no tienen rol de persona: `null` es válido
+      // y se refleja como tal, sin inventar un valor que no está en la ficha.
+      const personRol =
+        data.personRol === "ROL 1" || data.personRol === "ROL 2" ? data.personRol : null;
 
-    return {
-      uid,
-      username: data.username,
-      status: data.status,
-      claimsVersion: Number(data.claimsVersion ?? 0),
-      personRol,
-    };
+      return {
+        uid,
+        username: data.username,
+        status: data.status,
+        role: data.role,
+        claimsVersion: Number(data.claimsVersion ?? 0),
+        personRol,
+      };
     });
   }
 
