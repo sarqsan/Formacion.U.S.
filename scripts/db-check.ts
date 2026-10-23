@@ -3,7 +3,8 @@
  * COMPROBACIÓN DE LA BASE DE DATOS (solo lectura)
  * ===============================================
  *
- *   npm run db:check
+ *   npm run db:check                 (informe completo, uso local)
+ *   npm run db:check -- --redact     (informe sin identificadores personales)
  *
  * No escribe nada. Sirve para:
  *   - comprobar que hay conectividad real (no solo variables definidas);
@@ -17,6 +18,11 @@
  *
  * En un proyecto real exige `DB_ALLOW_PROD=yes` de forma explícita: es solo
  * lectura, pero conviene que nadie apunte a producción por descuido.
+ *
+ * `--redact` sustituye los identificadores personales (usuario, uid, correo,
+ * origen de creación) por etiquetas estables ANTES de imprimir, porque la
+ * salida puede acabar en un registro público. No cambia ninguna consulta ni
+ * ningún criterio: solo lo que se ve. Sin el flag la salida es la de siempre.
  */
 
 import { cert, getApps, initializeApp } from "firebase-admin/app";
@@ -37,14 +43,38 @@ import {
   type VersionLite,
 } from "../src/server/db/checks";
 import { budgetBytesFromMiB } from "../src/domain/storage/pdf-chunks";
+import {
+  auditStatus,
+  buildRedactionIndex,
+  formatAuditStatus,
+  guardLine,
+  redactFindings,
+  redactGeneric,
+  type RedactionIndex,
+} from "../src/server/db/redact";
 
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST;
 const allowProd = process.env.DB_ALLOW_PROD === "yes";
 const MAX_DOCS = 2000;
 
-function fail(message: string): never {
-  console.error(`\n✖ ${message}\n`);
+const KNOWN_FLAGS = new Set(["--redact"]);
+const unknownFlags = process.argv.slice(2).filter((arg) => !KNOWN_FLAGS.has(arg));
+const redact = process.argv.includes("--redact");
+
+/**
+ * Estado de la ejecución cuando no se puede completar: siempre `AUDIT_BLOCKED`,
+ * nunca `NO_ADMIN`. Un fallo de configuración, conectividad o permisos no dice
+ * nada sobre si existe un administrador.
+ */
+function reportBlocked(message: string): never {
+  console.error(`\n✖ ${redact ? redactGeneric(message) : message}`);
+  if (redact) console.error(`\n${formatAuditStatus(auditStatus({ findings: [], adminCount: null, blocked: true }))}`);
+  console.error("");
   process.exit(1);
+}
+
+function fail(message: string): never {
+  return reportBlocked(message);
 }
 
 function buildApp() {
@@ -80,6 +110,10 @@ async function readCollection<T>(
 async function main() {
   const projectId = process.env.FIREBASE_PROJECT_ID;
   const isEmulator = Boolean(emulatorHost);
+
+  if (unknownFlags.length > 0) {
+    fail(`Argumento no reconocido: ${unknownFlags.join(" ")}. Solo se admite --redact.`);
+  }
 
   console.log("\n=== Comprobación de la base de datos de Formación ===");
   console.log(`Proyecto: ${projectId ?? "(sin definir)"}`);
@@ -254,16 +288,33 @@ async function main() {
     });
   }
 
-  for (const finding of findings) {
+  // El veredicto se calcula SIEMPRE sobre los hallazgos originales: redactar
+  // solo afecta a lo que se imprime.
+  const summary = summarize(findings);
+
+  const redactionIndex: RedactionIndex | null = redact
+    ? buildRedactionIndex(accounts)
+    : null;
+  const visibleFindings = redactionIndex ? redactFindings(findings, redactionIndex) : findings;
+
+  for (const finding of visibleFindings) {
     const icon = finding.level === "error" ? "✖" : finding.level === "warning" ? "!" : "·";
-    console.log(`${icon} [${finding.level}] ${finding.code}: ${finding.message}`);
-    for (const ref of finding.refs ?? []) console.log(`      ↳ ${ref}`);
+    const head = `${icon} [${finding.level}] ${finding.code}: ${finding.message}`;
+    console.log(redactionIndex ? guardLine(head, redactionIndex) : head);
+    for (const ref of finding.refs ?? []) {
+      const line = `      ↳ ${ref}`;
+      console.log(redactionIndex ? guardLine(line, redactionIndex) : line);
+    }
   }
 
-  const summary = summarize(findings);
   console.log(
     `\nResumen: ${summary.errors} error(es), ${summary.warnings} aviso(s), ${summary.infos} informativo(s).`,
   );
+
+  if (redactionIndex) {
+    const adminCount = accounts.filter((account) => account.role === "admin").length;
+    console.log(formatAuditStatus(auditStatus({ findings, adminCount })));
+  }
 
   if (!summary.ok) {
     console.log("Resultado: HAY ERRORES. Revisa los mensajes anteriores.\n");
@@ -274,6 +325,12 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error("\n✖ Error inesperado:", error instanceof Error ? error.message : error);
+  const message = error instanceof Error ? error.message : String(error);
+  if (redact) {
+    console.error(`\n✖ Error inesperado: ${redactGeneric(message)}`);
+    console.error(`\n${formatAuditStatus(auditStatus({ findings: [], adminCount: null, blocked: true }))}\n`);
+  } else {
+    console.error("\n✖ Error inesperado:", error instanceof Error ? error.message : error);
+  }
   process.exit(1);
 });

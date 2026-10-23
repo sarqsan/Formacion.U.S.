@@ -1,0 +1,137 @@
+# Auditoría de base de datos en producción (SOLO LECTURA)
+#
+# Qué hace: ejecuta el verificador que ya existe (`npm run db:check`) contra el
+# proyecto real, con `--redact` para que ningún identificador personal llegue al
+# registro de Actions. No escribe en Firestore, no despliega, no migra, no
+# inicializa nada y no toca IAM ni la autenticación.
+#
+# Requisitos EXTERNOS (no se crean desde este fichero):
+#   1. Entorno `production-audit` con revisor obligatorio configurado en
+#      Settings → Environments.
+#   2. Dos secretos DEL ENTORNO (no del repositorio, que es público):
+#        FIREBASE_CLIENT_EMAIL  → correo de la cuenta de servicio de solo lectura
+#        FIREBASE_PRIVATE_KEY   → su clave privada (con \n escapados)
+#      Permiso mínimo: roles/datastore.viewer (ver docs de la auditoría).
+#   GitHub resuelve secretos de entorno con reserva a los del repositorio: para
+#   que las credenciales sean exclusivamente del entorno, NO definas secretos
+#   con esos nombres a nivel de repositorio.
+#
+# Disparo: manual, sin parámetros, y solo desde `main`.
+name: DB audit (solo lectura)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: db-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: Auditoría de solo lectura
+    # Único ref admitido: main. Cualquier otra rama no ejecuta el trabajo.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production-audit
+    env:
+      # Fijados aquí a propósito: la auditoría no acepta proyecto ni comandos
+      # como parámetros de entrada.
+      FIREBASE_PROJECT_ID: formacionus-63555
+      DB_ALLOW_PROD: "yes"
+    steps:
+      - name: Descargar el repositorio
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Preparar Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.3.0
+        with:
+          node-version: "22"
+
+      - name: Instalar dependencias
+        run: npm ci --no-audit --no-fund
+
+      - name: Auditar (solo lectura, con redacción)
+        id: audit
+        # Las credenciales viven en el ENTORNO `production-audit` y solo se
+        # exponen a este paso, no a la instalación ni al resto del trabajo.
+        env:
+          FIREBASE_CLIENT_EMAIL: ${{ secrets.FIREBASE_CLIENT_EMAIL }}
+          FIREBASE_PRIVATE_KEY: ${{ secrets.FIREBASE_PRIVATE_KEY }}
+        # Sin `continue-on-error`: si el verificador falla, el trabajo falla. El
+        # estado técnico se decide por los códigos de la salida, no por el
+        # código de salida del proceso (NO_ADMIN también sale con 1).
+        run: |
+          set +e
+          OUTPUT=$(npm run db:check -- --redact 2>&1)
+          CODE=$?
+          set -e
+
+          # La salida ya viene redactada por el verificador. Se imprime tal cual
+          # y NO se guarda como artefacto ni en ningún fichero del resumen.
+          printf '%s\n' "$OUTPUT"
+
+          # Solo se aceptan estas dos líneas, y solo con la forma exacta que
+          # produce el verificador. Cualquier otra cosa se descarta.
+          STATUS_LINE=$(printf '%s\n' "$OUTPUT" | grep -m1 -E '^AUDITORÍA: ' || true)
+          SUMMARY_LINE=$(printf '%s\n' "$OUTPUT" | grep -m1 -E '^Resumen: ' || true)
+
+          STATUS_PATTERN='^AUDITORÍA: (AUDIT_BLOCKED|NO_ADMIN|ADMIN_COUNT [0-9]+) · ESQUEMA: (OK|AUSENTE|INCOMPATIBLE|NO COMPROBABLE) · ÍNDICES: (OK|FALTAN|NO COMPROBABLE)$'
+          SUMMARY_PATTERN='^Resumen: [0-9]+ error\(es\), [0-9]+ aviso\(s\), [0-9]+ informativo\(s\)\.$'
+
+          if ! printf '%s' "$STATUS_LINE" | grep -qE "$STATUS_PATTERN"; then
+            STATUS_LINE="AUDITORÍA: AUDIT_BLOCKED · ESQUEMA: NO COMPROBABLE · ÍNDICES: NO COMPROBABLE"
+          fi
+          if ! printf '%s' "$SUMMARY_LINE" | grep -qE "$SUMMARY_PATTERN"; then
+            SUMMARY_LINE=""
+          fi
+
+          {
+            echo "status=$STATUS_LINE"
+            echo "summary=$SUMMARY_LINE"
+            echo "code=$CODE"
+          } >> "$GITHUB_OUTPUT"
+
+          exit "$CODE"
+
+      - name: Resumen del trabajo
+        if: always()
+        env:
+          STATUS: ${{ steps.audit.outputs.status }}
+          SUMMARY: ${{ steps.audit.outputs.summary }}
+          CODE: ${{ steps.audit.outputs.code }}
+        run: |
+          STATUS_PATTERN='^AUDITORÍA: (AUDIT_BLOCKED|NO_ADMIN|ADMIN_COUNT [0-9]+) · ESQUEMA: (OK|AUSENTE|INCOMPATIBLE|NO COMPROBABLE) · ÍNDICES: (OK|FALTAN|NO COMPROBABLE)$'
+          SUMMARY_PATTERN='^Resumen: [0-9]+ error\(es\), [0-9]+ aviso\(s\), [0-9]+ informativo\(s\)\.$'
+
+          STATUS="${STATUS:-}"
+          SUMMARY="${SUMMARY:-}"
+
+          if ! printf '%s' "$STATUS" | grep -qE "$STATUS_PATTERN"; then
+            STATUS="AUDITORÍA: AUDIT_BLOCKED · ESQUEMA: NO COMPROBABLE · ÍNDICES: NO COMPROBABLE"
+          fi
+
+          {
+            echo "## Auditoría de la base de datos (solo lectura)"
+            echo
+            echo "- \`$STATUS\`"
+            if printf '%s' "$SUMMARY" | grep -qE "$SUMMARY_PATTERN"; then
+              echo "- \`$SUMMARY\`"
+            fi
+            if printf '%s' "$STATUS" | grep -q 'AUDIT_BLOCKED'; then
+              # Un fallo de instalación, credenciales, conexión o ejecución no
+              # dice nada sobre los datos: nunca se informa como NO_ADMIN.
+              echo "- Ejecución no completada o interrumpida: estado técnico **AUDIT_BLOCKED**."
+            elif [ -z "${CODE:-}" ]; then
+              echo "- Ejecución no completada: estado técnico **AUDIT_BLOCKED**."
+            else
+              echo "- Código de salida del verificador: \`$CODE\` (0 sin errores, 1 con hallazgos \`error\`)."
+            fi
+            echo
+            echo "Sin despliegues, escrituras, migraciones ni artefactos. Los identificadores personales se redactan en el verificador antes de imprimir."
+          } >> "$GITHUB_STEP_SUMMARY"

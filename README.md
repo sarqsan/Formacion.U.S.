@@ -151,6 +151,9 @@ proveedor.
 - [`docs/VERCEL.md`](docs/VERCEL.md) — despliegue en Vercel: qué detecta solo,
   variables de entorno y cómo comprobar el vínculo con el repositorio (sin
   desplegar todavía).
+- [`docs/AUDITORIA-PRODUCCION.md`](docs/AUDITORIA-PRODUCCION.md) — verificador
+  `db:check --redact`, workflow manual de solo lectura y permisos mínimos de la
+  cuenta de servicio.
 - [`docs/DECISIONES.md`](docs/DECISIONES.md) — ADR y decisiones pendientes.
 - [`docs/PLAN.md`](docs/PLAN.md) — siguientes bloques.
 - [`docs/INFORME-FASE-1.md`](docs/INFORME-FASE-1.md) — entrega de la fase 1.
