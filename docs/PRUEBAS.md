@@ -1292,6 +1292,19 @@ existe y es válido, fija Next.js, publica `.next` y no `public/`, construye con
 `/login` 200, `/activar` 200, `/panel` 307, `/api/health` 200,
 `/demo/personas-sinteticas.xlsx` 200, `/no-existe` 404 de Next.
 
-**Pendiente y no verificable desde aquí:** desplegar este commit y comprobar que
-el 404 desaparece. Mientras no se despliegue, la URL de producción sigue
-devolviendo `NOT_FOUND`, y así se declara.
+**Desplegado y verificado (23/10/2026).** El commit entró en `main` por el PR #4
+(`25fc152`) y Vercel lo publicó («Deployment has completed»). Resultado:
+
+| Ruta | Antes | Después |
+| --- | --- | --- |
+| `/` | 404 de Vercel | **200, la aplicación** |
+| `/login` | 404 de Vercel | **200** |
+| `/activar` | 404 de Vercel | **200** |
+| `/panel` | 404 de Vercel | **307 → /login** |
+| `/api/health` | 404 de Vercel | **200** `{"configured":false,…}` |
+
+El 404 de infraestructura desapareció: la aplicación se sirve. Pero al publicarse
+apareció un **segundo fallo**, ajeno al anterior: todas las páginas devolvían
+**500** mientras `/api/health` seguía en 200. Está diagnosticado y corregido en el
+PR #5 —`firebase-admin` → `jwks-rsa` → `jose@6` (ESM-only) no carga con el flag
+de Node que usa Vercel— y documentado en `VERCEL.md` §8.
