@@ -224,3 +224,27 @@ desarrollo) sigue en `jose@6` sin afectar al runtime.
 **Pruebas** (`tests/server/vercel-runtime-deps.test.ts`, **3**): el `overrides`
 está puesto, la copia anidada de `jose` no es ESM-only, y un proceso Node
 **con el flag de Vercel** carga `firebase-admin/auth` y `/firestore` sin error.
+
+### 8.1 Resultado verificado en producción (23/10/2026)
+
+`main` = `e0bcc5243b74e7439549e9febad8858f545e4e10` (merge del PR #5). Vercel
+publicó ese commit y el dominio público respondió:
+
+| Ruta | Respuesta real |
+| --- | --- |
+| `/` | **200** — «Formación del personal, con temario ordenado…» |
+| `/login` | **200** — con el aviso de configuración pendiente, sin formulario |
+| `/activar` | **200** — formulario completo (usuario, código, contraseña) |
+| `/panel` | **307 → /login** (sin sesión; es el comportamiento esperado) |
+| `/api/health` | **200** `{"ok":true,"configured":false,"ready":false,"mode":"unconfigured"}` |
+| `/estado` | **200** |
+
+Ninguna de esas respuestas es un 404 de Vercel ni un 500.
+
+**Lo que sigue pendiente y no es un fallo de despliegue:** el proyecto de Vercel
+no tiene las variables de Firebase. La propia aplicación lo dice en `/login`
+enumerando lo que falta (proyecto, credenciales de servicio, `APP_ORIGIN`,
+`SESSION_COOKIE_NAME=__Host-…` y las cinco `NEXT_PUBLIC_*`). Hasta que se
+configuren en *Project → Settings → Environment Variables*, la web **abre**
+pero no permite iniciar sesión ni activar cuentas.
+
