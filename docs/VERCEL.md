@@ -172,3 +172,55 @@ vercel project ls  # lista los proyectos de la cuenta
 - No se han subido variables de entorno a Vercel.
 - No se ha comprobado el vínculo con el repositorio (sin acceso ni red).
 - No se ha escrito en Firestore, ni creado usuarios, ni publicado reglas.
+
+---
+
+## 8. Segundo fallo del 23/10/2026: 500 en todas las páginas (firebase-admin no carga)
+
+Reparado el 404, la aplicación **sí** se publicó, pero devolvía **500 en todas
+las páginas** mientras `/api/health` seguía en 200. Ese reparto es la firma del
+fallo: lo que importa `@/server/portal` —el layout, es decir todas las
+páginas— muere al cargar; las rutas que no tocan Firebase siguen vivas.
+
+**Cadena exacta:**
+
+```
+firebase-admin@14.5.0 → jwks-rsa@4.1.0 → jose@6  (ESM-only, "type": "module")
+```
+
+Next externaliza `firebase-admin` (`serverExternalPackages`) y el runtime de
+funciones de Vercel arranca Node con `--no-experimental-require-module`. El
+`require("jose")` de `jwks-rsa/src/utils.js` lanza entonces
+`ERR_REQUIRE_ESM` **al evaluar el módulo**, antes de ejecutar una sola línea de
+la aplicación:
+
+```
+Error: Failed to load external module firebase-admin-<hash>/auth:
+Error [ERR_REQUIRE_ESM]: require() of ES Module .../jose/dist/webapi/index.js
+from .../jwks-rsa/src/utils.js not supported.
+```
+
+**Reproducción local fiel** (la clave de todo el diagnóstico):
+
+| Arranque | `/` | `/api/health` |
+| --- | --- | --- |
+| `next start` (Node 22 local, resuelve `require(esm)`) | **200** | 200 |
+| `NODE_OPTIONS=--no-experimental-require-module next start` (igual que Vercel) | **500** | 200 |
+
+Sin ese flag el fallo es invisible en local y aparece solo en producción.
+
+**Corrección** (`package.json`):
+
+```json
+"overrides": { "jwks-rsa": { "jose": "^5.10.0" } }
+```
+
+`jose@5` publica build CommonJS y `jwks-rsa` solo usa `importJWK` y
+`exportSPKI`, cuya API no cambia. `firebase-admin` sigue siendo paquete externo
+(no se empaqueta), que es lo recomendado con gRPC; solo cambia la variante de
+su dependencia transitiva. La copia que usa `firebase-tools` (herramienta de
+desarrollo) sigue en `jose@6` sin afectar al runtime.
+
+**Pruebas** (`tests/server/vercel-runtime-deps.test.ts`, **3**): el `overrides`
+está puesto, la copia anidada de `jose` no es ESM-only, y un proceso Node
+**con el flag de Vercel** carga `firebase-admin/auth` y `/firestore` sin error.
