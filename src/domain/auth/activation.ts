@@ -185,7 +185,8 @@ export function assertActivationUsable(record: ActivationRecord | null, nowIso: 
 export interface AccountClaims {
   role: AccountRole;
   status: AccountStatus;
-  personRol?: PersonRol;
+  /** `null` cuando la cuenta no tiene rol de persona (administración). */
+  personRol?: PersonRol | null;
   claimsVersion: number;
 }
 

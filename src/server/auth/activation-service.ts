@@ -5,7 +5,7 @@ import {
   buildClaims,
   type ActivationRecord,
 } from "@/domain/auth/activation";
-import type { AccountStatus, PersonRol } from "@/domain/roles";
+import type { AccountRole, AccountStatus, PersonRol } from "@/domain/roles";
 import {
   activationTokenMatches,
   hashActivationToken,
@@ -35,8 +35,16 @@ export interface ActivationAccountSnapshot {
   uid: string;
   username: string;
   status: AccountStatus;
+  /**
+   * Rol **almacenado en la ficha** (`accounts.role`). Activar no concede ni
+   * quita permisos: los refleja en las claims. Sin este campo, la activación
+   * solo podía suponer el rol y un administrador quedaba con token `learner`
+   * frente a ficha `admin`, es decir, sin sesión utilizable.
+   */
+  role: AccountRole;
   claimsVersion: number;
-  personRol: PersonRol;
+  /** `null` en cuentas de administración creadas por el script de arranque. */
+  personRol: PersonRol | null;
 }
 
 export interface ActivationStore {
@@ -136,11 +144,16 @@ export async function activateAccount(
   // 1. Contraseña personal (nunca se registra ni se devuelve).
   await deps.credentials.setPassword(account.uid, input.newPassword);
 
-  // 2. Claims: activo, rol de cuenta intacto (siempre learner en este flujo).
+  // 2. Claims: activo, con el rol YA almacenado en la ficha. Activar no crea
+  //    privilegios nuevos ni los retira: los traslada al token. El rol nunca
+  //    llega del cliente (`ActivationInput` no lo tiene) y `accounts` solo lo
+  //    escribe el servidor (`firestore.rules`: write false). Un token con un
+  //    rol distinto al de la ficha sería rechazado por `resolveSession`
+  //    (`role_mismatch`), así que aquí se copia, no se decide.
   await deps.credentials.setClaims(
     account.uid,
     buildClaims({
-      role: "learner",
+      role: account.role,
       status: "active",
       personRol: account.personRol,
       claimsVersion: nextClaimsVersion,

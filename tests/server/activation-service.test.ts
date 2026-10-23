@@ -3,10 +3,12 @@ import {
   activateAccount,
   type ActivationAccountSnapshot,
   type ActivationDependencies,
+  type ActivationInput,
   type ActivationStore,
   type CredentialService,
 } from "@/server/auth/activation-service";
 import type { ActivationRecord } from "@/domain/auth/activation";
+import { resolveSession } from "@/domain/auth/actor";
 import { generateActivationToken, hashActivationToken } from "@/server/auth/tokens";
 import { DomainError } from "@/domain/text";
 
@@ -41,11 +43,15 @@ function harness(options: {
     ...options.record,
   };
 
+  // Por defecto, un alumno importado de Excel: rol de cuenta `learner` y rol de
+  // persona `ROL 1`. Un administrador de arranque se simula con
+  // `{ role: "admin", personRol: null }`.
   const account: ActivationAccountSnapshot = {
     uid: "uid-1",
     username: "rol1.garcia",
     status: "pending_activation",
     claimsVersion: 1,
+    role: "learner",
     personRol: "ROL 1",
     ...options.account,
   };
@@ -235,13 +241,107 @@ describe("rechazos de activación", () => {
   });
 });
 
-describe("no escalada de privilegios", () => {
-  it("la activación nunca concede admin, aunque la cuenta lo tuviera antes", async () => {
-    const h = harness();
+/**
+ * El rol de las claims sale SIEMPRE de la ficha almacenada, nunca del cliente
+ * ni de un valor fijo del código. Estos dos casos cubren las dos direcciones:
+ * conservar la administración y no ascender a nadie.
+ */
+describe("rol tras la activación", () => {
+  it("un administrador pendiente conserva admin y su sesión resuelve", async () => {
+    const h = harness({ account: { role: "admin", personRol: null } });
     await activateAccount(
       { username: "rol1.garcia", token: h.token, newPassword: STRONG },
       h.deps,
     );
+
+    const emitted = h.claims[0].claims;
+    expect(emitted.role).toBe("admin");
+    expect(emitted.status).toBe("active");
+    expect(emitted.claimsVersion).toBe(2);
+    // Sin rol de persona no se inventa uno en las claims.
+    expect(emitted).not.toHaveProperty("personRol");
+
+    // La ficha que deja `markAccountActive`: mismo `role`, `active` y la versión
+    // que acaban de recibir las claims. La sesión tiene que poder emitirse.
+    const resolution = resolveSession(emitted, {
+      uid: "uid-1",
+      role: "admin",
+      status: "active",
+      claimsVersion: 2,
+    });
+    expect(resolution.ok).toBe(true);
+    if (resolution.ok) {
+      expect(resolution.actor.role).toBe("admin");
+      expect(resolution.actor.status).toBe("active");
+    }
+  });
+
+  it("un admin conserva también su rol de persona si lo tiene", async () => {
+    const h = harness({ account: { role: "admin", personRol: "ROL 1" } });
+    await activateAccount(
+      { username: "rol1.garcia", token: h.token, newPassword: STRONG },
+      h.deps,
+    );
+    expect(h.claims[0].claims).toMatchObject({ role: "admin", personRol: "ROL 1" });
+  });
+
+  it("un token con rol distinto al de la ficha no vale (regresión original)", () => {
+    // Es exactamente lo que ocurría antes de la corrección: la activación
+    // emitía `learner` para una ficha `admin` y la sesión quedaba inservible
+    // para siempre, sin operación de interfaz que la recuperase.
+    expect(
+      resolveSession(
+        { role: "learner", status: "active", claimsVersion: 2 },
+        { uid: "uid-1", role: "admin", status: "active", claimsVersion: 2 },
+      ),
+    ).toEqual({ ok: false, reason: "role_mismatch" });
+  });
+
+  it("un alumno sigue siendo alumno: activar no asciende a nadie", async () => {
+    const h = harness(); // rol de cuenta `learner` en la ficha
+    await activateAccount(
+      { username: "rol1.garcia", token: h.token, newPassword: STRONG },
+      h.deps,
+    );
+
     expect(h.claims[0].claims.role).toBe("learner");
+    const resolution = resolveSession(h.claims[0].claims, {
+      uid: "uid-1",
+      role: "learner",
+      status: "active",
+      claimsVersion: 2,
+    });
+    expect(resolution.ok).toBe(true);
+    if (resolution.ok) expect(resolution.actor.role).toBe("learner");
+  });
+
+  it("un rol enviado por el cliente se ignora", async () => {
+    // La entrada no tiene campo de rol; aunque alguien lo inyecte en el cuerpo
+    // de la petición, el servicio solo lee la ficha. El `as` es del test.
+    const h = harness();
+    await activateAccount(
+      {
+        username: "rol1.garcia",
+        token: h.token,
+        newPassword: STRONG,
+        role: "admin",
+      } as unknown as ActivationInput,
+      h.deps,
+    );
+    expect(h.claims[0].claims.role).toBe("learner");
+  });
+
+  it("una ficha inexistente o con rol inválido no se activa", async () => {
+    // `getAccount` del almacén real devuelve `null` si el rol no es válido;
+    // aquí se comprueba que el servicio no activa una cuenta que no encuentra.
+    const h = harness();
+    await expectCode(
+      activateAccount(
+        { username: "rol1.otro", token: h.token, newPassword: STRONG },
+        { ...h.deps, store: { ...h.deps.store, async getAccount() { return null; } } },
+      ),
+      "ACTIVATION_INVALID",
+    );
+    expect(h.claims).toHaveLength(0);
   });
 });
