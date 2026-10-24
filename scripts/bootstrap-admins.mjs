@@ -11,32 +11,40 @@
  *   - Variables FIREBASE_PROJECT_ID / FIREBASE_CLIENT_EMAIL / FIREBASE_PRIVATE_KEY
  *     (o emulador con FIREBASE_AUTH_EMULATOR_HOST).
  *   - BOOTSTRAP_ADMIN_USERNAMES="rol1.apellido,rol1.otro"
+ *   - AUTH_EMAIL_DOMAIN y NEXT_PUBLIC_AUTH_EMAIL_DOMAIN con el mismo valor.
  *
  * Qué hace:
- *   1. Comprueba credenciales y confirmación explícita.
+ *   1. Comprueba credenciales, confirmación explícita y que los dos dominios de
+ *      correo coinciden (si no, el usuario existiría pero el login no podría
+ *      entrar: ver `checkEmailDomains` en scripts/lib/bootstrap-admin-core.mjs).
  *   2. Calcula el plan (crear/omitir) sin escribir nada.
  *   3. Crea cada administrador como cuenta `pending_activation` con token de
  *      activación de un solo uso (igual que la importación): nunca hay
  *      contraseñas compartidas ni cuentas con contraseña conocida.
- *   4. Imprime los códigos UNA vez. No los guarda.
+ *   4. **Imprime los códigos** (una vez) y **después** escribe la auditoría, de
+ *      modo que un fallo de auditoría no pueda dejar códigos sin entregar.
+ *   5. Si algo falla a mitad, limpia lo creado e informa de lo que no pudo
+ *      limpiar y de lo que sigue existiendo.
  *
- * La especificación probada de las reglas de este plan está en
- * src/server/admin/bootstrap-plan.ts (tests/server/bootstrap-plan.test.ts).
- * Este script es intencionadamente autónomo para poder ejecutarse con `node`
- * sin compilar TypeScript ni resolver alias.
+ * Los códigos solo salen por la salida estándar. No se escriben en ficheros ni
+ * en Firestore (allí solo el SHA-256), y no se registran en logs.
  *
- * NO se ejecuta en esta fase: no hay proyecto Firebase conectado.
+ * La lógica probada está en `scripts/lib/bootstrap-admin-core.mjs`; las pruebas
+ * de los caminos de fallo, en `tests/server/bootstrap-admins.test.ts`.
  */
 
-import { createHash, randomBytes } from "node:crypto";
-import { initializeApp, cert, applicationDefault, getApps } from "firebase-admin/app";
+import { applicationDefault, cert, getApps, initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
 
-const USERNAME_PATTERN = /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/;
-const RESERVED = new Set(["admin", "root", "sistema", "system", "soporte", "seguridad"]);
-const MAX_ADMINS = 20;
-const TOKEN_TTL_HOURS = 72;
+import {
+  MAX_BOOTSTRAP_ADMINS,
+  checkEmailDomains,
+  parseAdminList,
+  planAdminUsernames,
+  runBootstrap,
+  writeBootstrapAudit,
+} from "./lib/bootstrap-admin-core.mjs";
 
 const dryRun = process.argv.includes("--dry-run");
 const confirmed = process.env.BOOTSTRAP_CONFIRM === "yes";
@@ -52,41 +60,17 @@ function fail(message) {
   process.exit(1);
 }
 
-function parseList(raw) {
-  if (!raw) return [];
-  return [...new Set(raw.split(",").map((item) => item.trim().toLowerCase()).filter(Boolean))];
-}
-
-function plan(requested) {
-  const create = [];
-  const invalid = [];
-  for (const username of requested) {
-    if (username.length < 4 || username.length > 60) {
-      invalid.push({ username, reason: "longitud no válida" });
-      continue;
-    }
-    if (!USERNAME_PATTERN.test(username)) {
-      invalid.push({ username, reason: "caracteres no válidos" });
-      continue;
-    }
-    if (RESERVED.has(username)) {
-      invalid.push({ username, reason: "nombre reservado" });
-      continue;
-    }
-    create.push(username);
-  }
-  return { create, invalid };
-}
-
 if (!hasCredentials && !usingEmulator) {
   fail("Faltan credenciales de Firebase Admin (FIREBASE_PROJECT_ID / CLIENT_EMAIL / PRIVATE_KEY).");
 }
 
-const requested = parseList(process.env.BOOTSTRAP_ADMIN_USERNAMES);
+const requested = parseAdminList(process.env.BOOTSTRAP_ADMIN_USERNAMES);
 if (requested.length === 0) fail("Define BOOTSTRAP_ADMIN_USERNAMES con al menos un usuario.");
-if (requested.length > MAX_ADMINS) fail(`Como máximo ${MAX_ADMINS} administradores por ejecución.`);
+if (requested.length > MAX_BOOTSTRAP_ADMINS) {
+  fail(`Como máximo ${MAX_BOOTSTRAP_ADMINS} administradores por ejecución.`);
+}
 
-const { create, invalid } = plan(requested);
+const { create, invalid } = planAdminUsernames(requested);
 if (invalid.length > 0) {
   console.error("Usuarios no válidos (se ignoran):");
   for (const item of invalid) console.error(`  - ${item.username}: ${item.reason}`);
@@ -94,6 +78,15 @@ if (invalid.length > 0) {
 
 if (!dryRun && !confirmed) {
   fail("Simula primero con --dry-run y después ejecuta con BOOTSTRAP_CONFIRM=yes.");
+}
+
+// -------------------------------------------------------------------------
+// Dominio de correo: antes de permitir el alta.
+// -------------------------------------------------------------------------
+const emailDomains = checkEmailDomains(process.env);
+
+if (!emailDomains.ok && !dryRun) {
+  fail(`Dominio de correo interno incoherente: ${emailDomains.reason}`);
 }
 
 const app =
@@ -114,16 +107,33 @@ const app =
 
 const auth = getAuth(app);
 const db = getFirestore(app);
-const emailDomain = (process.env.AUTH_EMAIL_DOMAIN || "formacion.invalid").trim().toLowerCase();
+const deps = { db, auth, emailDomain: emailDomains.server };
 
-function generateToken() {
-  return randomBytes(32).toString("base64url");
+function describeCleanup(cleanup) {
+  if (!cleanup) return;
+  const { cleaned = [], failed = [], residual = [] } = cleanup;
+  if (cleaned.length > 0) console.error(`    limpiado:      ${cleaned.join(", ")}`);
+  for (const item of failed) {
+    console.error(`    ✖ no se pudo borrar: ${item.resource} → ${item.error}`);
+  }
+  for (const item of residual) {
+    console.error(`    ⚠ queda en el sistema: ${item.resource} (${item.state})`);
+  }
+  if (failed.length === 0 && residual.length === 0) {
+    console.error("    estado residual: ninguno");
+  }
 }
 
 async function main() {
   console.log(`\nModo: ${dryRun ? "SIMULACIÓN (no escribe)" : "APLICAR CAMBIOS"}`);
-  console.log(`Emulador: ${usingEmulator ? "sí" : "no"}\n`);
+  console.log(`Emulador: ${usingEmulator ? "sí" : "no"}`);
+  console.log(`Dominio de correo: ${emailDomains.server} (cliente: ${emailDomains.client})`);
+  if (!emailDomains.ok) {
+    console.error(`\n⚠ ${emailDomains.reason}`);
+    if (dryRun) console.error("  En modo simulación se avisa; la ejecución real se negaría a empezar.\n");
+  }
 
+  // Lectura previa: solo documentos de reserva, sin escrituras.
   const existing = new Set();
   for (const username of create) {
     const doc = await db.collection("usernames").doc(username).get();
@@ -139,95 +149,92 @@ async function main() {
 
   if (dryRun || toCreate.length === 0) {
     console.log(dryRun ? "Simulación terminada. No se ha creado nada." : "Nada que hacer.");
-    return;
+    return 0;
   }
 
-  const now = new Date();
-  const createdAt = now.toISOString();
-  const expiresAt = new Date(now.getTime() + TOKEN_TTL_HOURS * 3600 * 1000).toISOString();
-  const results = [];
-
-  for (const username of toCreate) {
-    const authEmail = `${username}@${emailDomain}`;
-
-    const reservation = db.collection("usernames").doc(username);
-    await db.runTransaction(async (transaction) => {
-      const snapshot = await transaction.get(reservation);
-      if (snapshot.exists) throw new Error(`El usuario ${username} ya existe.`);
-      transaction.create(reservation, { uid: null, reservedAt: createdAt, reservedBy: "bootstrap" });
-    });
-
-    let uid = null;
-    try {
-      const user = await auth.createUser({
-        email: authEmail,
-        password: randomBytes(48).toString("base64url"),
-        displayName: `${username} (administrador)`,
-        disabled: false,
-      });
-      uid = user.uid;
-
-      await auth.setCustomUserClaims(uid, {
-        role: "admin",
-        status: "pending_activation",
-        claimsVersion: 1,
-      });
-
-      const token = generateToken();
-      const tokenHash = createHash("sha256").update(token, "utf8").digest("hex");
-
-      const batch = db.batch();
-      batch.create(db.collection("accounts").doc(uid), {
-        uid,
-        username,
-        authEmail,
-        apellido: null,
-        personRol: null,
-        role: "admin",
-        status: "pending_activation",
-        claimsVersion: 1,
-        createdAt,
-        createdBy: "bootstrap-script",
-        activatedAt: null,
-        disabledAt: null,
-      });
-      batch.create(db.collection("activationTokens").doc(tokenHash), {
-        uid,
-        createdAt,
-        expiresAt,
-        usedAt: null,
-        revokedAt: null,
-      });
-      batch.update(reservation, { uid });
-      await batch.commit();
-
-      results.push({ username, token, expiresAt });
-    } catch (error) {
-      if (uid) {
-        await db.collection("accounts").doc(uid).delete().catch(() => {});
-        await auth.deleteUser(uid).catch(() => {});
+  const report = await runBootstrap({
+    usernames: toCreate,
+    existing,
+    deps,
+    onEvent: (event) => {
+      if (event.type === "created") {
+        console.error(`✔ ${event.username}: cuenta creada en estado pending_activation.`);
+      } else if (event.type === "skipped") {
+        console.error(`• ${event.username}: omitido (${event.reason}).`);
+      } else {
+        console.error(`✖ ${event.username}: fallo en «${event.stage}» → ${event.error}`);
       }
-      await reservation.delete().catch(() => {});
-      console.error(`✖ ${username}: ${error instanceof Error ? error.message : "error"}`);
-    }
-  }
-
-  await db.collection("audits").add({
-    type: "bootstrap_admins",
-    at: createdAt,
-    actorUid: "bootstrap-script",
-    usernames: results.map((item) => item.username),
-    severity: "warning",
+    },
   });
 
-  console.log("\nCódigos de activación (se muestran UNA vez, no se guardan):\n");
-  for (const item of results) {
-    console.log(`  ${item.username};${item.token}`);
+  // -----------------------------------------------------------------------
+  // 1) Códigos ANTES de cualquier escritura posterior.
+  //    Si el proceso muere justo después de imprimirlos, los titulares ya los
+  //    tienen; si muriera antes, no se habría escrito la auditoría pero
+  //    tampoco se habría entregado nada.
+  // -----------------------------------------------------------------------
+  if (report.created.length > 0) {
+    console.log("\nCódigos de activación (se muestran UNA vez, no se guardan):\n");
+    for (const item of report.created) {
+      console.log(`  ${item.username};${item.token}`);
+    }
+    console.log(`\nCaducan el ${report.expiresAt}. Entrega cada código a su titular por un canal interno.\n`);
   }
-  console.log(`\nCaducan el ${expiresAt}. Entrega cada código a su titular por un canal interno.\n`);
+
+  // -----------------------------------------------------------------------
+  // 2) Auditoría, ya con los códigos entregados. Un fallo aquí NO pierde
+  //    códigos: se informa y la ejecución termina en error para que no pase
+  //    inadvertido.
+  // -----------------------------------------------------------------------
+  let auditError = null;
+  try {
+    await writeBootstrapAudit({ deps, report, at: new Date().toISOString() });
+  } catch (error) {
+    auditError = error instanceof Error ? error.message : String(error);
+    console.error(`\n✖ La auditoría no se pudo escribir: ${auditError}`);
+    console.error(
+      "  Los códigos de arriba SÍ son válidos y ya se han mostrado; lo único que falta " +
+        "es el registro `audits/bootstrap_admins`. Anótalo a mano o vuelve a ejecutar " +
+        "cuando se resuelva el permiso (la reserva impide duplicar cuentas).",
+    );
+  }
+
+  // -----------------------------------------------------------------------
+  // 3) Resumen y estado residual.
+  // -----------------------------------------------------------------------
+  console.log("\nResumen:");
+  console.log(`  creados:  ${report.created.length}${report.created.length ? ` → ${report.created.map((i) => i.username).join(", ")}` : ""}`);
+  console.log(`  omitidos: ${report.skipped.length}${report.skipped.length ? ` → ${report.skipped.map((i) => i.username).join(", ")}` : ""}`);
+  console.log(`  fallidos: ${report.failed.length}${report.failed.length ? ` → ${report.failed.map((i) => i.username).join(", ")}` : ""}`);
+
+  let residualCount = 0;
+  for (const item of report.failed) {
+    console.error(`\n✖ ${item.username} (etapa «${item.stage}»): ${item.error}`);
+    describeCleanup(item.cleanup);
+    residualCount += (item.cleanup?.residual?.length ?? 0) + (item.cleanup?.failed?.length ?? 0);
+  }
+
+  if (residualCount > 0) {
+    console.error(
+      "\n⚠ Hay recursos sin limpiar. Revisa a mano los elementos marcados antes de reintentar; " +
+        "un `activationTokens` que sobreviva es un código válido hasta su caducidad.\n",
+    );
+  }
+
+  if (report.failed.length > 0 || residualCount > 0 || auditError) {
+    console.error("\nLa ejecución NO se completó limpiamente.\n");
+    return 1;
+  }
+
+  console.log("");
+  return 0;
 }
 
-main().catch((error) => {
-  console.error("\n✖ Error inesperado:", error instanceof Error ? error.message : error);
-  process.exit(1);
-});
+main()
+  .then((code) => {
+    process.exitCode = code;
+  })
+  .catch((error) => {
+    console.error("\n✖ Error inesperado:", error instanceof Error ? error.message : error);
+    process.exitCode = 1;
+  });
