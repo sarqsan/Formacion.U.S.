@@ -282,6 +282,34 @@ administrador activo que pueda entrar a `/admin/personas` a reemitirlo.
 Las pruebas de estos caminos de fallo están en
 `tests/server/bootstrap-admins.test.ts` (sin red ni credenciales).
 
+### Estado del alta inicial
+
+**Hecho el 2026-10-24:** la cuenta `admin1` existe en `formacionus-63555` y está
+**activa** (código de activación canjeado y contraseña elegida por su titular en
+`/activar`), y el acceso real funciona en `https://formacionus.vercel.app`.
+
+Lo que esto confirma, por haber ocurrido de verdad y no por inferencia:
+
+- el alta crea la cuenta en `pending_activation` y emite un código de un solo uso;
+- la activación lo canjea, fija la contraseña y pasa la cuenta a `active`;
+- el login contra Firebase Auth emite cookie y deja entrar;
+- sin sesión, `/admin/personas` redirige a `/login` y `/api/me` responde
+  `authenticated:false`.
+
+Lo que **no** está demostrado y sigue pendiente:
+
+- **No hay recuperación de contraseña.** Los correos son sintéticos
+  (`usuario@formacion.invalid`), así que no hay buzón para un enlace de
+  restablecimiento, y `--reissue` solo actúa sobre cuentas pendientes. Si se
+  olvida la contraseña de una cuenta ya activa, hay que fijarla a mano con el SDK
+  de Admin. Falta añadirlo al script.
+- Las reglas de Firestore siguen sin ejecutarse en el emulador (ver paso 7).
+
+Nota de seguridad operativa: el código de activación se mostró una vez en la
+terminal del Codespace y se revocó (`--reissue`) antes de usarlo, por haber
+quedado expuesto en un canal de texto. Con el código revocado no quedó ningún
+secreto utilizable fuera de su sitio.
+
 ### Paso 7 — Reglas e índices **[MANUAL, y solo cuando toque]**
 
 - **No publicar todavía.** Las 57 pruebas de reglas siguen **BLOCKED** (no hay
