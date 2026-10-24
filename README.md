@@ -32,7 +32,8 @@ aplicación de cuadrantes. Ese botón **no** modifica su lógica funcional.
 | Reglas de Firestore (denegar por defecto, con matrícula) | Escritas y revisadas; **sin ejecutar** (el emulador no se puede descargar en este entorno) |
 | Interfaz: portada, acceso, panel de alumno, curso, lectura de pantallas, cuestionarios, examen final, panel de administración, matrículas, progreso e importación | Implementada; recorrido completo en modo demostración |
 | Cursos, temas, PDF por páginas, cuestionarios, examen final, versión nueva | Implementado y probado en servidor (subida solo por API); interfaz de lectura y matrícula ya disponible sobre el almacén de demostración |
-| Script de administradores iniciales (varios, idempotente) | Implementado; no ejecutado |
+| Script de administradores iniciales (varios, idempotente) | Implementado y ejecutado: `admin1` activo en producción |
+| Cambio de contraseña de una cuenta activa (`--reset-password`) | Implementado; sin ejecutar todavía |
 
 ## Puesta en marcha (desarrollo)
 

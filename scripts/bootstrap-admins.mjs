@@ -45,6 +45,7 @@ import {
   parseAdminList,
   planAdminUsernames,
   reissueActivationCode,
+  resetAccountPassword,
   resolveAdminCredentials,
   runBootstrap,
   writeBootstrapAudit,
@@ -52,6 +53,8 @@ import {
 
 const dryRun = process.argv.includes("--dry-run");
 const reissue = process.argv.includes("--reissue");
+const resetFlag = process.argv.indexOf("--reset-password");
+const resetUsername = resetFlag >= 0 ? process.argv[resetFlag + 1] : null;
 const confirmed = process.env.BOOTSTRAP_CONFIRM === "yes";
 const usingEmulator = Boolean(process.env.FIREBASE_AUTH_EMULATOR_HOST);
 let credentials = null;
@@ -87,7 +90,7 @@ if (invalid.length > 0) {
   for (const item of invalid) console.error(`  - ${item.username}: ${item.reason}`);
 }
 
-if (!dryRun && !confirmed && !reissue) {
+if (!dryRun && !confirmed && !reissue && !resetUsername) {
   fail("Simula primero con --dry-run y después ejecuta con BOOTSTRAP_CONFIRM=yes.");
 }
 
@@ -131,6 +134,107 @@ function describeCleanup(cleanup) {
   if (failed.length === 0 && residual.length === 0) {
     console.error("    estado residual: ninguno");
   }
+}
+
+/**
+ * Lee una contraseña sin mostrarla en pantalla.
+ *
+ * Si no hay terminal interactiva (por ejemplo, un script), se lee la primera
+ * línea de la entrada estándar. En ese caso queda en el historial de quien la
+ * escriba: el prompt interactivo existe justo para evitarlo.
+ */
+async function readSecret(prompt) {
+  if (!process.stdin.isTTY) {
+    const chunks = [];
+    for await (const chunk of process.stdin) chunks.push(chunk);
+    return Buffer.concat(chunks).toString("utf8").split("\n")[0];
+  }
+
+  process.stdout.write(prompt);
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+  process.stdin.setEncoding("utf8");
+
+  let value = "";
+  await new Promise((resolve) => {
+    const onData = (char) => {
+      if (char === "\r" || char === "\n") {
+        process.stdin.setRawMode(false);
+        process.stdin.pause();
+        process.stdin.removeListener("data", onData);
+        process.stdout.write("\n");
+        resolve();
+      } else if (char === "\u0003") {
+        process.stdout.write("\n");
+        process.exit(1);
+      } else if (char === "\u007f") {
+        value = value.slice(0, -1);
+      } else {
+        value += char;
+      }
+    };
+    process.stdin.on("data", onData);
+  });
+
+  return value;
+}
+
+/**
+ * Contraseña nueva para una cuenta ya activa. Es el único camino cuando el
+ * titular la ha olvidado: no hay buzón que reciba un enlace de restablecimiento.
+ *
+ * Se pide dos veces (para no dejarla mal escrita) y no se muestra en pantalla.
+ */
+async function runResetPassword(username) {
+  console.log("\nModo: CAMBIAR CONTRASEÑA (la anterior deja de funcionar)");
+  console.log(`Usuario:  ${username}`);
+  console.log("La contraseña no se muestra al escribirla y no se guarda en ningún sitio.\n");
+
+  const first = await readSecret("Contraseña nueva: ");
+  const second = await readSecret("Repite la contraseña: ");
+
+  if (first !== second) {
+    console.error("\n✖ Las dos contraseñas no coinciden. No se ha cambiado nada.\n");
+    return 1;
+  }
+
+  const result = await resetAccountPassword({ username, newPassword: first, deps });
+
+  if (result.status === "reset") {
+    console.log(`✔ ${result.username}: contraseña cambiada.`);
+    console.log("  Las sesiones abiertas de esa cuenta ya no valen: hay que entrar de nuevo.");
+    if (result.auditWarning) {
+      console.error(`  ⚠ No se pudo registrar la auditoría: ${result.auditWarning}`);
+      console.error("    El cambio SÍ se aplicó.");
+      return 1;
+    }
+    return 0;
+  }
+
+  if (result.status === "not_found") {
+    console.error(`\n✖ No existe ninguna cuenta con el usuario «${result.username}».\n`);
+    return 1;
+  }
+  if (result.status === "not_applicable") {
+    console.error(`\n✖ ${result.username}: ${result.reason}.\n`);
+    return 1;
+  }
+  if (result.status === "invalid_password") {
+    console.error("\n✖ La contraseña no cumple la política; no se ha cambiado nada:");
+    for (const issue of result.issues) console.error(`    · ${issue.message}`);
+    console.error("");
+    return 1;
+  }
+
+  console.error(`\n✖ Falló el cambio: ${result.error}`);
+  console.error(`  Aplicado antes del fallo: ${result.applied.length > 0 ? result.applied.join(", ") : "nada"}.`);
+  if (result.passwordChanged) {
+    console.error("  ⚠ La contraseña NUEVA ya está activa aunque el resto fallara.");
+  } else {
+    console.error("  La contraseña anterior sigue funcionando.");
+  }
+  console.error("");
+  return 1;
 }
 
 /**
@@ -184,6 +288,18 @@ async function runReissue() {
 }
 
 async function main() {
+  if (resetUsername !== null) {
+    if (!resetUsername || resetUsername.startsWith("--")) {
+      fail("Indica el usuario: npm run bootstrap -- --reset-password nombre.apellido");
+    }
+    const plan = planAdminUsernames([resetUsername]);
+    if (plan.create.length !== 1) {
+      console.error(`\n✖ Usuario no válido: ${plan.invalid[0]?.reason ?? "formato incorrecto"}.\n`);
+      return 1;
+    }
+    return runResetPassword(plan.create[0]);
+  }
+
   if (reissue) return runReissue();
 
   console.log(`\nModo: ${dryRun ? "SIMULACIÓN (no escribe)" : "APLICAR CAMBIOS"}`);

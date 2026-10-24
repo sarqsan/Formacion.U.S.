@@ -298,17 +298,48 @@ Lo que esto confirma, por haber ocurrido de verdad y no por inferencia:
 
 Lo que **no** está demostrado y sigue pendiente:
 
-- **No hay recuperación de contraseña.** Los correos son sintéticos
-  (`usuario@formacion.invalid`), así que no hay buzón para un enlace de
-  restablecimiento, y `--reissue` solo actúa sobre cuentas pendientes. Si se
-  olvida la contraseña de una cuenta ya activa, hay que fijarla a mano con el SDK
-  de Admin. Falta añadirlo al script.
+- ~~No hay recuperación de contraseña.~~ **Resuelto** con
+  `--reset-password` (ver abajo).
 - Las reglas de Firestore siguen sin ejecutarse en el emulador (ver paso 7).
 
 Nota de seguridad operativa: el código de activación se mostró una vez en la
 terminal del Codespace y se revocó (`--reissue`) antes de usarlo, por haber
 quedado expuesto en un canal de texto. Con el código revocado no quedó ningún
 secreto utilizable fuera de su sitio.
+
+### Paso 6 bis — Contraseña olvidada de una cuenta ya activa
+
+Los correos son sintéticos (`usuario@formacion.invalid`): no hay buzón que reciba
+un enlace de restablecimiento y `--reissue` solo actúa sobre cuentas pendientes.
+Para una cuenta activa:
+
+```bash
+export FIREBASE_SERVICE_ACCOUNT_FILE="$HOME/claves/cuenta.json"
+npm run bootstrap -- --reset-password nombre.apellido
+```
+
+Pide la contraseña **dos veces y sin mostrarla en pantalla** (si no hay terminal
+interactiva lee la primera línea de la entrada estándar, que sí queda en el
+historial: el prompt existe para evitarlo).
+
+Qué hace, en este orden, y qué garantiza:
+
+1. comprueba que la cuenta existe y está `active` (una pendiente se activa con su
+   código; una deshabilitada se reactiva antes desde el panel);
+2. aplica **la misma política que `/activar`**: 12–128 caracteres, minúscula,
+   mayúscula, número, sin espacios en los extremos y sin contener el nombre de
+   usuario. Si no la cumple, no cambia nada;
+3. fija la contraseña, sube `claimsVersion` en las claims **y** en la ficha, y
+   revoca los refresh tokens: las sesiones abiertas dejan de valer en el acto;
+4. registra `audits/password_reset`, sin la contraseña.
+
+Si algo falla a mitad, informa de **qué pasos se aplicaron**: cuando «contraseña»
+está en esa lista, la nueva ya funciona aunque el resto fallara y la anterior ya
+no sirve. Nada se presenta como correcto por suposición.
+
+La política está duplicada entre `src/domain/auth/activation.ts` (TypeScript) y
+`scripts/lib/bootstrap-admin-core.mjs` (el script corre con `node`, sin compilar).
+Una prueba lee ambas y falla si dejan de coincidir.
 
 ### Paso 7 — Reglas e índices **[MANUAL, y solo cuando toque]**
 

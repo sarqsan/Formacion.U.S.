@@ -14,7 +14,9 @@ import {
   parseAdminList,
   planAdminUsernames,
   provisionAdmin,
+  PASSWORD_POLICY,
   reissueActivationCode,
+  resetAccountPassword,
   rollbackProvisioned,
   runBootstrap,
   writeBootstrapAudit,
@@ -49,6 +51,8 @@ interface Hooks {
   createUser?: Error | null;
   setClaims?: Error | null;
   deleteUser?: Error | null;
+  updateUser?: Error | null;
+  revoke?: Error | null;
   audit?: Error | null;
   deleteError?: (path: string) => Error | null;
 }
@@ -59,6 +63,7 @@ interface World {
   users: Map<string, { email: string; password: string; claims?: DocData }>;
   audits: DocData[];
   deletes: string[];
+  revoked: string[];
   preReserve: (username: string) => void;
 }
 
@@ -73,6 +78,7 @@ function createWorld(hooks: Hooks = {}): World {
   const users = new Map<string, { email: string; password: string; claims?: DocData }>();
   const audits: DocData[] = [];
   const deletes: string[] = [];
+  const revoked: string[] = [];
   let uidSeq = 0;
 
   const path = (collection: string, id: string) => `${collection}/${id}`;
@@ -88,6 +94,10 @@ function createWorld(hooks: Hooks = {}): World {
       async create(data: DocData) {
         if (docs.has(docPath)) throw new Error(`ALREADY_EXISTS: ${docPath}`);
         docs.set(docPath, { ...data });
+      },
+      async update(data: DocData) {
+        if (!docs.has(docPath)) throw new Error(`NOT_FOUND: ${docPath}`);
+        docs.set(docPath, { ...docs.get(docPath), ...data });
       },
       async delete() {
         const failure = hooks.deleteError?.(docPath);
@@ -189,6 +199,18 @@ function createWorld(hooks: Hooks = {}): World {
       if (!user) throw missingUserError();
       return user;
     },
+    async updateUser(uid: string, changes: { password?: string }) {
+      if (hooks.updateUser) throw hooks.updateUser;
+      const user = users.get(uid);
+      if (!user) throw missingUserError();
+      if (changes.password) user.password = changes.password;
+      return { uid };
+    },
+    async revokeRefreshTokens(uid: string) {
+      if (hooks.revoke) throw hooks.revoke;
+      if (!users.has(uid)) throw missingUserError();
+      revoked.push(uid);
+    },
   };
 
   return {
@@ -197,6 +219,7 @@ function createWorld(hooks: Hooks = {}): World {
     users,
     audits,
     deletes,
+    revoked,
     preReserve(username: string) {
       docs.set(path("usernames", username), { uid: null, reservedBy: "otra-ejecucion" });
     },
@@ -767,5 +790,181 @@ describe("reemisión de códigos de activación", () => {
     expect(live).toHaveLength(1);
     expect(live[0][0]).toBe(`activationTokens/${second.tokenHash}`);
     expect(second.revoked).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Restablecimiento de contraseña
+// ---------------------------------------------------------------------------
+
+/**
+ * El agujero que tapa esto: los correos son sintéticos, así que no hay enlace
+ * de restablecimiento; y `--reissue` solo actúa sobre cuentas pendientes. Sin
+ * una operación de cambio de contraseña, un administrador que la olvida deja el
+ * sistema sin administradores.
+ */
+describe("cambio de contraseña de una cuenta activa", () => {
+  async function activeWorld() {
+    const world = createWorld();
+    const created = (await provisionAdmin({ username: "admin1", deps: world.deps })) as unknown as {
+      status: string;
+      uid: string;
+      tokenHash: string;
+    };
+    // Se activa la cuenta como lo haría /activar.
+    world.docs.set(`accounts/${created.uid}`, {
+      ...world.docs.get(`accounts/${created.uid}`),
+      status: "active",
+      claimsVersion: 2,
+    });
+    world.users.get(created.uid)!.claims = { role: "admin", status: "active", claimsVersion: 2 };
+    return { world, created };
+  }
+
+  const GOOD = "ClaveNueva2026x";
+
+  it("cambia la contraseña, sube claimsVersion y revoca las sesiones", async () => {
+    const { world, created } = await activeWorld();
+
+    const result = await resetAccountPassword({
+      username: "admin1",
+      newPassword: GOOD,
+      deps: world.deps,
+    });
+
+    expect(result.status).toBe("reset");
+    if (result.status !== "reset") return;
+
+    expect(result.claimsVersion).toBe(3);
+    expect(world.users.get(created.uid)?.password).toBe(GOOD);
+    expect(world.users.get(created.uid)?.claims).toEqual({
+      role: "admin",
+      status: "active",
+      claimsVersion: 3,
+    });
+    expect(world.docs.get(`accounts/${created.uid}`)).toMatchObject({
+      status: "active",
+      claimsVersion: 3,
+      passwordResetAt: expect.any(String),
+    });
+    expect(world.revoked).toContain(created.uid);
+  });
+
+  it("registra la auditoría sin la contraseña", async () => {
+    const { world } = await activeWorld();
+    await resetAccountPassword({ username: "admin1", newPassword: GOOD, deps: world.deps });
+
+    const entry = world.audits.at(-1)!;
+    expect(entry).toMatchObject({ type: "password_reset", username: "admin1" });
+    expect(JSON.stringify(world.audits)).not.toContain(GOOD);
+    expect(JSON.stringify([...world.docs.entries()])).not.toContain(GOOD);
+  });
+
+  it("no toca nada si la contraseña incumple la política", async () => {
+    const { world, created } = await activeWorld();
+    const before = world.users.get(created.uid)?.password;
+
+    for (const weak of ["corta", "todasminusculas1", "SINMINUSCULAS123", "SinNumerosAqui"]) {
+      const result = await resetAccountPassword({
+        username: "admin1",
+        newPassword: weak,
+        deps: world.deps,
+      });
+      expect(result.status).toBe("invalid_password");
+    }
+
+    const withUsername = await resetAccountPassword({
+      username: "admin1",
+      newPassword: "Admin1-Clave-2026",
+      deps: world.deps,
+    });
+    expect(withUsername.status).toBe("invalid_password");
+
+    expect(world.users.get(created.uid)?.password).toBe(before);
+    expect(world.revoked).toHaveLength(0);
+  });
+
+  it("no cambia la contraseña de cuentas pendientes ni deshabilitadas", async () => {
+    const world = createWorld();
+    const created = (await provisionAdmin({ username: "admin2", deps: world.deps })) as unknown as {
+      uid: string;
+    };
+
+    // Pendiente: se activa con su código, no con un cambio de contraseña.
+    expect(
+      await resetAccountPassword({ username: "admin2", newPassword: GOOD, deps: world.deps }),
+    ).toMatchObject({ status: "not_applicable" });
+
+    world.docs.set(`accounts/${created.uid}`, {
+      ...world.docs.get(`accounts/${created.uid}`),
+      status: "disabled",
+    });
+    expect(
+      await resetAccountPassword({ username: "admin2", newPassword: GOOD, deps: world.deps }),
+    ).toMatchObject({ status: "not_applicable" });
+  });
+
+  it("informa si el usuario no existe", async () => {
+    const world = createWorld();
+    expect(
+      await resetAccountPassword({ username: "nadie.aqui", newPassword: GOOD, deps: world.deps }),
+    ).toEqual({ status: "not_found", username: "nadie.aqui" });
+  });
+
+  it("si falla a mitad, dice qué se aplicó y avisa de que la nueva ya vale", async () => {
+    const { world, created } = await activeWorld();
+    (world.deps.auth as { revokeRefreshTokens: () => Promise<void> }).revokeRefreshTokens = async () => {
+      throw new Error("permiso denegado");
+    };
+
+    const result = await resetAccountPassword({
+      username: "admin1",
+      newPassword: GOOD,
+      deps: world.deps,
+    });
+
+    expect(result.status).toBe("failed");
+    if (result.status !== "failed") return;
+
+    expect(result.applied).toContain("contraseña");
+    expect(result.passwordChanged).toBe(true);
+    // Y no se ha perdido la coherencia: ficha y claims siguen alineadas.
+    expect(world.docs.get(`accounts/${created.uid}`)).toMatchObject({ claimsVersion: 3 });
+    expect(world.users.get(created.uid)?.claims).toMatchObject({ claimsVersion: 3 });
+  });
+
+  it("si falla antes de tocar la contraseña, la anterior sigue valiendo", async () => {
+    const { world, created } = await activeWorld();
+    const before = world.users.get(created.uid)?.password;
+    (world.deps.auth as { updateUser: () => Promise<void> }).updateUser = async () => {
+      throw new Error("usuario bloqueado");
+    };
+
+    const result = await resetAccountPassword({
+      username: "admin1",
+      newPassword: GOOD,
+      deps: world.deps,
+    });
+
+    expect(result.status).toBe("failed");
+    if (result.status !== "failed") return;
+    expect(result.passwordChanged).toBe(false);
+    expect(world.users.get(created.uid)?.password).toBe(before);
+  });
+});
+
+describe("la política de contraseña no se desincroniza", () => {
+  it("el script y la aplicación exigen lo mismo", () => {
+    // El script corre con `node` y no importa TypeScript: la política está
+    // duplicada. Esta prueba lee la copia de la aplicación y la compara.
+    const source = readFileSync("src/domain/auth/activation.ts", "utf8");
+    const policy = /export const PASSWORD_POLICY = \{([\s\S]*?)\} as const;/.exec(source)?.[1] ?? "";
+
+    expect(policy).toBeTruthy();
+    expect(Number(/minLength:\s*(\d+)/.exec(policy)?.[1])).toBe(PASSWORD_POLICY.minLength);
+    expect(Number(/maxLength:\s*(\d+)/.exec(policy)?.[1])).toBe(PASSWORD_POLICY.maxLength);
+    for (const key of ["requireLowercase", "requireUppercase", "requireDigit"] as const) {
+      expect(new RegExp(`${key}:\\s*(true|false)`).exec(policy)?.[1]).toBe(String(PASSWORD_POLICY[key]));
+    }
   });
 });
