@@ -5,12 +5,13 @@ import {
   assertCanTransitionStatus,
   type Actor,
 } from "@/domain/auth/authorization";
-import { buildClaims } from "@/domain/auth/activation";
+import { assertPasswordAcceptable, buildClaims } from "@/domain/auth/activation";
 import type { AccountRole, AccountStatus, PersonRol } from "@/domain/roles";
 import type { CredentialService } from "@/server/auth/activation-service";
 import {
   activationExpiry,
   generateActivationToken,
+  generateTemporaryPassword,
   hashActivationToken,
 } from "@/server/auth/tokens";
 
@@ -80,6 +81,14 @@ export type AccountAuditEvent =
       targetUid: string;
       at: string;
       claimsVersion: number;
+    }
+  | {
+      type: "password_reset_admin";
+      actorUid: string;
+      targetUid: string;
+      at: string;
+      /** Cómo se obtuvo la contraseña. Hoy siempre la genera el servidor. */
+      source: "generated";
     }
   | {
       type: "activation_reissued";
@@ -377,4 +386,92 @@ export async function reissueActivationCode(
     expiresAt,
     revokedPrevious,
   };
+}
+
+/**
+ * Contraseña temporal para una cuenta activa, pedida por administración.
+ *
+ * Es el mismo efecto que `--reset-password` por terminal, pero sin credenciales
+ * de servicio ni consola: lo que necesita quien administra sin ser técnico.
+ *
+ * Decisiones:
+ *
+ *   · **La genera el servidor**, no la escribe el administrador. Así cumple la
+ *     política por construcción y no acaba siendo una contraseña débil.
+ *   · **Se devuelve una sola vez** y no se guarda en claro en ningún sitio: ni
+ *     en la auditoría, ni en el estado, ni en la URL.
+ *   · **Solo cuentas activas.** Una pendiente se activa con su código; una
+ *     deshabilitada se reactiva antes. Restablecer no debe saltarse ninguno de
+ *     los dos pasos.
+ *   · **Se revocan las sesiones**: quien tuviera la cuenta abierta deja de
+ *     tenerla en la siguiente petición. La persona entra con la temporal y la
+ *     cambia en «Mi cuenta».
+ */
+export interface AdminPasswordReset {
+  uid: string;
+  username: string;
+  /** En claro, UNA sola vez. No se guarda ni se audita. */
+  password: string;
+  changedAt: string;
+}
+
+export async function resetPasswordByAdmin(
+  input: { actor: Actor; uid: string },
+  deps: AccountAdminDependencies,
+): Promise<AdminPasswordReset> {
+  const admin = assertAdmin(input.actor);
+  const target = await loadTarget(deps.store, input.uid);
+
+  if (target.status === "pending_activation") {
+    throw new DomainError(
+      "ACCOUNT_PENDING_ACTIVATION",
+      "La cuenta todavía no se ha activado: reemite su código de activación en lugar de cambiar la contraseña.",
+      409,
+    );
+  }
+  if (target.status !== "active") {
+    throw new DomainError(
+      "ACCOUNT_NOT_ACTIVE",
+      "La cuenta está deshabilitada. Reactívala antes de cambiar su contraseña.",
+      409,
+    );
+  }
+
+  // La política se comprueba contra el nombre de usuario real: una contraseña
+  // generada que lo contuviera sería rechazada por la activación.
+  let password = "";
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const candidate = generateTemporaryPassword();
+    try {
+      assertPasswordAcceptable(candidate, { username: target.username });
+      password = candidate;
+      break;
+    } catch {
+      // Vuelve a intentarlo: es cuestión de azar, no de un dato inválido.
+    }
+  }
+  if (!password) {
+    throw new DomainError(
+      "PASSWORD_GENERATION_FAILED",
+      "No se ha podido generar una contraseña válida. Inténtalo de nuevo.",
+      500,
+    );
+  }
+
+  const now = deps.now?.() ?? new Date();
+  const at = now.toISOString();
+
+  await deps.credentials.setPassword(target.uid, password);
+  // Quien estuviera dentro con esa cuenta sale en la siguiente petición.
+  await deps.credentials.revokeRefreshTokens(target.uid);
+
+  await deps.store.recordAudit({
+    type: "password_reset_admin",
+    actorUid: admin.uid,
+    targetUid: target.uid,
+    at,
+    source: "generated",
+  });
+
+  return { uid: target.uid, username: target.username, password, changedAt: at };
 }

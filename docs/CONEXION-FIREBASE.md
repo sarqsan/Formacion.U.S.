@@ -309,9 +309,16 @@ secreto utilizable fuera de su sitio.
 
 ### Paso 6 bis — Contraseña olvidada de una cuenta ya activa
 
-Los correos son sintéticos (`usuario@formacion.invalid`): no hay buzón que reciba
-un enlace de restablecimiento y `--reissue` solo actúa sobre cuentas pendientes.
-Para una cuenta activa:
+**Desde el panel (recomendado).** En `/admin/personas/<usuario>` hay un botón
+«Restablecer contraseña». La genera el servidor cumpliendo la política, se
+muestra **una sola vez** para entregarla en mano, cierra las sesiones abiertas de
+esa cuenta y deja constancia en `audits/password_reset_admin` sin guardar la
+contraseña. No hace falta terminal, ni clave de servicio, ni conocer la anterior.
+
+**Desde la terminal (si no hay acceso al panel).** Los correos son sintéticos
+(`usuario@formacion.invalid`): no hay buzón que reciba un enlace de
+restablecimiento y `--reissue` solo actúa sobre cuentas pendientes. Para una
+cuenta activa:
 
 ```bash
 export FIREBASE_SERVICE_ACCOUNT_FILE="$HOME/claves/cuenta.json"

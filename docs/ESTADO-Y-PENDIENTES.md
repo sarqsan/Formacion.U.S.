@@ -1,6 +1,6 @@
 # Estado real y qué falta para terminar
 
-> **Fecha de la auditoría: 24 de octubre de 2026.**
+> **Fecha de la auditoría: 24 de octubre de 2026** (P1 completado el mismo día).
 > Todo lo que dice «verificado» se ha comprobado contra el repositorio o contra
 > la aplicación desplegada en `https://formacionus.vercel.app`. Lo que no se ha
 > podido comprobar se dice expresamente y **no se cuenta como hecho**.
@@ -19,7 +19,10 @@ en el código, con lo que ya existe y lo que no.
 | Sesión con cookie httpOnly verificada en cada petición | **Funciona** | Sin sesión, `/admin/personas` redirige a `/login` y `/api/me` responde `authenticated:false` |
 | Activación con código de un solo uso | **Funciona** | Página `/activar` con la política de contraseña real; token de 256 bits guardado solo como hash |
 | Cambio de contraseña de una cuenta activa | **Funciona** | `npm run bootstrap -- --reset-password <usuario>`, con 8 pruebas y auditoría sin guardar la contraseña |
-| **Cambio de contraseña por el propio usuario** | **Nuevo (24-10)** | Página `/cuenta` + `POST /api/account/password`: exige la contraseña actual, aplica la misma política, revoca las sesiones y audita. 23 pruebas nuevas |
+| **Cambio de contraseña por el propio usuario** | **Funciona** | Página `/cuenta` + `POST /api/account/password`: exige la contraseña actual, aplica la misma política, revoca las sesiones y audita. 23 pruebas |
+| **Restablecer la contraseña de otra persona desde el panel** | **Nuevo (24-10)** | `/admin/personas/<uid>`: contraseña temporal generada por el servidor, se muestra una vez, cierra las sesiones y audita. 10 pruebas |
+| **Alta de una persona suelta** | **Nuevo (24-10)** | `/admin/personas`: mismo apellido/rol, mismo usuario calculado y mismo código de un solo uso que la importación de Excel. 9 pruebas |
+| **Matriculación en bloque** | **Nuevo (24-10)** | `/admin/matriculas`: matricula a todo el alumnado activo del curso, idempotente, informa de nuevas / ya estaban / fallos. 9 pruebas |
 | Importación de personas desde Excel | **Funciona** | Vista previa + confirmación, tokens devueltos una sola vez |
 | Cursos, temas, cuestionarios y examen final | **Funciona** | Corrección en servidor (`src/domain/assessments`), intentos auditados |
 | Subida de PDF por partes con cuota | **Implementado** | Interfaz en `/admin/cursos/<id>/editar` y pruebas con dobles |
@@ -53,31 +56,33 @@ El modo demostración permite entrar con cuentas ficticias sin contraseña
 Vercel. *Qué haría falta:* que el build de producción ignore `DEMO_MODE`, o un
 candado que exija una segunda variable para habilitarlo.
 
-### P1 — Lo que un administrador necesita a diario
+### P1 — Operativo del administrador ✅ *(cerrado el 24-10)*
 
-**3. Restablecer la contraseña de otra persona desde el panel.**
-Hoy solo se puede con el script de terminal (`--reset-password`), que exige
-tener las credenciales de servicio a mano. Para quien administra sin ser
-técnico, esto es el hueco más grande que queda. El servicio ya existe
-(`resetAccountPassword`); falta una acción en `/admin/personas/<uid>` con su
-prueba y su auditoría.
+Lo que antes obligaba a abrir una terminal o a repetir clics ya se hace desde el
+panel, con sus pruebas y su auditoría:
 
-**4. Dar de alta a una persona suelta.**
-La única vía es importar un Excel. Para una incorporación individual hay que
-fabricar un fichero de una fila. Es pequeño: el alta ya está implementada, solo
-falta el formulario.
+**3. Restablecer la contraseña de otra persona — hecho.**
+En la ficha de la persona (`/admin/personas/<uid>`), botón «Restablecer
+contraseña»: la genera el servidor con la política de `/activar`, se muestra
+**una sola vez**, cierra las sesiones abiertas y queda auditada sin guardar la
+contraseña. Solo cuentas activas: una pendiente se activa con su código y una
+deshabilitada se reactiva antes.
 
-**5. Matricular en bloque.**
-`/admin/matriculas` matricula de uno en uno (una persona, un curso). Falta
-«matricular a todo un curso» o «matricular a varias personas». Con 40 personas
-son 40 clics.
+**4. Dar de alta a una persona suelta — hecho.**
+Formulario en `/admin/personas` con apellido y rol. Reutiliza el mismo camino que
+el Excel (mismo cálculo de usuario, mismo código de un solo uso, cuenta siempre
+`learner` y pendiente de activación): no hay una segunda forma de crear cuentas.
 
-**6. No hay recuperación de contraseña por correo, y no es un olvido.**
+**5. Matricular en bloque — hecho.**
+En `/admin/matriculas`, «Matricular a todo el alumnado activo»: la lista la
+calcula el servidor con las cuentas y matrículas reales, no viaja desde el
+navegador. Quien ya estaba no cambia de fecha y no se revoca nada.
+
+**6. Recuperación de contraseña por correo — sigue pendiente de tu decisión.**
 Las cuentas usan correos internos sintéticos (`usuario@formacion.invalid`), que
 no existen: Firebase no puede enviar enlaces de recuperación. Hoy el camino es
-«pide a administración que te la restablezca» (punto 3) o el script. Con el
-cambio de contraseña desde `/cuenta` ya cubierto, solo queda el caso «no puedo
-entrar». **Esto requiere una decisión tuya** (ver sección 4).
+«administración te la restablece» (punto 3) o el script. **Requiere decisión
+tuya** (ver sección 4).
 
 ### P2 — Producto formativo: lo que aún no existe
 
@@ -127,8 +132,7 @@ Para que no se confunda «no verificado» con «no existe»:
    persona para enviar enlaces de Firebase (más cómodo, pero hay que recoger y
    proteger esos correos)?
 2. **Certificados:** ¿entran en el alcance? Es lo más grande de la lista P2.
-3. **Prioridad:** ¿empezamos por P1 (panel de administración) para que puedas
-   operar sin terminal, o por P0 (reglas y candado de demostración) por
-   seguridad?
+3. **Siguiente paso:** P1 está cerrado. Quedan P0 (reglas y candado de la
+   demostración) y P2 (certificados, vídeos, informes). ¿Cuál primero?
 
 Ninguna de estas tres cosas se ha empezado sin tu respuesta.

@@ -37,6 +37,9 @@ aplicación de cuadrantes. Ese botón **no** modifica su lógica funcional.
 | Script de administradores iniciales (varios, idempotente) | Implementado y ejecutado: `admin1` activo en producción |
 | Cambio de contraseña de una cuenta activa (`--reset-password`) | Implementado, probado y documentado |
 | Cambio de la propia contraseña desde `/cuenta` | Implementado y probado (exige la actual, revoca sesiones) |
+| Restablecer la contraseña de otra persona desde el panel | Implementado y probado (temporal generada, se muestra una vez, cierra sesiones) |
+| Alta de una persona suelta desde el panel | Implementado y probado (misma validación y código que la importación) |
+| Matriculación en bloque de todo el alumnado activo | Implementada y probada (idempotente, informa de nuevas/ya estaban/fallos) |
 
 ## Puesta en marcha (desarrollo)
 
