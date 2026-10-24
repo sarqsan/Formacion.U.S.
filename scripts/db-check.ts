@@ -50,9 +50,11 @@ import {
   buildRedactionIndex,
   formatAuditStatus,
   formatFindingLines,
+  installStreamGuard,
   redactGeneric,
   sanitizeText,
   type RedactionIndex,
+  type StreamLike,
 } from "../src/server/db/redact";
 
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST;
@@ -62,6 +64,26 @@ const MAX_DOCS = 2000;
 const KNOWN_FLAGS = new Set(["--redact"]);
 const unknownFlags = process.argv.slice(2).filter((arg) => !KNOWN_FLAGS.has(arg));
 const redact = process.argv.includes("--redact");
+
+/**
+ * Índice vigente para el filtro de streams. Se rellena en cuanto se leen las
+ * cuentas; hasta entonces el filtro genérico sigue actuando.
+ */
+let liveRedactionIndex: RedactionIndex | null = null;
+
+/**
+ * Con `--redact`, TODO lo que escribe el proceso pasa por la redacción,
+ * incluidos los avisos que emite el SDK de Firebase/gRPC por su cuenta
+ * (`stderr`) y que no pasan por nuestras funciones de impresión.
+ *
+ * Solo se instala con el flag: sin él la salida debe ser la de antes.
+ */
+const streamGuard = redact
+  ? installStreamGuard(
+      [process.stdout, process.stderr] as unknown as StreamLike[],
+      () => liveRedactionIndex,
+    )
+  : null;
 
 /**
  * Estado de la ejecución cuando no se puede completar: siempre `AUDIT_BLOCKED`,
@@ -316,6 +338,8 @@ async function main() {
       })
     : null;
 
+  liveRedactionIndex = redactionIndex;
+
   for (const finding of findings) {
     for (const line of formatFindingLines(finding, redactionIndex)) console.log(line);
   }
@@ -327,6 +351,9 @@ async function main() {
   if (redactionIndex) {
     const adminCount = accounts.filter((account) => account.role === "admin").length;
     console.log(formatAuditStatus(auditStatus({ findings, adminCount })));
+    // A partir de aquí ninguna escritura posterior (avisos del SDK al cerrar,
+    // mensajes de error tardíos) puede fabricar un estado falso.
+    streamGuard?.seal();
   }
 
   if (!summary.ok) {

@@ -240,6 +240,103 @@ export function formatFindingLines(finding: Finding, index: RedactionIndex | nul
   });
 }
 
+/** Prefijos que solo puede emitir el verificador, una vez, al final. */
+const RESERVED_PREFIXES = ["AUDITORÍA: ", "Resumen: "] as const;
+
+/**
+ * Filtro para TODO lo que el proceso escribe en stdout/stderr, incluido lo que
+ * emite por su cuenta el SDK de Firebase/gRPC (avisos de gRPC, `MetadataLookup`
+ * warnings, trazas de error). Sin él, esos mensajes no pasan por `guardLine`.
+ *
+ * Procesa el texto línea a línea para no alterar la estructura de la salida:
+ * los saltos legítimos se conservan y, dentro de cada línea, se escapan los
+ * controles y se aplica la redacción.
+ *
+ * Límite conocido: si un valor llegara partido entre dos escrituras distintas
+ * del stream, ninguna de las dos partes coincidiría con el valor completo.
+ * Es una red de seguridad, no el mecanismo principal: lo que el verificador
+ * imprime ya viene redactado antes de llegar aquí.
+ */
+export function guardStreamChunk(
+  text: string,
+  index: RedactionIndex | null,
+  options: { sealed?: boolean } = {},
+): string {
+  return text
+    .split("\n")
+    .map((segment) => {
+      const safe = sanitizeText(segment);
+      const redacted = index ? redactText(safe, index) : redactGeneric(safe);
+      // Tras imprimir el estado real, ninguna escritura posterior puede
+      // suplantarlo: se marca como omitida cualquier línea reservada.
+      if (options.sealed && RESERVED_PREFIXES.some((prefix) => redacted.startsWith(prefix))) {
+        return `[omitido] ${redacted}`;
+      }
+      return redacted;
+    })
+    .join("\n");
+}
+
+/**
+ * Forma mínima de un stream de escritura. Permite probar la instalación del
+ * filtro con streams falsos, sin depender de `process`.
+ */
+export interface StreamLike {
+  write: (chunk: string | Uint8Array, encoding?: unknown, callback?: unknown) => boolean;
+}
+
+/** Control del filtro instalado: permite desinstalarlo y sellar la salida. */
+export interface StreamGuard {
+  /** Desinstala el filtro. */
+  restore: () => void;
+  /**
+   * Sella la salida: a partir de aquí, ninguna escritura posterior puede
+   * producir una línea que empiece por `AUDITORÍA: ` o `Resumen: `. Se llama
+   * justo después de imprimir el estado real.
+   */
+  seal: () => void;
+}
+
+/**
+ * Instala el filtro en los streams indicados. Se usa con `process.stdout` y
+ * `process.stderr` cuando el verificador corre con `--redact`.
+ */
+export function installStreamGuard(
+  streams: readonly StreamLike[],
+  getIndex: () => RedactionIndex | null,
+): StreamGuard {
+  const restores: Array<() => void> = [];
+  let sealed = false;
+
+  for (const stream of streams) {
+    const original = stream.write.bind(stream);
+    const guarded = (
+      chunk: string | Uint8Array,
+      encoding?: unknown,
+      callback?: unknown,
+    ): boolean => {
+      const next =
+        typeof chunk === "string" ? guardStreamChunk(chunk, getIndex(), { sealed }) : chunk;
+      return typeof encoding === "function"
+        ? original(next, encoding)
+        : original(next, encoding, callback);
+    };
+    stream.write = guarded;
+    restores.push(() => {
+      stream.write = original;
+    });
+  }
+
+  return {
+    restore: () => {
+      for (const restore of restores) restore();
+    },
+    seal: () => {
+      sealed = true;
+    },
+  };
+}
+
 /**
  * Segunda capa: si una línea preparada para imprimir todavía contuviera un
  * identificador conocido, se sustituye la línea entera. Nunca se imprime.

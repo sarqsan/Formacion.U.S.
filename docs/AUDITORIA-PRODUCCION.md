@@ -68,19 +68,34 @@ siguiente, que se aplica siempre). Con el flag:
 - Cualquier fallo de configuración, conexión o ejecución imprime
   `AUDIT_BLOCKED` y **nunca** `NO_ADMIN`.
 - Un argumento desconocido aborta la ejecución en lugar de correr sin redactar.
+- **Canal `stderr` del SDK.** Con `--redact`, el verificador intercepta
+  `process.stdout` y `process.stderr` (`installStreamGuard`): todo lo que
+  escribe el proceso —incluidos los avisos del SDK de Firebase/gRPC, como
+  `MetadataLookupWarning` o los mensajes de `UNAVAILABLE`— pasa por el mismo
+  filtro. Además, al terminar de imprimir el estado, la salida se **sella**:
+  ninguna escritura posterior puede producir una línea que empiece por
+  `AUDITORÍA: ` o `Resumen: ` (se marca `[omitido] …`).
 
-**Límites, explícitos:**
+**Límites, explícitos** (lo que la redacción NO garantiza):
 
-- Redactar **no** es anonimizar en origen: los datos siguen en Firestore.
+| Límite | Alcance real |
+| --- | --- |
+| `guardLine` | Solo actúa sobre líneas que pasan por `formatFindingLines`. No es un filtro global: es una red de seguridad para hallazgos y referencias. |
+| Umbral de longitud (`MIN_VALUE_LENGTH = 3`) | Un `username` o `createdBy` de 1–2 caracteres no entra en el índice. Riesgo bajo: `USERNAME_MIN_LENGTH = 4` y la importación valida con `assertValidUsername`. Un `createdBy` corto tampoco se redacta. |
+| Filtro por forma (UUID y UID tipo Firebase) | Es **heurístico**: exige 20–40 caracteres con mayúsculas, minúsculas y dígitos, o un UUID. Un identificador con otra forma y sin cuenta asociada no lo detectaría. La garantía real es el índice con `accounts` + `progress.uid` + `attempts.uid`. |
+| Saltos de línea dentro de un chunk de stream | Un stream no distingue un salto legítimo de uno inyectado. Por eso los **datos** se sanean antes de escribirse (nunca llegan saltos crudos a la salida) y, tras el sellado, las líneas reservadas se neutralizan. Un aviso del SDK con saltos **antes** del sellado solo podría añadir líneas ajenas, no suplantar el estado: el workflow se queda con la última. |
+| `grpc-js` escribe fuera del proceso | Un mensaje que emita Google en el servidor (no en el cliente) no pasa por aquí. No hay forma local de garantizarlo. |
+| Redactar **no** es anonimizar en origen | Los datos siguen en Firestore; esto solo controla lo que se imprime. |
+| El índice no es un inventario completo | Se construye con lo que se leyó: si una lectura se trunca (`MAX_DOCS`), lo no leído no se recorre ni se imprime, pero tampoco se audita. |
+
+Otros límites:
+
 - El veredicto (`summarize`) se calcula sobre los hallazgos originales; la
   redacción solo afecta a la impresión. Hay una prueba que lo fija.
-- El SDK de Firestore (`grpc-js`) puede escribir avisos propios en `stderr`
-  (por ejemplo `MetadataLookupWarning`). No incluyen datos de documentos, pero
-  son un canal fuera del verificador. Por eso el workflow **no** publica
-  artefactos: el único resumen es el de §3.
 - El repositorio es **público**: los registros de Actions los ve cualquiera.
   La defensa real es que el verificador redacte antes de imprimir, no limpiar
   después un registro ya contaminado.
+- El workflow **no** publica artefactos: el único resumen es el de §3.
 
 ## 3. Estado técnico del informe
 
@@ -116,22 +131,47 @@ vuelve a validar la forma exacta antes de publicarla.
   aceptan proyecto ni comandos como entrada.
 - Credenciales solo desde secretos del entorno, expuestas únicamente al paso
   de auditoría.
-- Acciones fijadas a SHA completos:
-  - `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683` (v4.2.2)
-  - `actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020` (v4.3.0)
+- Acciones fijadas a SHA completos, con runtime `node24` (Node 20 se retiró de
+  los runners el 2026-09-23):
+  - `actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09` (v5.1.0)
+  - `actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444` (v5.0.0)
 - Sin despliegues, escrituras, migraciones, inicializaciones ni artefactos.
 
-### Configuración externa pendiente
+### Protecciones del workflow y sus pruebas
 
-1. Crear el entorno `production-audit` con **revisor obligatorio**.
+`tests/server/db-audit-workflow.test.ts` interpreta el YAML y **ejecuta los
+bloques `run`** con un `npm` sustituido. Falla si se altera:
+
+- `workflow_dispatch` sin `inputs` y sin otros disparadores;
+- `if: github.ref == 'refs/heads/main'`;
+- `permissions: contents: read` (y ningún permiso de escritura adicional);
+- acciones fijadas por SHA completo con comentario de versión, y sin volver a
+  las de Node 20;
+- `npm run db:check -- --redact` y propagación del código de salida;
+- secretos limitados a `DB_AUDIT_*` y expuestos solo al paso de auditoría;
+- ausencia de artefactos, de `GITHUB_ENV` y de impresión de credenciales;
+- validación del estado y del resumen: valor multilínea rechazado, línea falsa
+  descartada, salida vacía ⇒ `AUDIT_BLOCKED`.
+
+Estas pruebas **no** demuestran la configuración de GitHub ni la ejecución real
+del runner: eso es lo de la lista siguiente.
+
+### Configuración externa pendiente (la hace el operador)
+
+1. Crear el entorno `production-audit` **antes** de la primera ejecución, con
+   revisor obligatorio, «Allow administrators to bypass configured protection
+   rules» **desmarcado** y deployment branches limitado a `main`.
+   Si el entorno no existe, GitHub lo crea al vuelo **sin ninguna regla**.
 2. Crear la cuenta de servicio de solo lectura (§5) y sus dos secretos **en el
-   entorno**: `FIREBASE_CLIENT_EMAIL` y `FIREBASE_PRIVATE_KEY`.
-3. No definir esos dos nombres también como secretos del repositorio: GitHub
-   resuelve el entorno con reserva a los del repositorio, y entonces las
-   credenciales dejarían de ser exclusivas del entorno.
-4. (No verificable desde aquí) Confirmar que la rama `main` está protegida y
-   que los secretos del repositorio y del entorno no contienen credenciales de
-   escritura.
+   entorno**, con nombres exclusivos:
+   `DB_AUDIT_FIREBASE_CLIENT_EMAIL` y `DB_AUDIT_FIREBASE_PRIVATE_KEY`.
+   El workflow los mapea a `FIREBASE_CLIENT_EMAIL` / `FIREBASE_PRIVATE_KEY`
+   solo dentro del paso de auditoría.
+3. No definir esos nombres a nivel de repositorio (ni los genéricos
+   `FIREBASE_CLIENT_EMAIL` / `FIREBASE_PRIVATE_KEY`, que ya usa la aplicación):
+   un secreto de repositorio con el mismo nombre es reserva del de entorno.
+4. (No verificable desde aquí) Confirmar que `main` está protegida y que ningún
+   secreto del repositorio contiene credenciales de escritura.
 
 ## 5. Cuenta de servicio de solo lectura
 
@@ -147,7 +187,10 @@ proyecto):
 
 ### ¿Cubre `roles/datastore.viewer` lo que consulta el verificador?
 
-Sí, según la documentación de permisos por método de Firestore nativo:
+**Deducido de la documentación, NO demostrado en ejecución.** La tabla siguiente
+cruza el uso real del SDK (verificado leyendo `scripts/db-check.ts`) con la tabla
+oficial de permisos por método. Ninguna prueba local puede confirmarlo: el
+emulador no aplica IAM y aquí no hay credenciales.
 
 | Operación del verificador | Método de API | Permiso necesario | ¿En `datastore.viewer`? |
 | --- | --- | --- | --- |
@@ -170,10 +213,37 @@ API (`projects.databases.indexes.list`), necesitaría `datastore.schemas.list`
 necesitaría `datastore.statistics.*` o `datastore.databases.export`, que **no**
 se deben conceder para esta auditoría.
 
-**No verificado en ejecución real:** la primera ejecución autorizada debe
-confirmarlo. Si el rol fuera insuficiente, la salida sería `AUDIT_BLOCKED` (con
-`PERMISSION_DENIED` en el mensaje), nunca `NO_ADMIN`. En ese caso se amplía el
-rol de forma justificada y revisada, no se usa una cuenta con escritura.
+### Deducido frente a demostrado
+
+| Afirmación | Estado |
+| --- | --- |
+| El verificador solo usa `get`, `runQuery` y metadatos de base (cero escrituras, cero Auth, cero Storage, cero agregaciones) | **Verificado** leyendo el código (`grep` de métodos de escritura: ninguno) |
+| `roles/datastore.viewer` incluye los permisos que exigen esos métodos | **Deducido** de la documentación oficial (tabla de arriba) |
+| La cuenta real puede ejecutar esas consultas en `formacionus-63555` | **NO demostrado** |
+| La auditoría funciona de extremo a extremo contra producción | **NO demostrado** |
+
+**Verificación pendiente (operador, fuera de esta entrega).** Ninguno de estos
+comandos se ha ejecutado aquí:
+
+```bash
+# 1. Permisos efectivos del rol
+gcloud iam roles describe roles/datastore.viewer --project formacionus-63555
+
+# 2. Que la cuenta solo tenga ese rol
+gcloud projects get-iam-policy formacionus-63555 \
+  --flatten="bindings[].members" \
+  --filter="bindings.members:sa-auditoria@formacionus-63555.iam.gserviceaccount.com"
+
+# 3. Autorización resuelta (sin escribir nada)
+gcloud policy-troubleshoot-iam //firestore.googleapis.com/projects/formacionus-63555/databases/(default) \
+  --permission=datastore.entities.get --permission=datastore.entities.list
+
+# 4. Primera ejecución del workflow, ya autorizada
+```
+
+Si el rol resultara insuficiente, la salida sería `AUDIT_BLOCKED` con
+`PERMISSION_DENIED` en el mensaje y **nunca** `NO_ADMIN`. En ese caso se amplía
+el rol de forma justificada y revisada, nunca se usa una cuenta con escritura.
 
 Notas:
 
@@ -191,6 +261,7 @@ Notas:
 ```bash
 npx tsc --noEmit
 npx vitest run tests/server/db-redact.test.ts
+npx vitest run tests/server/db-audit-workflow.test.ts
 npm run verify
 ```
 

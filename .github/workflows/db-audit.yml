@@ -5,18 +5,34 @@
 # registro de Actions. No escribe en Firestore, no despliega, no migra, no
 # inicializa nada y no toca IAM ni la autenticación.
 #
-# Requisitos EXTERNOS (no se crean desde este fichero):
-#   1. Entorno `production-audit` con revisor obligatorio configurado en
-#      Settings → Environments.
-#   2. Dos secretos DEL ENTORNO (no del repositorio, que es público):
-#        FIREBASE_CLIENT_EMAIL  → correo de la cuenta de servicio de solo lectura
-#        FIREBASE_PRIVATE_KEY   → su clave privada (con \n escapados)
-#      Permiso mínimo: roles/datastore.viewer (ver docs de la auditoría).
-#   GitHub resuelve secretos de entorno con reserva a los del repositorio: para
-#   que las credenciales sean exclusivamente del entorno, NO definas secretos
-#   con esos nombres a nivel de repositorio.
+# Esto es un control de PROCESO, no un despliegue: aunque el job referencia un
+# entorno, no publica nada ni ejecuta artefactos.
+#
+# ---------------------------------------------------------------------------
+# REQUISITOS EXTERNOS — deben existir ANTES de la primera ejecución.
+# Este fichero NO los crea y ninguna prueba local demuestra que existan:
+#
+#   1. Entorno `production-audit` (Settings → Environments) con:
+#        - Required reviewers: al menos una persona.
+#        - «Allow administrators to bypass configured protection rules»: DESMARCADO.
+#        - Deployment branches: solo `main`.
+#      Si el entorno NO existe, GitHub lo crea al vuelo la primera vez SIN
+#      ninguna regla de protección: la aprobación desaparecería sin aviso.
+#
+#   2. Dos secretos DEL ENTORNO `production-audit` (nunca del repositorio, que
+#      es público), con nombres EXCLUSIVOS de la auditoría para que no puedan
+#      heredarse de un secreto de repositorio con el mismo nombre:
+#        DB_AUDIT_FIREBASE_CLIENT_EMAIL → correo de la cuenta de servicio de
+#                                         solo lectura (roles/datastore.viewer)
+#        DB_AUDIT_FIREBASE_PRIVATE_KEY  → su clave privada (con \n escapados)
+#      El workflow los mapea a `FIREBASE_CLIENT_EMAIL` / `FIREBASE_PRIVATE_KEY`
+#      solo dentro del paso de auditoría.
+#
+#   3. Rama `main` protegida (recomendado), para que nadie pueda introducir un
+#      cambio en el verificador sin revisión.
 #
 # Disparo: manual, sin parámetros, y solo desde `main`.
+# ---------------------------------------------------------------------------
 name: DB audit (solo lectura)
 
 on:
@@ -44,12 +60,12 @@ jobs:
       DB_ALLOW_PROD: "yes"
     steps:
       - name: Descargar el repositorio
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
 
       - name: Preparar Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.3.0
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: "22"
 
@@ -60,9 +76,10 @@ jobs:
         id: audit
         # Las credenciales viven en el ENTORNO `production-audit` y solo se
         # exponen a este paso, no a la instalación ni al resto del trabajo.
+        # Nunca se imprimen: el verificador solo dice que faltan si no llegan.
         env:
-          FIREBASE_CLIENT_EMAIL: ${{ secrets.FIREBASE_CLIENT_EMAIL }}
-          FIREBASE_PRIVATE_KEY: ${{ secrets.FIREBASE_PRIVATE_KEY }}
+          FIREBASE_CLIENT_EMAIL: ${{ secrets.DB_AUDIT_FIREBASE_CLIENT_EMAIL }}
+          FIREBASE_PRIVATE_KEY: ${{ secrets.DB_AUDIT_FIREBASE_PRIVATE_KEY }}
         # Sin `continue-on-error`: si el verificador falla, el trabajo falla. El
         # estado técnico se decide por los códigos de la salida, no por el
         # código de salida del proceso (NO_ADMIN también sale con 1).
@@ -72,12 +89,11 @@ jobs:
           CODE=$?
           set -e
 
-          # La salida ya viene redactada por el verificador. Se imprime tal cual
-          # y NO se guarda como artefacto ni en ningún fichero del resumen.
+          # La salida ya viene redactada por el verificador (stdout y stderr:
+          # el propio verificador filtra también lo que escribe el SDK). Se
+          # imprime tal cual y NO se guarda como artefacto.
           printf '%s\n' "$OUTPUT"
 
-          # Solo se aceptan estas dos líneas, y solo con la forma exacta que
-          # produce el verificador. Cualquier otra cosa se descarta.
           # El verificador sanea los saltos de línea, así que un dato
           # manipulado no puede fabricar líneas. Aun así, se toma la ÚLTIMA
           # coincidencia (la que imprime el verificador al final) y se valida
@@ -87,6 +103,11 @@ jobs:
 
           STATUS_PATTERN='^AUDITORÍA: (AUDIT_BLOCKED|NO_ADMIN|ADMIN_COUNT [0-9]+) · ESQUEMA: (OK|AUSENTE|INCOMPATIBLE|NO COMPROBABLE) · ÍNDICES: (OK|FALTAN|NO COMPROBABLE)$'
           SUMMARY_PATTERN='^Resumen: [0-9]+ error\(es\), [0-9]+ aviso\(s\), [0-9]+ informativo\(s\)\.$'
+
+          # `grep` valida línea a línea: un valor con varias líneas pasaría si
+          # UNA de ellas encajara. Se rechaza cualquier valor multilínea.
+          case "$STATUS_LINE" in *$'\n'*) STATUS_LINE="" ;; esac
+          case "$SUMMARY_LINE" in *$'\n'*) SUMMARY_LINE="" ;; esac
 
           if ! printf '%s' "$STATUS_LINE" | grep -qE "$STATUS_PATTERN"; then
             STATUS_LINE="AUDITORÍA: AUDIT_BLOCKED · ESQUEMA: NO COMPROBABLE · ÍNDICES: NO COMPROBABLE"
@@ -115,6 +136,11 @@ jobs:
 
           STATUS="${STATUS:-}"
           SUMMARY="${SUMMARY:-}"
+
+          # Un valor multilínea no puede colarse en el resumen aunque una de
+          # sus líneas encaje con el patrón.
+          case "$STATUS" in *$'\n'*) STATUS="" ;; esac
+          case "$SUMMARY" in *$'\n'*) SUMMARY="" ;; esac
 
           if ! printf '%s' "$STATUS" | grep -qE "$STATUS_PATTERN"; then
             STATUS="AUDITORÍA: AUDIT_BLOCKED · ESQUEMA: NO COMPROBABLE · ÍNDICES: NO COMPROBABLE"

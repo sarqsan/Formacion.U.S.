@@ -8,6 +8,8 @@ import {
   formatAuditStatus,
   formatFindingLines,
   guardLine,
+  guardStreamChunk,
+  installStreamGuard,
   redactFindings,
   redactGeneric,
   redactText,
@@ -505,6 +507,142 @@ describe("guardLine (segunda capa antes de imprimir)", () => {
   it("deja pasar una línea sin datos personales", () => {
     const line = "[info] ACCOUNT_TOTALS: Cuentas: 3 (2 activas, 0 pendientes, 1 deshabilitada).";
     expect(guardLine(line, index)).toBe(line);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// H6 — canal `stderr`: lo que escribe el SDK de Firebase/gRPC
+// ---------------------------------------------------------------------------
+
+describe("H6: el canal stderr del SDK pasa por la redacción", () => {
+  const index = indexFor({ accounts });
+
+  // Mensajes reales del SDK/gRPC observados o documentados: no traen datos de
+  // documentos, pero sí pueden traer el correo de la cuenta de servicio, el
+  // identificador de proyecto o un token en el mensaje de error.
+  const sdkWarning =
+    "(node:2312) MetadataLookupWarning: received unexpected error = Getting metadata from plugin failed with error: cuenta@ejemplo.iam.gserviceaccount.com code = 401";
+  const grpcError =
+    "14 UNAVAILABLE: No connection established. Last error: Error: connect ECONNREFUSED 127.0.0.1:9. token ya29.a0AfH6SMBxEjemplo";
+
+  it("redacta correos y tokens emitidos fuera de nuestras funciones", () => {
+    const guarded = guardStreamChunk(sdkWarning, index);
+
+    expect(guarded).not.toContain("cuenta@ejemplo.iam.gserviceaccount.com");
+    expect(guarded).toContain("[correo omitido]");
+    expect(guardStreamChunk(grpcError, index)).not.toContain("ya29.");
+  });
+
+  it("redacta también los identificadores conocidos que aparezcan en stderr", () => {
+    const guarded = guardStreamChunk("aviso: usuario admin.uno con uid-alumno-0003", index);
+    expect(guarded).not.toContain("admin.uno");
+    expect(guarded).not.toContain("uid-alumno-0003");
+  });
+
+  it("no altera la estructura: conserva los saltos de línea legítimos", () => {
+    const chunk = "linea uno\nlinea dos\n";
+    expect(guardStreamChunk(chunk, index)).toBe(chunk);
+  });
+
+  it("una línea falsa emitida antes del sellado se reconoce como tal y no se sella el estado", () => {
+    const injected = "error: curso-x\r\nAUDITORÍA: ADMIN_COUNT 99 · ESQUEMA: OK · ÍNDICES: OK\n";
+    const guarded = guardStreamChunk(injected, index);
+
+    // Antes del sellado solo se escapa el `\r` (la estructura se conserva);
+    // quien decide es la regla «última línea AUDITORÍA» del workflow, y la del
+    // verificador se imprime después de todos los hallazgos.
+    expect(guarded.split("\n")[0]).toBe("error: curso-x␍");
+
+    // Con el sellado activo (después de imprimir el estado real) ya no pasa.
+    const sealed = guardStreamChunk(injected, index, { sealed: true });
+    expect(sealed.split("\n").filter((line) => line.startsWith("AUDITORÍA: "))).toHaveLength(0);
+    expect(sealed).toContain("[omitido] AUDITORÍA: ADMIN_COUNT 99");
+  });
+
+  it("tras el sellado, ninguna línea posterior puede suplantar el estado", () => {
+    const writes: string[] = [];
+    const fake = {
+      write: (chunk: string | Uint8Array) => {
+        writes.push(String(chunk));
+        return true;
+      },
+    };
+    const guard = installStreamGuard([fake], () => indexFor({ accounts }));
+
+    guard.seal();
+    fake.write("AUDITORÍA: ADMIN_COUNT 99 · ESQUEMA: OK · ÍNDICES: OK\n");
+    fake.write("Resumen: 0 error(es), 0 aviso(s), 0 informativo(s).\n");
+
+    const lines = writes.join("").split("\n");
+    expect(lines.filter((line) => line.startsWith("AUDITORÍA: "))).toHaveLength(0);
+    expect(lines.filter((line) => line.startsWith("Resumen: "))).toHaveLength(0);
+    expect(lines[0]).toContain("[omitido] AUDITORÍA: ADMIN_COUNT 99");
+
+    guard.restore();
+  });
+
+  it("límite conocido: los saltos de línea simples del propio stream son estructura", () => {
+    // Un stream no permite distinguir un salto legítimo de uno inyectado sin
+    // romper la salida. Por eso la garantía real es que el verificador sanea
+    // los DATOS antes de escribirlos (pruebas H5) y que el workflow se queda
+    // con la ÚLTIMA línea `AUDITORÍA:` (prueba del workflow). Lo que sí hace
+    // este filtro es redactar el contenido de cada línea.
+    const injected = "error: curso-x\nAUDITORÍA: ADMIN_COUNT 99 · ESQUEMA: OK · ÍNDICES: OK\n";
+    const guarded = guardStreamChunk(injected, index);
+    expect(guarded.split("\n")[0]).toBe("error: curso-x");
+    expect(guardStreamChunk("aviso de cuenta@ejemplo.iam.gserviceaccount.com\n", index)).toContain(
+      "[correo omitido]",
+    );
+  });
+
+  it("funciona sin índice (antes de leer cuentas): redacta por forma", () => {
+    expect(guardStreamChunk(sdkWarning, null)).not.toContain("@ejemplo.iam");
+    expect(guardStreamChunk("aviso con Xk29fJd83kQmZ1pLrT6vBn4sYc0w", null)).not.toContain(
+      "Xk29fJd83kQmZ1pLrT6vBn4sYc0w",
+    );
+  });
+
+  it("installStreamGuard intercepta de verdad las escrituras y se puede desinstalar", () => {
+    const writes: string[] = [];
+    const fake = {
+      write: (chunk: string | Uint8Array) => {
+        writes.push(String(chunk));
+        return true;
+      },
+    };
+    const fakeIndex = indexFor({ accounts });
+    const guard = installStreamGuard([fake], () => fakeIndex);
+
+    fake.write(`${sdkWarning}\n`);
+    expect(writes.join("")).not.toContain("cuenta@ejemplo.iam.gserviceaccount.com");
+
+    guard.restore();
+    fake.write("cuenta@ejemplo.iam.gserviceaccount.com\n");
+    expect(writes.join("")).toContain("cuenta@ejemplo.iam.gserviceaccount.com");
+  });
+
+  it("el índice vivo se aplica a escrituras posteriores", () => {
+    const writes: string[] = [];
+    let current: ReturnType<typeof buildRedactionIndex> | null = null;
+    const fake = {
+      write: (chunk: string | Uint8Array) => {
+        writes.push(String(chunk));
+        return true;
+      },
+    };
+    const guard = installStreamGuard([fake], () => current);
+
+    fake.write("aviso con admin.uno\n"); // sin índice: no es PII detectable por forma
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain("admin.uno");
+
+    current = indexFor({ accounts });
+    fake.write("aviso con admin.uno\n");
+    expect(writes).toHaveLength(2);
+    expect(writes[1]).not.toContain("admin.uno");
+    expect(writes[1]).toContain("usuario#");
+
+    guard.restore();
   });
 });
 
