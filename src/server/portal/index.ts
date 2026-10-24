@@ -248,6 +248,49 @@ export async function adminActivationSummary(actor: Actor, uid: string) {
 }
 
 /**
+ * Contraseña temporal generada por el servidor para una cuenta activa.
+ *
+ * Solo existe en modo real: en la demostración no hay Firebase Authentication,
+ * así que no hay contraseña que cambiar. La pantalla lo dice y no ofrece el
+ * botón; esto es el cinturón por si alguien llama igualmente.
+ */
+export async function adminResetPassword(actor: Actor, uid: string) {
+  if (portalMode() === "demo") {
+    throw new DomainError(
+      "DEMO_UNSUPPORTED",
+      "La demostración no tiene contraseñas reales: el restablecimiento necesita Firebase.",
+      400,
+    );
+  }
+  return firebase.adminResetPassword(actor, uid);
+}
+
+/**
+ * Alta de una persona suelta. Mismo camino que la importación (misma
+ * validación, mismo código de un solo uso) con un formulario en vez de un Excel.
+ */
+export async function adminCreatePerson(
+  actor: Actor,
+  input: { apellido: string; rol: string },
+) {
+  if (portalMode() === "demo") {
+    throw new DomainError(
+      "DEMO_UNSUPPORTED",
+      "La demostración no crea cuentas reales: usa la importación de Excel o el modo real.",
+      400,
+    );
+  }
+  return firebase.adminCreatePerson(actor, input);
+}
+
+/** Matriculación en bloque: mismo servicio en las dos persistencias. */
+export async function adminEnrollMany(actor: Actor, courseId: string, uids: readonly string[]) {
+  return portalMode() === "demo"
+    ? demo.adminEnrollMany(actor, courseId, uids)
+    : firebase.adminEnrollMany(actor, courseId, uids);
+}
+
+/**
  * Historial de formación superada (bloque 10): el archivo de versiones
  * anteriores, que hasta ahora se escribía y no se leía.
  */

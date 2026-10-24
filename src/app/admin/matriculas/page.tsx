@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getUiSession } from "@/demo/session";
 import { adminCourses, adminEnrollments, learners as listLearners } from "@/server/portal";
-import { enrollAction, revokeAction } from "@/app/actions/demo";
+import { bulkEnrollAction, enrollAction, revokeAction } from "@/app/actions/demo";
 
 export const dynamic = "force-dynamic";
 
@@ -49,7 +49,9 @@ export default async function EnrollmentsPage({
         <p className="alert alert-ok">
           {ok === "revocada"
             ? "Matrícula revocada. El progreso se conserva por si se vuelve a matricular."
-            : "Matrícula activa."}
+            : ok === "matricula"
+              ? "Matrícula activa."
+              : ok}
         </p>
       ) : null}
       {error ? <p className="alert alert-error">{error}</p> : null}
@@ -89,6 +91,52 @@ export default async function EnrollmentsPage({
         <p className="muted mt-2 text-xs">
           Matricular dos veces a la misma persona no duplica nada: la matrícula es única por usuario
           y curso.
+        </p>
+      </section>
+
+      <section className="card p-5">
+        <h2 className="text-sm font-semibold">Matricular en bloque</h2>
+        <p className="muted mt-1 text-xs leading-relaxed">
+          Matricula en el curso elegido a <strong>todo el alumnado activo que aún no lo esté</strong>.
+          La lista la calcula el servidor con las cuentas y matrículas reales: no viaja desde el
+          navegador. Quien ya estaba no cambia de fecha y no se revoca ninguna matrícula.
+        </p>
+
+        {published.length === 0 ? (
+          <p className="alert alert-warn mt-3 text-xs">
+            No hay ningún curso publicado: publica uno antes de matricular.
+          </p>
+        ) : (
+          <form action={bulkEnrollAction} className="mt-3 flex flex-wrap items-end gap-2">
+            <div>
+              <label className="label" htmlFor="bulk-courseId">
+                Curso
+              </label>
+              <select id="bulk-courseId" name="courseId" className="select" required>
+                {published.map((course) => {
+                  const enrolled = new Set(
+                    active.filter((row) => row.courseId === course.courseId).map((row) => row.uid),
+                  );
+                  const candidates = learners.filter(
+                    (account) => account.status === "active" && !enrolled.has(account.uid),
+                  ).length;
+                  return (
+                    <option key={course.courseId} value={course.courseId}>
+                      {course.title} · {candidates} sin matricular
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+            <button type="submit" className="btn btn-secondary">
+              Matricular a todo el alumnado activo
+            </button>
+          </form>
+        )}
+
+        <p className="muted mt-2 text-xs">
+          Solo cuentas activas: una cuenta pendiente de activación o deshabilitada no se matricula
+          aquí.
         </p>
       </section>
 
