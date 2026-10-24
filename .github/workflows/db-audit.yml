@@ -78,8 +78,12 @@ jobs:
 
           # Solo se aceptan estas dos líneas, y solo con la forma exacta que
           # produce el verificador. Cualquier otra cosa se descarta.
-          STATUS_LINE=$(printf '%s\n' "$OUTPUT" | grep -m1 -E '^AUDITORÍA: ' || true)
-          SUMMARY_LINE=$(printf '%s\n' "$OUTPUT" | grep -m1 -E '^Resumen: ' || true)
+          # El verificador sanea los saltos de línea, así que un dato
+          # manipulado no puede fabricar líneas. Aun así, se toma la ÚLTIMA
+          # coincidencia (la que imprime el verificador al final) y se valida
+          # con la forma exacta esperada; cualquier otra cosa se descarta.
+          STATUS_LINE=$(printf '%s\n' "$OUTPUT" | grep -E '^AUDITORÍA: ' | tail -n 1 || true)
+          SUMMARY_LINE=$(printf '%s\n' "$OUTPUT" | grep -E '^Resumen: ' | tail -n 1 || true)
 
           STATUS_PATTERN='^AUDITORÍA: (AUDIT_BLOCKED|NO_ADMIN|ADMIN_COUNT [0-9]+) · ESQUEMA: (OK|AUSENTE|INCOMPATIBLE|NO COMPROBABLE) · ÍNDICES: (OK|FALTAN|NO COMPROBABLE)$'
           SUMMARY_PATTERN='^Resumen: [0-9]+ error\(es\), [0-9]+ aviso\(s\), [0-9]+ informativo\(s\)\.$'

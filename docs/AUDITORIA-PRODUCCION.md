@@ -35,19 +35,36 @@ diagnóstico (§3).
 npm run db:check -- --redact
 ```
 
-Sin el flag, la salida es exactamente la de siempre. Con el flag:
+Sin el flag, la salida es la de siempre (salvo el saneado de la línea
+siguiente, que se aplica siempre). Con el flag:
 
 - Los identificadores personales (`username`, `uid`, `createdBy` y correos) se
   sustituyen **antes de imprimir** por etiquetas estables: `usuario#N`,
   `uid#N`, `origen#N` (`src/server/db/redact.ts`).
+- El índice incluye **todas** las fuentes de identificadores que pueden
+  imprimirse: `accounts` y también los `uid` de `progress` y `attempts`. Un
+  `uid` sin cuenta —cuenta borrada o `rollbackAccount` fallido— se redacta
+  igualmente. Como el índice se construye con las **mismas listas** que se
+  pasan a `runChecks`, el límite `MAX_DOCS = 2000` no puede dejar fuera un
+  valor imprimible: lo que no se leyó tampoco se recorre.
 - Se conservan niveles, códigos, recuentos, `courseId` y el número de
   referencias de cada hallazgo. La misma etiqueta para el mismo valor permite
   correlacionar hallazgos dentro de un mismo informe.
 - Filtro genérico para lo que no está inventariado: correos, bloques de clave
-  privada, tokens (`ya29.`, `1//`, `AIza…`) y cadenas opacas de 40+ caracteres.
+  privada, tokens (`ya29.`, `1//`, `AIza…`), cadenas opacas de 40+ caracteres,
+  UUID y UID con forma de Firebase (20–40 caracteres con mayúsculas,
+  minúsculas y dígitos).
+- **Saneado de líneas** (`sanitizeText`): `\n`, `\r`, `\t` y demás caracteres
+  de control (incluidos U+0085, U+2028 y U+2029) se sustituyen por caracteres
+  visibles (`␤`, `␍`, `␉`) **antes** de componer la línea. Se aplica con y sin
+  `--redact`, en los hallazgos, las referencias, la cabecera, los errores y los
+  mensajes de Firestore: un `courseId` o un `status` manipulado no puede
+  fabricar líneas ni una línea falsa `AUDITORÍA: …`.
 - Segunda capa (`guardLine`): si una línea preparada para imprimir todavía
-  contuviera un identificador conocido o un correo, se sustituye la línea
-  entera por `[línea omitida: contenía un identificador]`.
+  contuviera un identificador conocido, un correo o una forma de identificador
+  que el índice no conocía, se sustituye la línea entera por
+  `[línea omitida: contenía un identificador]`. Es una red de seguridad, no el
+  mecanismo principal: lo que garantiza la cobertura es el índice y el saneado.
 - Cualquier fallo de configuración, conexión o ejecución imprime
   `AUDIT_BLOCKED` y **nunca** `NO_ADMIN`.
 - Un argumento desconocido aborta la ejecución en lugar de correr sin redactar.
@@ -81,6 +98,11 @@ El workflow solo acepta esa línea y la línea `Resumen: …` si encajan
 exactamente con el patrón esperado; cualquier otra cosa se descarta y el estado
 pasa a `AUDIT_BLOCKED`. Así una cadena inesperada no puede colarse en el
 resumen del trabajo.
+
+La garantía principal está en el verificador: sanea los saltos de línea antes
+de imprimir, así que no puede existir una línea fabricada. Como refuerzo, el
+workflow toma la **última** coincidencia (`tail -n 1`) y no la primera, y
+vuelve a validar la forma exacta antes de publicarla.
 
 ## 4. Workflow manual
 

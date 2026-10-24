@@ -22,7 +22,9 @@
  * `--redact` sustituye los identificadores personales (usuario, uid, correo,
  * origen de creación) por etiquetas estables ANTES de imprimir, porque la
  * salida puede acabar en un registro público. No cambia ninguna consulta ni
- * ningún criterio: solo lo que se ve. Sin el flag la salida es la de siempre.
+ * ningún criterio: solo lo que se ve. Sin el flag la salida es la de siempre,
+ * salvo el saneado de caracteres de control, que se aplica siempre para que un
+ * dato manipulado no pueda fabricar líneas nuevas (ver `sanitizeText`).
  */
 
 import { cert, getApps, initializeApp } from "firebase-admin/app";
@@ -47,9 +49,9 @@ import {
   auditStatus,
   buildRedactionIndex,
   formatAuditStatus,
-  guardLine,
-  redactFindings,
+  formatFindingLines,
   redactGeneric,
+  sanitizeText,
   type RedactionIndex,
 } from "../src/server/db/redact";
 
@@ -67,7 +69,8 @@ const redact = process.argv.includes("--redact");
  * nada sobre si existe un administrador.
  */
 function reportBlocked(message: string): never {
-  console.error(`\n✖ ${redact ? redactGeneric(message) : message}`);
+  const safe = sanitizeText(message);
+  console.error(`\n✖ ${redact ? redactGeneric(safe) : safe}`);
   if (redact) console.error(`\n${formatAuditStatus(auditStatus({ findings: [], adminCount: null, blocked: true }))}`);
   console.error("");
   process.exit(1);
@@ -99,6 +102,13 @@ function buildApp() {
   });
 }
 
+/**
+ * Lee como máximo `MAX_DOCS` documentos. Una lectura truncada NO puede filtrar
+ * identificadores: el índice de redacción se construye con estas mismas listas,
+ * así que lo que no se leyó tampoco se recorre ni se imprime. El truncado sí
+ * limita la auditoría (los recuentos son cotas inferiores), y eso ya era así
+ * antes de `--redact`: no se cambia ningún criterio.
+ */
 async function readCollection<T>(
   db: FirebaseFirestore.Firestore,
   name: string,
@@ -116,8 +126,10 @@ async function main() {
   }
 
   console.log("\n=== Comprobación de la base de datos de Formación ===");
-  console.log(`Proyecto: ${projectId ?? "(sin definir)"}`);
-  console.log(`Modo:     ${isEmulator ? `emulador (${emulatorHost})` : "Firebase real"}`);
+  console.log(`Proyecto: ${sanitizeText(projectId ?? "(sin definir)")}`);
+  console.log(
+    `Modo:     ${isEmulator ? `emulador (${sanitizeText(String(emulatorHost))})` : "Firebase real"}`,
+  );
 
   if (!isEmulator && !allowProd) {
     fail(
@@ -206,11 +218,14 @@ async function main() {
     try {
       await query.run();
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      // Se recorta a la primera línea y se sanea: el mensaje de Firestore puede
+      // traer varias y la salida debe seguir teniendo una línea por concepto.
+      const raw = error instanceof Error ? error.message : String(error);
+      const message = sanitizeText(raw.split(/\r?\n/)[0] ?? "");
       if (/FAILED_PRECONDITION|requires an index|index/i.test(message)) {
-        indexProblems.push(`${query.label}: ${message.split("\n")[0]}`);
+        indexProblems.push(`${query.label}: ${message}`);
       } else {
-        indexProblems.push(`${query.label}: error inesperado (${message.split("\n")[0]})`);
+        indexProblems.push(`${query.label}: error inesperado (${message})`);
       }
     }
   }
@@ -293,18 +308,16 @@ async function main() {
   const summary = summarize(findings);
 
   const redactionIndex: RedactionIndex | null = redact
-    ? buildRedactionIndex(accounts)
+    ? buildRedactionIndex({
+        accounts,
+        // `checkLearning` imprime estos uid aunque la cuenta ya no exista
+        // (borrado de cuenta o `rollbackAccount` fallido). Se indexan siempre.
+        extraUids: [...progress.map((entry) => entry.uid), ...attempts.map((entry) => entry.uid)],
+      })
     : null;
-  const visibleFindings = redactionIndex ? redactFindings(findings, redactionIndex) : findings;
 
-  for (const finding of visibleFindings) {
-    const icon = finding.level === "error" ? "✖" : finding.level === "warning" ? "!" : "·";
-    const head = `${icon} [${finding.level}] ${finding.code}: ${finding.message}`;
-    console.log(redactionIndex ? guardLine(head, redactionIndex) : head);
-    for (const ref of finding.refs ?? []) {
-      const line = `      ↳ ${ref}`;
-      console.log(redactionIndex ? guardLine(line, redactionIndex) : line);
-    }
+  for (const finding of findings) {
+    for (const line of formatFindingLines(finding, redactionIndex)) console.log(line);
   }
 
   console.log(
@@ -325,12 +338,12 @@ async function main() {
 }
 
 main().catch((error) => {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = sanitizeText(error instanceof Error ? error.message : String(error));
   if (redact) {
     console.error(`\n✖ Error inesperado: ${redactGeneric(message)}`);
     console.error(`\n${formatAuditStatus(auditStatus({ findings: [], adminCount: null, blocked: true }))}\n`);
   } else {
-    console.error("\n✖ Error inesperado:", error instanceof Error ? error.message : error);
+    console.error(`\n✖ Error inesperado: ${message}`);
   }
   process.exit(1);
 });
