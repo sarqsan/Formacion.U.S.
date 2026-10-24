@@ -42,6 +42,7 @@ aplicación de cuadrantes. Ese botón **no** modifica su lógica funcional.
 | Matriculación en bloque de todo el alumnado activo | Implementada y probada (idempotente, informa de nuevas/ya estaban/fallos) |
 | Candado de la demostración en producción | Implementado y probado: con `NODE_ENV=production`, `DEMO_MODE=1` se ignora y no hay variable de escape (`/api/health` → `"demo": false`) |
 | Publicación de reglas con pruebas obligatorias | `npm run rules:deploy` se niega a publicar si las pruebas están BLOCKED o FAILED |
+| Registro de actividad en el panel (`/admin/actividad`) | Implementado y probado: qué se hizo, quién y cuándo, solo lectura y sin secretos |
 
 ## Puesta en marcha (desarrollo)
 

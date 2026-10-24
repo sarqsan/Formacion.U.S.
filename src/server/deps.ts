@@ -8,6 +8,8 @@ import { FirestorePdfDocumentStore } from "@/server/firebase/document-store";
 import { FirestoreAccountAdminStore } from "@/server/firebase/account-admin-store";
 import type { AccountAdminDependencies } from "@/server/accounts/service";
 import type { PasswordChangeDependencies } from "@/server/accounts/password-service";
+import type { ActivityDependencies } from "@/server/audit/activity";
+import { FirestoreAuditReader } from "@/server/firebase/audit-store";
 import { verifyAccountPassword } from "@/server/auth/identity-toolkit";
 import { FirestoreEnrollmentStore } from "@/server/firebase/enrollment-store";
 import { FirestoreLearningStore } from "@/server/firebase/learning-store";
@@ -78,6 +80,14 @@ export function accountAdminDependencies(): AccountAdminDependencies {
     credentials: new FirebaseCredentialService(),
     activationTtlHours: ACTIVATION_TOKEN_TTL_HOURS,
   };
+}
+
+/**
+ * Registro de actividad: solo lectura de `audits`, la misma colección en la que
+ * escriben todas las operaciones sensibles.
+ */
+export function activityDependencies(): ActivityDependencies {
+  return { audit: new FirestoreAuditReader() };
 }
 
 /**

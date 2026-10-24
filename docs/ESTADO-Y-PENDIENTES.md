@@ -49,6 +49,7 @@ en el código, con lo que ya existe y lo que no.
 | Subida de PDF por partes con cuota | **Implementado** | Interfaz en `/admin/cursos/<id>/editar` y pruebas con dobles |
 | Lectura de PDF por páginas con matrícula | **Implementado** | Endpoints `/api/documents/...` con comprobación de matrícula y versión |
 | Administración de cuentas (deshabilitar, reactivar, reemitir código) | **Funciona** | `/admin/personas/<uid>`, con protección del último administrador |
+| **Registro de actividad visible** | **Nuevo (24-10)** | `/admin/actividad`: las operaciones sensibles se escribían en `audits` desde el principio y **no había forma de leerlas**. Lista blanca de campos, solo administración, 15 pruebas |
 | Copia de seguridad cifrada | **Implementado** | `npm run backup:export` / `backup:restore`, AES-256-GCM |
 
 Cifras del último `npm run verify` (24-10): **1078 pruebas superadas, 9
@@ -170,7 +171,12 @@ pruebas de reglas ejecutadas»). La aplicación ya está desplegada con Firebase
 dobles. Nadie comprueba de forma automática que un clic real en producción
 llegue a su sitio.
 
-**13. La copia de seguridad nunca se ha ensayado contra el proyecto real.**
+**13. El registro de actividad no se puede exportar ni se rota.**
+Se ven los 100 eventos más recientes (`/admin/actividad`) y se filtran por tipo,
+pero no hay descarga ni política de conservación. Es pequeño y está contenido;
+si necesitas justificar formación ante una inspección, es lo siguiente que haría.
+
+**14. La copia de seguridad nunca se ha ensayado contra el proyecto real.**
 `npm run rehearse:backup` existe, pero se ha ejecutado con datos sintéticos.
 
 ---

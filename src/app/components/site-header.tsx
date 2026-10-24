@@ -23,6 +23,7 @@ export function SiteHeader({ session }: { session: UiSession }) {
       links.push({ href: "/admin/personas", label: "Personas" });
       links.push({ href: "/admin/matriculas", label: "Matrículas" });
       links.push({ href: "/admin/progreso", label: "Progreso" });
+      links.push({ href: "/admin/actividad", label: "Actividad" });
     }
   }
 

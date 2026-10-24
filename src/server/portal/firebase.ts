@@ -16,11 +16,13 @@ import { parsePeopleWorkbook } from "@/server/import/excel";
 import { buildImportPreview, createPerson } from "@/server/import/service";
 import {
   accountAdminDependencies,
+  activityDependencies,
   courseEditorDependencies,
   documentDependencies,
   documentFileDependencies,
   importDependencies,
 } from "@/server/deps";
+import { listActivity } from "@/server/audit/activity";
 import {
   activationSummary,
   disableAccount,
@@ -869,6 +871,11 @@ export async function adminActivationSummary(actor: Actor, uid: string) {
  * Contraseña temporal para una cuenta activa, generada por el servidor.
  * Se devuelve una sola vez y no se guarda en claro.
  */
+/** Últimos eventos de auditoría, ya filtrados y sin campos sensibles. */
+export async function adminActivity(actor: Actor, limit?: number) {
+  return guard(() => listActivity(actor, activityDependencies(), limit ? { limit } : {}));
+}
+
 export async function adminResetPassword(actor: Actor, uid: string) {
   const result = await guard(() => resetPasswordByAdmin({ actor, uid }, accountAdminDependencies()));
   return result;

@@ -2,6 +2,7 @@ import { DomainError } from "@/domain/text";
 import { assertAdmin, type Actor } from "@/domain/auth/authorization";
 import type { CourseVersionDefinition } from "@/domain/courses/content";
 import type { ImportPreview } from "@/domain/people/import-rows";
+import { listActivity } from "@/server/audit/activity";
 import type { ImportDependencies } from "@/server/import/service";
 import type { DraftStructure, SaveAssessmentsResult } from "@/server/courses/editor";
 import type { QuizQuestionDefinition } from "@/domain/assessments/scoring";
@@ -281,6 +282,16 @@ export async function adminCreatePerson(
     );
   }
   return firebase.adminCreatePerson(actor, input);
+}
+
+/**
+ * Registro de actividad. El servicio es el mismo en las dos persistencias; solo
+ * cambia de dónde lee los eventos (Firestore o memoria).
+ */
+export async function adminActivity(actor: Actor, limit?: number) {
+  return portalMode() === "demo"
+    ? listActivity(actor, { audit: demo.demoAuditReader() }, limit ? { limit } : {})
+    : firebase.adminActivity(actor, limit);
 }
 
 /** Matriculación en bloque: mismo servicio en las dos persistencias. */
