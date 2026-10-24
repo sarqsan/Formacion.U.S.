@@ -1,5 +1,25 @@
 # Estado real y qué falta para terminar
 
+> ## ⏰ Para mañana: la única cosa que no puedo hacer yo
+>
+> **Ejecutar las 57 pruebas de reglas.** Aquí no hay Java ni se puede descargar
+> el emulador; en tu Codespace con red, sí.
+>
+> Una sola orden, en la terminal del Codespace, con el repositorio en esta rama:
+>
+> ```
+> npm run check:env
+> ```
+>
+> - Si termina en **PASSED** → siguiente orden: `npm run test:rules`
+> - Si dice que falta **Java** o el **emulador** → no es un fallo del código:
+>   los pasos están en `docs/ENTORNO-PRUEBAS.md` (sección 1).
+>
+> Pégame la salida de `npm run check:env` y sigo desde ahí. Con eso se cierra P0
+> entero. Si sale bien, el siguiente paso es publicar las reglas con
+> `npm run rules:deploy -- --yes`, que **no publicará nada** si alguna prueba no
+> pasa.
+
 > **Fecha de la auditoría: 24 de octubre de 2026** (P1 y la parte ejecutable de
 > P0 completados el mismo día).
 > Todo lo que dice «verificado» se ha comprobado contra el repositorio o contra
