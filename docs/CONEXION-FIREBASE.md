@@ -239,6 +239,34 @@ activación de un solo uso. Ese código se entrega a la persona, que lo canjea e
 `/activar` eligiendo su contraseña. Ejecuta antes con `--dry-run` si quieres ver
 el plan sin escribir.
 
+Antes de escribir, el script se niega a continuar si `AUTH_EMAIL_DOMAIN` y
+`NEXT_PUBLIC_AUTH_EMAIL_DOMAIN` no coinciden: la cuenta se crearía con un correo
+y el navegador intentaría entrar con otro (síntoma: «usuario o contraseña
+incorrectos», indistinguible de un fallo real).
+
+Qué hace si algo sale mal:
+
+- **Orden de salida**: primero imprime los códigos, después escribe
+  `audits/bootstrap_admins`. Si la auditoría falla, los códigos ya están
+  entregados y el proceso termina en error avisando de que falta ese registro.
+- **Rollback completo**: si falla a mitad, borra la ficha `accounts/{uid}`, el
+  usuario de Auth, la reserva `usernames/{n}` **y el documento
+  `activationTokens/{hash}`** (un código que sobreviviera seguiría siendo válido
+  hasta su caducidad).
+- **Limpieza visible**: informa de cada recurso que no pudo borrar y relee lo
+  que debería haber desaparecido, mostrando el estado residual. Un cierre con
+  residuos termina con código de salida 1.
+- **Concurrencia**: una reserva ya tomada (otra ejecución, o la cuenta ya
+  existe) se informa como «omitido» y no aborta el resto del lote.
+
+Recomendación operativa: **un solo nombre por ejecución** la primera vez. Si el
+proceso muriera después de crear la cuenta, no hay todavía ningún administrador
+que pueda reemitir el código desde el panel; habría que limpiar a mano en la
+consola (`activationTokens`, `accounts`, usuario de Auth y `usernames`).
+
+Las pruebas de estos caminos de fallo están en
+`tests/server/bootstrap-admins.test.ts` (sin red ni credenciales).
+
 ### Paso 7 — Reglas e índices **[MANUAL, y solo cuando toque]**
 
 - **No publicar todavía.** Las 57 pruebas de reglas siguen **BLOCKED** (no hay
