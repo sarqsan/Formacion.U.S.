@@ -1,0 +1,219 @@
+# Diagnóstico de conexión con Firebase (SOLO LECTURA)
+#
+# Ejecuta `npm run check:firebase` contra el proyecto real y dice, con código de
+# salida, si esta identidad puede leer Firestore y Firebase Auth:
+#
+#   0  PASSED   configuración correcta y ambos servicios responden
+#   2  FAILED   falta configuración o no es válida (no se ha intentado conectar)
+#   3  BLOCKED  configuración presente pero el servicio no responde o la cuenta
+#               de servicio no tiene permiso de lectura
+#
+# El verificador NO escribe: no crea, modifica ni borra documentos, no crea
+# usuarios, no cambia claims, no publica reglas y no ejecuta `db:init`. Lo
+# comprueba `tests/server/firebase-check.test.ts`, que lee el script y falla si
+# alguien introduce una operación de escritura.
+#
+# ---------------------------------------------------------------------------
+# REQUISITOS EXTERNOS — deben existir ANTES de la primera ejecución.
+# Este fichero NO los crea y ninguna prueba local demuestra que existan:
+#
+#   1. Entorno `production-audit` (Settings → Environments) con:
+#        - Required reviewers: al menos una persona.
+#        - «Allow administrators to bypass configured protection rules»: DESMARCADO.
+#        - Deployment branches: solo `main`.
+#      Si el entorno NO existe, GitHub lo crea al vuelo la primera vez SIN
+#      ninguna regla de protección: la aprobación desaparecería sin aviso.
+#
+#   2. Dos secretos DEL ENTORNO `production-audit` (nunca del repositorio):
+#        DB_AUDIT_FIREBASE_CLIENT_EMAIL → correo de la cuenta de servicio
+#        DB_AUDIT_FIREBASE_PRIVATE_KEY  → su clave privada (con \n escapados)
+#      La identidad necesita, como mínimo, lectura de Firestore
+#      (`datastore.entities.get`, `datastore.entities.list`) y de Firebase Auth
+#      (`firebaseauth.users.get` y `firebaseauth.configs.getHashConfig`, que es
+#      lo que exige `listUsers`). Si solo tiene roles de Datastore, el paso
+#      termina en BLOCKED (3) en la parte de Authentication: eso NO es un fallo
+#      del sistema, es el dato que se busca.
+#
+#   3. Tres VARIABLES de entorno en `production-audit` (Settings → Environments →
+#      production-audit → Environment variables). NO son secretas: son los mismos
+#      valores públicos del SDK web que viajan al navegador y están en Vercel.
+#      Se piden porque `check:firebase` valida también la configuración web antes
+#      de intentar la conexión:
+#        NEXT_PUBLIC_FIREBASE_API_KEY          (obligatoria)
+#        NEXT_PUBLIC_FIREBASE_APP_ID           (obligatoria)
+#        NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN      (opcional; por omisión
+#                                               formacionus-63555.firebaseapp.com)
+#      Si faltan, el trabajo se detiene en el primer paso y dice cuáles, sin
+#      intentar conectar y sin mostrar ningún valor.
+#
+# Disparo: manual, sin parámetros, y solo desde `main`. No se ejecuta al abrir
+# ni al actualizar un pull request, ni por push, ni por programación.
+# ---------------------------------------------------------------------------
+name: Firebase check (solo lectura)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firebase-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Diagnóstico de solo lectura
+    # Único ref admitido: main. Cualquier otra rama no ejecuta el trabajo.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production-audit
+    env:
+      # Fijados aquí a propósito: el diagnóstico no acepta proyecto ni comandos
+      # como parámetros de entrada. 63555 es el proyecto previsto por la
+      # aplicación (`DEFAULT_EXPECTED_PROJECT` en src/server/firebase/readiness.ts);
+      # si no coincide, el propio verificador lo marca como FAILED.
+      FIREBASE_PROJECT_ID: formacionus-63555
+      NEXT_PUBLIC_FIREBASE_PROJECT_ID: formacionus-63555
+      AUTH_EMAIL_DOMAIN: formacion.invalid
+      NEXT_PUBLIC_AUTH_EMAIL_DOMAIN: formacion.invalid
+      CI: "true"
+    steps:
+      - name: Descargar el repositorio
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Preparar Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: "22"
+
+      - name: Instalar dependencias
+        # Sin credenciales en este paso: los secretos solo existen en los pasos
+        # que los necesitan.
+        run: npm ci --no-audit --no-fund
+
+      - name: Comprobar que la configuración de entrada está completa
+        id: preflight
+        # Aquí los secretos se usan SOLO para comprobar que no están vacíos.
+        # No se imprimen ni se escriben en ningún sitio: el mensaje dice el
+        # nombre de la variable, nunca su valor.
+        env:
+          CLIENT_EMAIL: ${{ secrets.DB_AUDIT_FIREBASE_CLIENT_EMAIL }}
+          PRIVATE_KEY: ${{ secrets.DB_AUDIT_FIREBASE_PRIVATE_KEY }}
+          API_KEY: ${{ vars.NEXT_PUBLIC_FIREBASE_API_KEY }}
+          APP_ID: ${{ vars.NEXT_PUBLIC_FIREBASE_APP_ID }}
+        run: |
+          set -u
+          missing=0
+
+          require() {
+            name="$1"
+            value="$2"
+            hint="$3"
+            if [ -z "$value" ]; then
+              printf '✖ Falta %s\n' "$name"
+              printf '  → %s\n' "$hint"
+              missing=1
+            else
+              printf '✓ %s presente (valor no mostrado)\n' "$name"
+            fi
+          }
+
+          require "DB_AUDIT_FIREBASE_CLIENT_EMAIL" "$CLIENT_EMAIL" \
+            "Secreto del entorno production-audit: correo de la cuenta de servicio."
+          require "DB_AUDIT_FIREBASE_PRIVATE_KEY" "$PRIVATE_KEY" \
+            "Secreto del entorno production-audit: clave privada de esa cuenta."
+          require "NEXT_PUBLIC_FIREBASE_API_KEY" "$API_KEY" \
+            "Variable del entorno production-audit (valor público, el mismo de Vercel)."
+          require "NEXT_PUBLIC_FIREBASE_APP_ID" "$APP_ID" \
+            "Variable del entorno production-audit (valor público, el mismo de Vercel)."
+
+          if [ "$missing" -ne 0 ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            printf '\nNo se intenta conectar: falta configuración de entrada.\n'
+            exit 1
+          fi
+
+          if [ "$FIREBASE_PROJECT_ID" != "formacionus-63555" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            printf '✖ El proyecto del trabajo no es formacionus-63555.\n'
+            exit 1
+          fi
+
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Diagnóstico de solo lectura
+        id: check
+        if: steps.preflight.outputs.ready == 'true'
+        # Credenciales y valores públicos SOLO en este paso. Nunca se imprimen:
+        # el verificador únicamente informa de qué comprobación pasó, quedó
+        # bloqueada o falló, y del dominio del correo de servicio.
+        env:
+          FIREBASE_CLIENT_EMAIL: ${{ secrets.DB_AUDIT_FIREBASE_CLIENT_EMAIL }}
+          FIREBASE_PRIVATE_KEY: ${{ secrets.DB_AUDIT_FIREBASE_PRIVATE_KEY }}
+          NEXT_PUBLIC_FIREBASE_API_KEY: ${{ vars.NEXT_PUBLIC_FIREBASE_API_KEY }}
+          NEXT_PUBLIC_FIREBASE_APP_ID: ${{ vars.NEXT_PUBLIC_FIREBASE_APP_ID }}
+          NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ${{ vars.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || 'formacionus-63555.firebaseapp.com' }}
+        run: |
+          set +e
+          OUTPUT="$(npm run check:firebase 2>&1)"
+          CODE=$?
+          set -e
+
+          # La salida del verificador no contiene credenciales (ni el correo
+          # completo: solo su dominio). Se imprime tal cual y no se guarda como
+          # artefacto.
+          printf '%s\n' "$OUTPUT"
+
+          # Se toma la ÚLTIMA línea `RESULTADO:` y se valida con su forma exacta;
+          # cualquier otra cosa se descarta para que un dato inesperado no pueda
+          # fabricar un estado.
+          RESULT="$(printf '%s\n' "$OUTPUT" | grep -E '^RESULTADO: ' | tail -n 1 || true)"
+          case "$RESULT" in *$'\n'*) RESULT="" ;; esac
+          if ! printf '%s' "$RESULT" | grep -qE '^RESULTADO: (PASSED|FAILED|BLOCKED)$'; then
+            RESULT="RESULTADO: NO DISPONIBLE"
+          fi
+
+          {
+            echo "code=$CODE"
+            echo "result=$RESULT"
+          } >> "$GITHUB_OUTPUT"
+
+          exit "$CODE"
+
+      - name: Resumen del trabajo
+        if: always()
+        env:
+          CODE: ${{ steps.check.outputs.code }}
+          RESULT: ${{ steps.check.outputs.result }}
+          READY: ${{ steps.preflight.outputs.ready }}
+        run: |
+          CODE="${CODE:-}"
+          RESULT="${RESULT:-}"
+          READY="${READY:-false}"
+
+          case "$CODE" in ''|*[!0-9]*) CODE="sin ejecutar" ;; esac
+          case "$RESULT" in
+            "RESULTADO: PASSED"|"RESULTADO: FAILED"|"RESULTADO: BLOCKED") ;;
+            *) RESULT="RESULTADO: NO DISPONIBLE" ;;
+          esac
+
+          {
+            echo "### Firebase check (solo lectura)"
+            echo ""
+            echo "- Código de salida: \`${CODE}\`"
+            echo "- Resultado: \`${RESULT}\`"
+            if [ "$READY" != "true" ]; then
+              echo "- Configuración de entrada incompleta: no se intentó conectar."
+            fi
+            echo ""
+            echo "Detalle por comprobación: ver el registro del paso «Diagnóstico de solo lectura»."
+            echo "El verificador no ha escrito nada."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$READY" != "true" ]; then
+            exit 1
+          fi
