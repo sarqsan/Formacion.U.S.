@@ -229,9 +229,13 @@ No existe registro público y una fila de Excel nunca produce un administrador
 (por diseño). El alta se hace con:
 
 ```bash
-BOOTSTRAP_ADMIN_USERNAMES="rol1.apellido" \
-BOOTSTRAP_CONFIRM=yes \
-node scripts/bootstrap-admins.mjs
+# Credenciales: el JSON de la cuenta de servicio (recomendado)…
+export FIREBASE_SERVICE_ACCOUNT_FILE="$HOME/claves/formacionus-63555.json"
+# …o las tres variables FIREBASE_PROJECT_ID / FIREBASE_CLIENT_EMAIL / FIREBASE_PRIVATE_KEY.
+
+export BOOTSTRAP_ADMIN_USERNAMES="rol1.apellido"
+npm run bootstrap:dry                    # plan, sin escribir
+BOOTSTRAP_CONFIRM=yes npm run bootstrap  # crea la cuenta e imprime el código
 ```
 
 Crea la cuenta como `pending_activation` y **muestra una sola vez** un código de
@@ -259,10 +263,21 @@ Qué hace si algo sale mal:
 - **Concurrencia**: una reserva ya tomada (otra ejecución, o la cuenta ya
   existe) se informa como «omitido» y no aborta el resto del lote.
 
-Recomendación operativa: **un solo nombre por ejecución** la primera vez. Si el
-proceso muriera después de crear la cuenta, no hay todavía ningún administrador
-que pueda reemitir el código desde el panel; habría que limpiar a mano en la
-consola (`activationTokens`, `accounts`, usuario de Auth y `usernames`).
+Recomendación operativa: **un solo nombre por ejecución** la primera vez.
+
+Si el proceso muriera después de crear la cuenta, o si el código se pierde antes
+de que la persona lo canjee, **no hay que limpiar nada a mano**: se emite otro.
+
+```bash
+BOOTSTRAP_ADMIN_USERNAMES="rol1.apellido" npm run bootstrap -- --reissue
+```
+
+La reemisión revoca los códigos vivos de esa cuenta y crea uno nuevo (los
+anteriores dejan de servir en el acto), imprime el código una vez y registra
+`audits/activation_reissued`. Solo funciona con cuentas en `pending_activation`:
+una cuenta activa no necesita código y una deshabilitada debe reactivarse
+primero desde el panel. Es el único camino cuando todavía no existe ningún
+administrador activo que pueda entrar a `/admin/personas` a reemitirlo.
 
 Las pruebas de estos caminos de fallo están en
 `tests/server/bootstrap-admins.test.ts` (sin red ni credenciales).

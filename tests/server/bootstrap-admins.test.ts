@@ -14,6 +14,7 @@ import {
   parseAdminList,
   planAdminUsernames,
   provisionAdmin,
+  reissueActivationCode,
   rollbackProvisioned,
   runBootstrap,
   writeBootstrapAudit,
@@ -84,6 +85,10 @@ function createWorld(hooks: Hooks = {}): World {
       async get() {
         return { exists: docs.has(docPath), data: () => docs.get(docPath) };
       },
+      async create(data: DocData) {
+        if (docs.has(docPath)) throw new Error(`ALREADY_EXISTS: ${docPath}`);
+        docs.set(docPath, { ...data });
+      },
       async delete() {
         const failure = hooks.deleteError?.(docPath);
         if (failure) throw failure;
@@ -97,6 +102,29 @@ function createWorld(hooks: Hooks = {}): World {
     collection(name: string) {
       return {
         doc: (id: string) => docRef(name, id),
+        where(field: string, operator: string, value: unknown) {
+          const matches = () =>
+            [...docs.entries()]
+              .filter(([key]) => key.startsWith(`${name}/`))
+              .map(([key, data]) => ({
+                id: key.slice(name.length + 1),
+                data: () => data,
+              }))
+              .filter((doc) => (operator === "==" ? doc.data()[field] === value : false));
+
+          return {
+            limit: (count: number) => ({
+              get: async () => {
+                const found = matches().slice(0, count);
+                return { docs: found, empty: found.length === 0, size: found.length };
+              },
+            }),
+            get: async () => {
+              const found = matches();
+              return { docs: found, empty: found.length === 0, size: found.length };
+            },
+          };
+        },
         async add(data: DocData) {
           if (hooks.audit) throw hooks.audit;
           audits.push({ ...data });
@@ -630,5 +658,114 @@ describe("utilidades", () => {
     const token = generateActivationToken();
     expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(hashActivationToken(token)).toHaveLength(64);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Reemisión de códigos
+// ---------------------------------------------------------------------------
+
+/**
+ * El caso que deja el sistema sin puerta de entrada: el alta se ejecutó, el
+ * código se perdió y no hay ningún administrador activo que pueda entrar al
+ * panel a emitir otro. La reemisión tiene que funcionar sin tocar la cuenta.
+ */
+describe("reemisión de códigos de activación", () => {
+  async function pendingWorld() {
+    const world = createWorld();
+    const created = (await provisionAdmin({ username: "admin1", deps: world.deps })) as unknown as {
+      status: "created";
+      username: string;
+      uid: string;
+      token: string;
+      tokenHash: string;
+      expiresAt: string;
+      createdAt: string;
+    };
+    expect(created.status).toBe("created");
+    return { world, created };
+  }
+
+  it("emite un código nuevo y revoca el anterior", async () => {
+    const { world, created } = await pendingWorld();
+
+    const result = await reissueActivationCode({ username: "admin1", deps: world.deps });
+
+    expect(result.status).toBe("reissued");
+    if (result.status !== "reissued") return;
+
+    expect(result.uid).toBe(created.uid);
+    expect(result.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(result.revoked).toBe(1);
+
+    // El anterior queda marcado como revocado...
+    expect(world.docs.get(`activationTokens/${created.tokenHash}`)).toMatchObject({
+      revokedAt: expect.any(String),
+      revokedReason: "reissued",
+    });
+    // ...y solo el nuevo está vivo.
+    const live = [...world.docs.entries()].filter(([key, data]) => {
+      return key.startsWith("activationTokens/") && !data.usedAt && !data.revokedAt;
+    });
+    expect(live).toHaveLength(1);
+    expect(live[0][0]).toBe(`activationTokens/${result.tokenHash}`);
+  });
+
+  it("guarda solo el hash del código nuevo", async () => {
+    const { world, created } = await pendingWorld();
+    const result = await reissueActivationCode({ username: "admin1", deps: world.deps });
+    if (result.status !== "reissued") throw new Error("no se reemitió");
+
+    const dump = JSON.stringify([...world.docs.entries()]);
+    expect(dump).not.toContain(result.token);
+    expect(dump).toContain(result.tokenHash);
+    // La cuenta no cambia de estado: sigue pendiente hasta que la persona active.
+    expect(world.docs.get(`accounts/${created.uid}`)).toMatchObject({ status: "pending_activation" });
+  });
+
+  it("no emite códigos para cuentas activas o deshabilitadas", async () => {
+    const { world, created } = await pendingWorld();
+
+    world.docs.set(`accounts/${created.uid}`, {
+      ...world.docs.get(`accounts/${created.uid}`),
+      status: "active",
+    });
+    expect(await reissueActivationCode({ username: "admin1", deps: world.deps })).toMatchObject({
+      status: "not_applicable",
+    });
+
+    world.docs.set(`accounts/${created.uid}`, {
+      ...world.docs.get(`accounts/${created.uid}`),
+      status: "disabled",
+    });
+    expect(await reissueActivationCode({ username: "admin1", deps: world.deps })).toMatchObject({
+      status: "not_applicable",
+    });
+  });
+
+  it("informa si el usuario no existe, sin crear nada", async () => {
+    const world = createWorld();
+    const before = world.docs.size;
+
+    expect(await reissueActivationCode({ username: "nadie.aqui", deps: world.deps })).toEqual({
+      status: "not_found",
+      username: "nadie.aqui",
+    });
+    expect(world.docs.size).toBe(before);
+  });
+
+  it("dos reemisiones seguidas dejan un único código válido", async () => {
+    const { world } = await pendingWorld();
+
+    const first = await reissueActivationCode({ username: "admin1", deps: world.deps });
+    const second = await reissueActivationCode({ username: "admin1", deps: world.deps });
+    if (first.status !== "reissued" || second.status !== "reissued") throw new Error("no se reemitió");
+
+    const live = [...world.docs.entries()].filter(([key, data]) => {
+      return key.startsWith("activationTokens/") && !data.usedAt && !data.revokedAt;
+    });
+    expect(live).toHaveLength(1);
+    expect(live[0][0]).toBe(`activationTokens/${second.tokenHash}`);
+    expect(second.revoked).toBe(1);
   });
 });

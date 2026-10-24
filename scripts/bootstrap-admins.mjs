@@ -33,35 +33,46 @@
  * de los caminos de fallo, en `tests/server/bootstrap-admins.test.ts`.
  */
 
-import { applicationDefault, cert, getApps, initializeApp } from "firebase-admin/app";
+import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
 
 import {
+  AUDIT_ACTOR,
   MAX_BOOTSTRAP_ADMINS,
   checkEmailDomains,
+  normalizePrivateKey,
   parseAdminList,
   planAdminUsernames,
+  reissueActivationCode,
+  resolveAdminCredentials,
   runBootstrap,
   writeBootstrapAudit,
 } from "./lib/bootstrap-admin-core.mjs";
 
 const dryRun = process.argv.includes("--dry-run");
+const reissue = process.argv.includes("--reissue");
 const confirmed = process.env.BOOTSTRAP_CONFIRM === "yes";
 const usingEmulator = Boolean(process.env.FIREBASE_AUTH_EMULATOR_HOST);
-const hasCredentials = Boolean(
-  process.env.FIREBASE_PROJECT_ID &&
-    process.env.FIREBASE_CLIENT_EMAIL &&
-    process.env.FIREBASE_PRIVATE_KEY,
-);
+let credentials = null;
+try {
+  credentials = resolveAdminCredentials(process.env);
+} catch (error) {
+  console.error(`\n✖ ${error.message}\n`);
+  process.exit(1);
+}
 
 function fail(message) {
   console.error(`\n✖ ${message}\n`);
   process.exit(1);
 }
 
-if (!hasCredentials && !usingEmulator) {
-  fail("Faltan credenciales de Firebase Admin (FIREBASE_PROJECT_ID / CLIENT_EMAIL / PRIVATE_KEY).");
+if (!credentials && !usingEmulator) {
+  fail(
+    "Faltan credenciales de Firebase Admin. Dos formas válidas:\n" +
+      "  · FIREBASE_SERVICE_ACCOUNT_FILE=/ruta/fuera/del/repo/cuenta.json\n" +
+      "  · FIREBASE_PROJECT_ID + FIREBASE_CLIENT_EMAIL + FIREBASE_PRIVATE_KEY",
+  );
 }
 
 const requested = parseAdminList(process.env.BOOTSTRAP_ADMIN_USERNAMES);
@@ -76,7 +87,7 @@ if (invalid.length > 0) {
   for (const item of invalid) console.error(`  - ${item.username}: ${item.reason}`);
 }
 
-if (!dryRun && !confirmed) {
+if (!dryRun && !confirmed && !reissue) {
   fail("Simula primero con --dry-run y después ejecuta con BOOTSTRAP_CONFIRM=yes.");
 }
 
@@ -95,14 +106,12 @@ const app =
     : usingEmulator
       ? initializeApp({ projectId: process.env.FIREBASE_PROJECT_ID || "demo-formacion" })
       : initializeApp({
-          projectId: process.env.FIREBASE_PROJECT_ID,
-          credential: hasCredentials
-            ? cert({
-                projectId: process.env.FIREBASE_PROJECT_ID,
-                clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-                privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"),
-              })
-            : applicationDefault(),
+          projectId: credentials.projectId,
+          credential: cert({
+            projectId: credentials.projectId,
+            clientEmail: credentials.clientEmail,
+            privateKey: normalizePrivateKey(credentials.privateKey),
+          }),
         });
 
 const auth = getAuth(app);
@@ -124,9 +133,70 @@ function describeCleanup(cleanup) {
   }
 }
 
+/**
+ * Reemisión: un código nuevo para cuentas que siguen pendientes. Se usa cuando
+ * el alta ya se ejecutó pero el código se perdió y no hay ningún administrador
+ * activo que pueda entrar al panel a emitir otro.
+ */
+async function runReissue() {
+  console.log("\nModo: REEMITIR CÓDIGOS (los anteriores dejan de servir)");
+  console.log(`Emulador: ${usingEmulator ? "sí" : "no"}`);
+
+  let failures = 0;
+  const issued = [];
+
+  for (const username of create) {
+    const result = await reissueActivationCode({ username, deps });
+    if (result.status === "reissued") {
+      issued.push(result);
+      console.error(`✔ ${username}: código nuevo (revocados ${result.revoked}).`);
+    } else if (result.status === "not_found") {
+      failures += 1;
+      console.error(`✖ ${username}: no existe ninguna cuenta con ese usuario.`);
+    } else {
+      failures += 1;
+      console.error(`✖ ${username}: ${result.reason}.`);
+    }
+  }
+
+  if (issued.length > 0) {
+    console.log("\nCódigos de activación (se muestran UNA vez, no se guardan):\n");
+    for (const item of issued) {
+      console.log(`  ${item.username};${item.token}`);
+    }
+    console.log(`\nCaducan el ${issued[0].expiresAt}.\n`);
+    try {
+      await db.collection("audits").add({
+        type: "activation_reissued",
+        at: new Date().toISOString(),
+        actorUid: AUDIT_ACTOR,
+        usernames: issued.map((item) => item.username),
+        severity: "warning",
+      });
+    } catch (error) {
+      console.error(`✖ La auditoría no se pudo escribir: ${error instanceof Error ? error.message : error}`);
+      console.error("  Los códigos de arriba SÍ son válidos.");
+      failures += 1;
+    }
+  }
+
+  return failures > 0 ? 1 : 0;
+}
+
 async function main() {
+  if (reissue) return runReissue();
+
   console.log(`\nModo: ${dryRun ? "SIMULACIÓN (no escribe)" : "APLICAR CAMBIOS"}`);
   console.log(`Emulador: ${usingEmulator ? "sí" : "no"}`);
+  console.log(
+    `Credenciales: ${
+      credentials
+        ? credentials.source === "file"
+          ? "fichero de cuenta de servicio"
+          : "variables de entorno"
+        : "emulador"
+    }`,
+  );
   console.log(`Dominio de correo: ${emailDomains.server} (cliente: ${emailDomains.client})`);
   if (!emailDomains.ok) {
     console.error(`\n⚠ ${emailDomains.reason}`);

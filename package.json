@@ -26,6 +26,8 @@
     "test:firestore": "node scripts/run-emulator-checks.mjs firestore",
     "check:env": "node scripts/check-environment.mjs",
     "check:firebase": "tsx scripts/firebase-check.ts",
+    "bootstrap:dry": "node scripts/bootstrap-admins.mjs --dry-run",
+    "bootstrap": "node scripts/bootstrap-admins.mjs",
     "check:web": "tsx scripts/firebase-check.ts --config-only",
     "check:setup": "tsx scripts/firebase-check.ts --setup",
     "test:emulator": "node scripts/run-emulator-checks.mjs all",
