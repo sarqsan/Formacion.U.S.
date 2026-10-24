@@ -341,6 +341,39 @@ La política está duplicada entre `src/domain/auth/activation.ts` (TypeScript) 
 `scripts/lib/bootstrap-admin-core.mjs` (el script corre con `node`, sin compilar).
 Una prueba lee ambas y falla si dejan de coincidir.
 
+### Paso 6 ter — Cambiar la contraseña estando dentro
+
+Esto **no es el paso 6 bis**: no requiere terminal, ni clave de servicio, ni que
+intervenga administración. Cualquier cuenta activa puede hacerlo sola.
+
+1. Entra en la aplicación y abre **Mi cuenta** (`/cuenta`).
+2. Escribe la contraseña actual y la nueva dos veces.
+
+Qué ocurre, y qué se ha decidido a propósito:
+
+- La contraseña actual se comprueba **en el servidor** contra Firebase
+  Authentication (Identity Toolkit), no en el navegador. El SDK de Admin sabe
+  fijar contraseñas, pero no verificarlas.
+- Se aplica **la misma política que `/activar`** y la misma función de dominio:
+  una sola definición, no dos que se desvíen.
+- La contraseña nueva no puede ser la actual.
+- Al terminar se **revocan los refresh tokens** y se borra la cookie: se cierran
+  las sesiones abiertas, incluidas las de otros dispositivos. El usuario vuelve
+  a entrar con la nueva. Si alguien más estaba dentro con esa cuenta, deja de
+  estarlo en la siguiente petición.
+- Se registra `audits/password_changed` **sin la contraseña**.
+- Hay un límite de 5 intentos por hora y usuario (`passwordLimiter`): si alguien
+  tiene una sesión robada, no puede probar contraseñas actuales sin fin.
+- El identificador de cuenta **sale de la sesión**, nunca del cuerpo de la
+  petición: esta ruta no permite cambiar la contraseña de otra persona ni con
+  una sesión de administración.
+- En modo demostración la ruta responde con un aviso: las cuentas ficticias no
+  tienen contraseña.
+
+Falta por hacer, y está anotado en `docs/ESTADO-Y-PENDIENTES.md`: la misma
+operación **desde el panel**, para que administración pueda restablecer la de
+otra persona sin usar el script.
+
 ### Paso 7 — Reglas e índices **[MANUAL, y solo cuando toque]**
 
 - **No publicar todavía.** Las 57 pruebas de reglas siguen **BLOCKED** (no hay

@@ -182,8 +182,17 @@ export class FirestoreAccountProvisioner implements AccountProvisioner {
   }
 }
 
+/**
+ * Eventos de auditoría admitidos: los de importación (tipados por su servicio)
+ * y los de cuenta (cambio de contraseña). Todos acaban en `audits/{autoId}` con
+ * la misma marca de gravedad y **sin secretos**: nunca se guarda una contraseña.
+ */
+type AuditEvent =
+  | Parameters<AuditLog["record"]>[0]
+  | { type: string; actorUid: string; at: string } & Record<string, unknown>;
+
 export class FirestoreAuditLog implements AuditLog {
-  async record(event: Parameters<AuditLog["record"]>[0]): Promise<void> {
+  async record(event: AuditEvent): Promise<void> {
     await guard(() => getAdminDb().collection("audits").add({ ...event, severity: "info" }));
   }
 }

@@ -2,11 +2,13 @@
 
 Aplicación web **independiente** de formación del personal de la U.G.–U.S.
 
-> **Estado: versión demostrable, sin servicios conectados.**
-> Hay un recorrido completo de alumno y de administración con datos inventados
-> (`DEMO_MODE=1`). No hay proyecto Firebase creado, ni usuarios reales, ni PDF
-> confidenciales, ni despliegue. Qué está conectado y qué no:
-> [`docs/ENTREGA-DEMO.md`](docs/ENTREGA-DEMO.md) y la página `/estado`.
+> **Estado: desplegada y en uso, con Firebase conectado.**
+> Autenticación real, cuentas activadas por código, cursos con PDF, cuestionarios
+> y examen final funcionando en `https://formacionus.vercel.app`. Sigue habiendo
+> un modo de demostración con datos inventados (`DEMO_MODE=1`) para enseñar la
+> aplicación sin tocar datos reales.
+> **Lo que falta para terminar, y por qué orden:**
+> [`docs/ESTADO-Y-PENDIENTES.md`](docs/ESTADO-Y-PENDIENTES.md).
 
 ## Aislamiento
 
@@ -33,7 +35,8 @@ aplicación de cuadrantes. Ese botón **no** modifica su lógica funcional.
 | Interfaz: portada, acceso, panel de alumno, curso, lectura de pantallas, cuestionarios, examen final, panel de administración, matrículas, progreso e importación | Implementada; recorrido completo en modo demostración |
 | Cursos, temas, PDF por páginas, cuestionarios, examen final, versión nueva | Implementado y probado en servidor (subida solo por API); interfaz de lectura y matrícula ya disponible sobre el almacén de demostración |
 | Script de administradores iniciales (varios, idempotente) | Implementado y ejecutado: `admin1` activo en producción |
-| Cambio de contraseña de una cuenta activa (`--reset-password`) | Implementado; sin ejecutar todavía |
+| Cambio de contraseña de una cuenta activa (`--reset-password`) | Implementado, probado y documentado |
+| Cambio de la propia contraseña desde `/cuenta` | Implementado y probado (exige la actual, revoca sesiones) |
 
 ## Puesta en marcha (desarrollo)
 
