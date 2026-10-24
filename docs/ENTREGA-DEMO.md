@@ -18,6 +18,13 @@ páginas mientras esté activo, con un botón para reiniciar los datos. Sin
 `DEMO_MODE=1` la aplicación no usa ningún dato ficticio: exige Firebase
 configurado y, si no lo está, explica qué falta en vez de romperse.
 
+**La demostración no puede estar abierta en un servidor.** Con
+`NODE_ENV=production` —es decir, en cualquier despliegue— `DEMO_MODE=1` se ignora
+aunque esté definido: la aplicación usa Firebase y no hay acceso sin contraseña.
+No existe variable para saltarse ese candado
+(`src/server/config/demo-gate.ts`), y se puede comprobar desde fuera en
+`/api/health` (`"demo": false`).
+
 ### Cuentas de demostración (inventadas)
 
 | Usuario | Rol de cuenta | Rol de persona | Para qué sirve |

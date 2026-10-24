@@ -149,13 +149,17 @@ if (!configOnly) {
   }
 
   if (readiness.demoMode) {
+    // `demoMode` es «se está usando», no «está pedido»: en producción el candado
+    // la niega y el caso de abajo ya informa del aviso.
     record(
       "demo",
       "Modo demostración",
       "PASSED",
-      "DEMO_MODE=1: la aplicación arrancará con datos en memoria y NO usará Firebase, aunque la configuración sea correcta.",
+      "DEMO_MODE=1 fuera de producción: la aplicación arrancará con datos en memoria y NO usará Firebase, aunque la configuración sea correcta.",
     );
   }
+  // Si DEMO_MODE=1 está puesto en producción, el candado la ignora y el aviso ya
+  // sale arriba con el resto de hallazgos del servidor (`DEMO_MODE_IN_PRODUCTION`).
 }
 
 // Configuración pública del SDK web: forma de cada valor y coherencia entre

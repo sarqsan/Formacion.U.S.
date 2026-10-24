@@ -32,7 +32,8 @@
     "check:setup": "tsx scripts/firebase-check.ts --setup",
     "test:emulator": "node scripts/run-emulator-checks.mjs all",
     "seed:synthetic": "tsx scripts/seed-synthetic.ts",
-    "rehearse:backup": "tsx scripts/rehearse-backup.ts"
+    "rehearse:backup": "tsx scripts/rehearse-backup.ts",
+    "rules:deploy": "node scripts/deploy-rules.mjs"
   },
   "dependencies": {
     "firebase": "13.1.0",

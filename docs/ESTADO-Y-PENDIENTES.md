@@ -1,6 +1,7 @@
 # Estado real y qué falta para terminar
 
-> **Fecha de la auditoría: 24 de octubre de 2026** (P1 completado el mismo día).
+> **Fecha de la auditoría: 24 de octubre de 2026** (P1 y la parte ejecutable de
+> P0 completados el mismo día).
 > Todo lo que dice «verificado» se ha comprobado contra el repositorio o contra
 > la aplicación desplegada en `https://formacionus.vercel.app`. Lo que no se ha
 > podido comprobar se dice expresamente y **no se cuenta como hecho**.
@@ -37,24 +38,56 @@ omitidas, 64 ficheros**, `tsc`, `eslint` y `next build` limpios.
 
 ## 2. Lo que falta, por orden de importancia
 
-### P0 — Riesgos que conviene cerrar antes de usar la aplicación con datos reales
+### P0 — Riesgos antes de usar la aplicación con datos reales
 
-**1. Las reglas de Firestore nunca se han ejecutado.**
-Hay 57 pruebas escritas (`npm run test:rules`), pero necesitan el emulador
-oficial y en estos entornos no se ha podido descargar. Tampoco se ha podido
-comprobar desde aquí **si las reglas están desplegadas** en el proyecto.
-Por qué importa: hoy todo pasa por el servidor (que usa el Admin SDK y no
-obedece a las reglas), así que la aplicación funciona igual; pero si las reglas
-en la nube son permisivas, cualquiera con la clave web pública podría intentar
-leer colecciones directamente. *Qué haría falta:* ejecutar el emulador y
-publicar las reglas desde un entorno con `firebase-tools`.
+**1. `DEMO_MODE` en producción era una puerta sin contraseña — CERRADO (24-10).**
+La demostración entra sin contraseña: la cookie lleva el uid de una cuenta
+inventada. Antes bastaba con que alguien escribiera `DEMO_MODE=1` en Vercel para
+que el servidor arrancara con alumnado ficticio y sin pedir credenciales.
 
-**2. `DEMO_MODE` en producción es una puerta sin contraseña.**
-El modo demostración permite entrar con cuentas ficticias sin contraseña
-(`src/demo/`). Está **desactivado** en producción —`/api/health` responde
-`mode:"firebase"`—, pero nada en el código impide activarlo por error en
-Vercel. *Qué haría falta:* que el build de producción ignore `DEMO_MODE`, o un
-candado que exija una segunda variable para habilitarlo.
+Ahora hay un candado único (`src/server/config/demo-gate.ts`):
+
+- con `NODE_ENV=production`, `DEMO_MODE=1` **se ignora**; la aplicación usa
+  Firebase y no hay acceso sin contraseña;
+- **no existe variable de escape**: no se puede saltar desde el entorno;
+- solo el valor exacto `1` la pide (`true`, `sí`, `yes` no la abren);
+- el proxy del borde, las páginas, el diagnóstico y `/api/health` usan **la misma
+  función**: hay una prueba que falla si alguien vuelve a leer `DEMO_MODE` a mano;
+- si la variable se queda puesta en producción, el diagnóstico lo marca como
+  `FAILED` en `/estado` y en `npm run check:firebase` en lugar de ignorarlo en
+  silencio;
+- **se puede comprobar desde fuera**: `https://formacionus.vercel.app/api/health`
+  publica `"demo": false`. En producción siempre debe ser `false`.
+
+**2. Publicar reglas sin probarlas ya no es un descuido posible — CERRADO (24-10).**
+La política existía solo en la documentación: `firebase deploy` a mano publicaba
+aunque las 57 pruebas estuvieran BLOCKED, es decir, sin haber probado nada.
+
+Ahora `npm run rules:deploy -- --yes`:
+
+1. ejecuta `npm run test:rules`;
+2. si el resultado es **BLOCKED** (no había emulador) o **FAILED**, no publica
+   nada y explica por qué;
+3. si es PASSED y el proyecto es `formacionus-63555`, publica solo
+   `firestore.rules`;
+4. `--dry-run` enseña el plan sin tocar nada.
+
+**3. Las reglas siguen sin ejecutarse en este entorno — PENDIENTE (bloqueado).**
+No es un descuido: aquí no hay Java ni salida a `storage.googleapis.com`, así que
+el emulador oficial no arranca. Sigue siendo el único punto de P0 que no se ha
+podido cerrar, y **no se puede cerrar escribiendo más código**: hay que ejecutar
+las pruebas en una máquina que tenga JVM y red. Los pasos están en
+`docs/ENTORNO-PRUEBAS.md`; en tu Codespace, con red, es instalar Java y lanzar
+`npm run test:rules` (57 casos). Hasta que eso pase, las reglas **no se han
+probado contra el motor de Firestore**, aunque su política sí está verificada de
+forma estática y ninguna escritura de cliente está permitida.
+
+**4. No se ha podido comprobar qué reglas están desplegadas — PENDIENTE (sin acceso).**
+Desde aquí no hay credenciales del proyecto, así que no puedo leer la versión
+publicada. Comprobarlo requiere Google Cloud/Firebase con tu sesión. Si nunca se
+ha publicado nada, el proyecto está con las reglas por defecto de Firestore
+(que, en proyectos nuevos, **deniegan** todo acceso de cliente), pero eso hay que
+verificarlo, no suponerlo.
 
 ### P1 — Operativo del administrador ✅ *(cerrado el 24-10)*
 
@@ -143,7 +176,9 @@ Para que no se confunda «no verificado» con «no existe»:
    persona para enviar enlaces de Firebase (más cómodo, pero hay que recoger y
    proteger esos correos)?
 2. **Certificados:** ¿entran en el alcance? Es lo más grande de la lista P2.
-3. **Siguiente paso:** P1 está cerrado. Quedan P0 (reglas y candado de la
-   demostración) y P2 (certificados, vídeos, informes). ¿Cuál primero?
+3. **Siguiente paso:** P1 y el candado de P0 están cerrados. Para terminar P0
+   hace falta ejecutar `npm run test:rules` en una máquina con Java y red (tu
+   Codespace) y decirme el resultado. Después quedan P2 (certificados, vídeos,
+   informes) y P3 (mantenimiento).
 
 Ninguna de estas tres cosas se ha empezado sin tu respuesta.

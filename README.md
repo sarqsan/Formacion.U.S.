@@ -40,6 +40,8 @@ aplicación de cuadrantes. Ese botón **no** modifica su lógica funcional.
 | Restablecer la contraseña de otra persona desde el panel | Implementado y probado (temporal generada, se muestra una vez, cierra sesiones) |
 | Alta de una persona suelta desde el panel | Implementado y probado (misma validación y código que la importación) |
 | Matriculación en bloque de todo el alumnado activo | Implementada y probada (idempotente, informa de nuevas/ya estaban/fallos) |
+| Candado de la demostración en producción | Implementado y probado: con `NODE_ENV=production`, `DEMO_MODE=1` se ignora y no hay variable de escape (`/api/health` → `"demo": false`) |
+| Publicación de reglas con pruebas obligatorias | `npm run rules:deploy` se niega a publicar si las pruebas están BLOCKED o FAILED |
 
 ## Puesta en marcha (desarrollo)
 
@@ -63,7 +65,7 @@ Comprobaciones disponibles:
 ```bash
 npm run typecheck   # TypeScript estricto, sin emitir
 npm run lint        # ESLint (next/core-web-vitals + typescript)
-npm test            # 547 pruebas con Vitest (4 omitidas sin emulador)
+npm test            # 1127 pruebas con Vitest (9 omitidas: las que exigen emulador)
 npm run build       # build de producción de Next.js
 npm run verify      # las cuatro anteriores en orden
 
@@ -73,9 +75,11 @@ npm run check:web       # solo la configuración web, sin red (0 válida / 2 fal
                         # hoy: PASSED con los valores de .env.local
                         # proyecto esperado: formacionus-63555 (.firebaserc, .env.example)
 npm run emulators   # emulador local de Firestore (requiere Java 17+)
-npm run test:rules  # 41 pruebas de reglas (Java 17+ y el jar del emulador)
-npm run test:firestore  # 4 pruebas de integración (ya no se omiten en silencio)
+npm run test:rules  # 57 pruebas de reglas (Java 17+ y el jar del emulador)
+npm run test:firestore  # 9 pruebas de integración (ya no se omiten en silencio)
 npm run test:emulator   # reglas + integración, con resultado PASSED/FAILED/BLOCKED
+npm run rules:deploy -- --dry-run   # qué haría al publicar reglas (no publica)
+npm run rules:deploy -- --yes       # publica SOLO si las 57 pruebas pasan
 npm run seed:synthetic -- --reset   # datos inventados en el emulador
 npm run rehearse:backup             # ensayo exportar → borrar → restaurar → comparar
 

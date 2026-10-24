@@ -1,6 +1,7 @@
 import { jsonOk } from "@/server/http";
 import { getServerConfig } from "@/server/config";
 import { assessFirebaseReadiness } from "@/server/firebase/readiness";
+import { decideDemoMode } from "@/server/config/demo-gate";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,12 +32,18 @@ export async function GET() {
     ready = false;
   }
 
+  // `demo` dice si el modo demostración está **en uso**, no si está pedido: en
+  // producción el candado lo niega aunque alguien deje DEMO_MODE=1 puesto. Es la
+  // forma de comprobarlo desde fuera, sin acceso a las variables del despliegue.
+  const demo = decideDemoMode(process.env);
+
   return jsonOk({
     ok: true,
     app: "formacion-us",
     configured,
     ready,
     mode,
+    demo: demo.enabled,
     time: new Date().toISOString(),
   });
 }

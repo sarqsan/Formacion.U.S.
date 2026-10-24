@@ -48,7 +48,7 @@ valores que genera Firebase.
 | `SESSION_COOKIE_NAME` | `formacion_session` | `__Host-formacion_session` | cookie de sesión. **En producción debe empezar por `__Host-`** |
 | `SESSION_TTL_HOURS` | `12` | `12` | duración de la cookie (1–336 h) |
 | `PDF_STORAGE_BUDGET_MB` | `512` | `512` | presupuesto de PDF en Firestore |
-| `DEMO_MODE` | vacío | vacío | `1` = demostración en memoria, **nunca** junto con credenciales reales |
+| `DEMO_MODE` | vacío | vacío | `1` = demostración en memoria, **nunca** junto con credenciales reales. Con `NODE_ENV=production` se ignora: el candado de `src/server/config/demo-gate.ts` la niega y `/api/health` responde `"demo": false` |
 
 Regla de oro: `AUTH_EMAIL_DOMAIN` y `NEXT_PUBLIC_AUTH_EMAIL_DOMAIN` deben
 coincidir. Si no coinciden, las cuentas se crean con un correo y se intenta
@@ -387,7 +387,12 @@ otra persona sin usar el script.
   emulador oficial en el entorno de desarrollo). Publicar `firestore.rules` sin
   validarlas está prohibido en este proyecto.
 - Cuando el emulador esté disponible: `npm run test:rules` (57 casos) y, con
-  todo en verde, publicar con `firebase deploy --only firestore:rules`.
+  todo en verde, publicar con `npm run rules:deploy -- --yes`.
+  Ese script ejecuta las pruebas otra vez y **se niega a publicar** si están
+  BLOCKED (no se ha probado nada) o FAILED, o si el proyecto configurado no es
+  `formacionus-63555`. `npm run rules:deploy -- --dry-run` enseña el plan sin
+  tocar nada. Publish a mano con `firebase deploy` sigue siendo posible, pero ya
+  no es el camino documentado.
 - Índices: `npm run test:firestore` y `firebase deploy --only firestore:indexes`
   (el fichero ya contiene solo los índices que el código usa).
 - `.firebaserc` ya apunta a `formacionus-63555`; ningún despliegue se hace desde aquí.
@@ -719,8 +724,9 @@ las del fichero.
    las consultas reales. **No añadir índices** salvo que `db:check` señale una
    consulta que el código ejecuta de verdad.
 5. Publicar reglas e índices **solo después** de que el emulador pase:
-   `firebase deploy --only firestore:rules,firestore:indexes` (acción reservada;
-   no ejecutada desde aquí).
+   `npm run rules:deploy -- --yes` para las reglas (se niega si las pruebas no
+   están en verde) y `firebase deploy --only firestore:indexes` para los índices
+   (acción reservada; no ejecutada desde aquí).
 6. Repetir la batería negativa contra el proyecto real con una cuenta de prueba
    (lectura anónima, lectura de otro alumno, cuenta deshabilitada) y borrarla al
    terminar.
