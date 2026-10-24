@@ -127,16 +127,14 @@ verificación por código. Si un alumno termina un curso, no obtiene documento.
 **9. Informes y exportación.** `/admin/progreso` muestra resultados en pantalla;
 no hay exportación a Excel/CSV ni informe descargable.
 
-### P2 bis — Un límite del modelo que conviene decidir
+### P2 bis — Límite del modelo: mismo apellido y mismo rol *(cerrado por decisión)*
 
-**Dos personas con el mismo apellido y el mismo rol no pueden coexistir.**
 El usuario se deriva de `rol + apellido` (`rol1.garcia`), así que el sistema
-considera que una segunda alta con la misma pareja es la misma persona y la
-rechaza (igual en el Excel y en el alta individual). Es una decisión del modelo
-de identidad, no un fallo del alta: si en la plantilla hay dos personas que
-comparten apellido y rol, hoy no se pueden representar las dos. Corregirlo exige
-un dato que las distinga (segundo apellido, número de empleado…) y toca usuarios,
-reglas y migración: es una decisión de producto, no un arreglo suelto.
+trata una segunda alta con la misma pareja como la misma persona y la rechaza
+(igual en el Excel y en el alta individual). **Decisión del 24-10: no se toca.**
+La persona responsable de los datos garantiza que no habrá dos personas con el
+mismo apellido y el mismo rol, así que el límite no llega a darse en la práctica.
+No hace falta migración, ni dato nuevo, ni cambio en las reglas.
 
 ### P3 — Calidad y mantenimiento
 
