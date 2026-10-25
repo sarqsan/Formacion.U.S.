@@ -48,10 +48,10 @@ export default async function AdminCoursesPage({
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Link href="/admin/cursos/ia" className="btn btn-secondary">
-            Crear con IA
+          <Link href="/admin/cursos/ia" className="btn btn-primary">
+            Crear curso con IA
           </Link>
-          <Link href="/admin/cursos/nuevo" className="btn btn-primary">
+          <Link href="/admin/cursos/nuevo" className="btn btn-secondary">
             Nuevo curso
           </Link>
           <Link href="/admin" className="btn btn-secondary">

@@ -72,7 +72,10 @@ export default async function AdminPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Link href="/admin/cursos" className="btn btn-primary">
+          <Link href="/admin/cursos/ia" className="btn btn-primary">
+            Crear curso con IA
+          </Link>
+          <Link href="/admin/cursos" className="btn btn-secondary">
             Gestionar cursos
           </Link>
           <Link href="/admin/cursos/nuevo" className="btn btn-secondary">
@@ -110,11 +113,27 @@ export default async function AdminPage() {
       </section>
 
       <section className="grid-cards">
+        <Link href="/admin/cursos/ia" className="tile">
+          <span className="pill pill-ok">IA</span>
+          <span className="font-semibold">Crear curso con IA</span>
+          <span className="muted text-sm leading-relaxed">
+            Sube el PDF del temario y la aplicación propone temas, pantallas y cuestionarios.
+            Siempre queda en borrador hasta que lo revises y lo publiques.
+          </span>
+        </Link>
         <Link href="/admin/cursos" className="tile">
           <span className="pill pill-info">Contenido</span>
           <span className="font-semibold">Cursos y versiones</span>
           <span className="muted text-sm leading-relaxed">
             Crear la siguiente versión, editar el borrador, organizar temas y pantallas y publicar.
+          </span>
+        </Link>
+        <Link href="/admin/personas" className="tile">
+          <span className="pill pill-info">Alumnado</span>
+          <span className="font-semibold">Personas</span>
+          <span className="muted text-sm leading-relaxed">
+            Altas, activación de cuentas y datos de cada persona. El apellido y el rol identifican
+            al usuario; el identificador interno no se muestra.
           </span>
         </Link>
         <Link href="/admin/matriculas" className="tile">

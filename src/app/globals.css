@@ -98,8 +98,14 @@ h3 {
   letter-spacing: 0;
 }
 
+/*
+ * Ojo: aquí **no** se pone `display`. La barra de navegación se muestra u oculta
+ * con utilidades de Tailwind (`hidden sm:flex`), y una regla propia con
+ * `display: flex` gana a `.hidden` por orden de aparición: el resultado era que
+ * la navegación de escritorio seguía viéndose en el móvil, ocupaba tres filas
+ * dentro de una cabecera fija y se comía media pantalla.
+ */
 .nav {
-  display: flex;
   align-items: center;
   gap: 0.35rem;
   flex-wrap: wrap;
@@ -578,6 +584,17 @@ table.data tr:last-child td {
 }
 
 @media (max-width: 640px) {
+  /*
+   * En el móvil la cabecera **no se queda fija**. Aun con la navegación
+   * corregida, entre la marca, el botón de sesión y la fila de enlaces se
+   * quedaba con la parte de arriba de la pantalla, y el formulario no cabía.
+   * Se desplaza con la página: se recupera todo el alto útil.
+   */
+  .site-header {
+    position: static;
+    backdrop-filter: none;
+  }
+
   .step {
     grid-template-columns: auto 1fr;
   }
