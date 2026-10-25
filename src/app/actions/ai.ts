@@ -230,12 +230,18 @@ export async function saveScreensAction(formData: FormData): Promise<void> {
     const topicScreens = parseScreensForm(formData, {
       topics: editor!.topics.map((topic) => ({ id: topic.id, screens: topic.screens })),
     });
+    // Las páginas citadas a mano también se comprueban contra el PDF: el tope
+    // es el mayor número de páginas declarado por los documentos del borrador.
+    const pageCount = editor!.topics
+      .flatMap((topic) => topic.documentList.map((document) => document.pageCount))
+      .reduce<number | null>((max, value) => (max === null || value > max ? value : max), null);
+
     saved = await adminSaveDraftScreens(actor, {
       courseId,
       version,
       expectedRevision: revision,
       topicScreens,
-      pageCount: null,
+      pageCount,
     });
   } catch (error) {
     failure = errorMessage(error);
