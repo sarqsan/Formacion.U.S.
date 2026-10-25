@@ -178,6 +178,7 @@ function cloneAnswerKeys(
     quizByTopic[topicId] = questions.map((question) => ({
       id: question.id,
       correctOptionIds: [...question.correctOptionIds],
+      ...(question.explanation ? { explanation: question.explanation } : {}),
     }));
   }
   return {
@@ -187,6 +188,7 @@ function cloneAnswerKeys(
     finalExam: keys.finalExam.map((question) => ({
       id: question.id,
       correctOptionIds: [...question.correctOptionIds],
+      ...(question.explanation ? { explanation: question.explanation } : {}),
     })),
     createdAt,
   };
@@ -422,6 +424,9 @@ export async function saveDraftStructure(
       // Contenido que este editor no gestiona: se conserva si el tema ya existía.
       documents: existing?.documents ?? [],
       quiz: existing?.quiz ?? [],
+      // `screens` solo existe si hay pantallas: un array vacío no es un tema
+      // «con pantallas vacías», es un tema sin pantallas.
+      ...(existing?.screens && existing.screens.length > 0 ? { screens: existing.screens } : {}),
     };
   });
 
@@ -508,6 +513,7 @@ function normalizeQuestion(question: QuizQuestionDefinition): QuizQuestionDefini
   }
 
   const prompt = question.prompt?.trim();
+  const explanation = question.explanation?.trim();
 
   return {
     id: question.id.trim(),
@@ -516,6 +522,9 @@ function normalizeQuestion(question: QuizQuestionDefinition): QuizQuestionDefini
     correctOptionIds: [...question.correctOptionIds],
     ...(prompt ? { prompt } : {}),
     ...(Object.keys(optionLabels).length > 0 ? { optionLabels } : {}),
+    // La justificación viaja con la pregunta hasta las claves, donde se queda
+    // (solo servidor): es lo que permite explicar el resultado al corregir.
+    ...(explanation ? { explanation } : {}),
   };
 }
 
@@ -728,6 +737,19 @@ export async function saveDraftScreens(
   const topics: TopicDefinition[] = definition.topics.map((topic) => {
     const incoming = input.topicScreens[topic.id];
     if (!incoming) return topic;
+    if (incoming.length === 0) {
+      // Quitar todas las pantallas es una edición legítima: el tema se queda
+      // con lo que tenga (documentos). Si no le queda nada, la validación de
+      // estructura lo dirá (`TOPIC_WITHOUT_CONTENT`).
+      return {
+        id: topic.id,
+        title: topic.title,
+        order: topic.order,
+        mandatory: topic.mandatory,
+        documents: topic.documents,
+        quiz: topic.quiz,
+      };
+    }
     return {
       ...topic,
       screens: normalizeScreens(incoming, { pageCount: input.pageCount ?? null }),

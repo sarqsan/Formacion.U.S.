@@ -2,6 +2,7 @@ import { jsonOk } from "@/server/http";
 import { getServerConfig } from "@/server/config";
 import { assessFirebaseReadiness } from "@/server/firebase/readiness";
 import { decideDemoMode } from "@/server/config/demo-gate";
+import { geminiStatus } from "@/server/ai/status";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -37,6 +38,11 @@ export async function GET() {
   // forma de comprobarlo desde fuera, sin acceso a las variables del despliegue.
   const demo = decideDemoMode(process.env);
 
+  // Gemini: si está configurado, qué modelo y si la cuenta responde. Nunca la
+  // clave. La comprobación se cachea unos minutos, así que esto no golpea la
+  // API externa en cada visita.
+  const gemini = await geminiStatus();
+
   return jsonOk({
     ok: true,
     app: "formacion-us",
@@ -44,6 +50,14 @@ export async function GET() {
     ready,
     mode,
     demo: demo.enabled,
+    gemini: {
+      configured: gemini.configured,
+      model: gemini.model,
+      reachable: gemini.reachable,
+      modelAvailable: gemini.modelAvailable,
+      checkedAt: gemini.checkedAt,
+      message: gemini.message,
+    },
     time: new Date().toISOString(),
   });
 }

@@ -33,6 +33,7 @@ import {
   draftEditorView,
   resolveEditorVersion,
   saveDraftAssessments,
+  saveDraftScreens,
   saveDraftStructure,
   startDraft,
   type CourseEditorDependencies,
@@ -41,6 +42,7 @@ import {
   type SaveAssessmentsResult,
 } from "@/server/courses/editor";
 import type { QuizQuestionDefinition } from "@/domain/assessments/scoring";
+import type { StudyScreen } from "@/domain/courses/screens";
 import { definitionFromDocuments } from "@/server/courses/definition";
 import {
   abortPdfUpload,
@@ -606,6 +608,20 @@ export async function adminSaveDraftAssessments(
   },
 ): Promise<SaveAssessmentsResult> {
   return saveDraftAssessments({ actor, ...input }, demoDeps());
+}
+
+/** Guarda las pantallas de estudio de los temas indicados. */
+export async function adminSaveDraftScreens(
+  actor: Actor,
+  input: {
+    courseId: string;
+    version: number;
+    expectedRevision: number;
+    topicScreens: Record<string, StudyScreen[]>;
+    pageCount?: number | null;
+  },
+) {
+  return saveDraftScreens({ actor, ...input }, demoDeps());
 }
 
 /** Vista del editor de estructura, o `null` si el curso o la versión no existen. */

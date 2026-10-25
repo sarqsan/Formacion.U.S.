@@ -6,6 +6,7 @@ import { listActivity } from "@/server/audit/activity";
 import type { ImportDependencies } from "@/server/import/service";
 import type { DraftStructure, SaveAssessmentsResult } from "@/server/courses/editor";
 import type { QuizQuestionDefinition } from "@/domain/assessments/scoring";
+import type { StudyScreen } from "@/domain/courses/screens";
 import type { CreateUploadInput, StorageUsage } from "@/server/documents/service";
 import type { PdfDocumentMeta } from "@/server/documents/store";
 import type { AttachResult } from "@/server/documents/attach";
@@ -16,6 +17,19 @@ import {
 } from "@/server/portal/learner";
 import { parsePeopleWorkbook } from "@/server/import/excel";
 import { buildImportPreview } from "@/server/import/service";
+import { aiDependencies } from "@/server/deps";
+import {
+  generateFinalExam as generateFinalExamFlow,
+  generateTopicQuiz as generateTopicQuizFlow,
+  generateTopicScreens as generateTopicScreensFlow,
+  proposeDraftTopics as proposeDraftTopicsFlow,
+  startAiCourse as startAiCourseFlow,
+  type ScreensGenerationResult,
+  type QuizGenerationResult,
+  type StartedAiCourse,
+  type TopicProposalResult,
+} from "@/server/courses/ai-flow";
+import { geminiStatus, type GeminiStatus } from "@/server/ai/status";
 import { isDemoMode } from "@/demo/session";
 import * as demo from "@/demo/service";
 import * as demoCertificates from "@/demo/certificates";
@@ -167,6 +181,99 @@ export async function submitQuiz(input: {
     return submitAssessment(input, demo.demoDeps());
   }
   return firebase.learnerSubmit(input);
+}
+
+// ---------------------------------------------------------------------------
+// Crear curso con IA (Gemini, solo servidor)
+// ---------------------------------------------------------------------------
+
+/**
+ * Estado de la conexión con Gemini. Se puede consultar en los dos modos: solo
+ * lee la configuración del proceso y, si hay clave, comprueba la cuenta.
+ */
+export async function aiConnectionStatus(options: { force?: boolean } = {}): Promise<GeminiStatus> {
+  return geminiStatus({ force: options.force });
+}
+
+/**
+ * La generación con IA escribe en el almacén real (documentos fragmentados,
+ * borradores y claves). En la demostración no hay PDF ni credenciales, así que
+ * se niega con un mensaje explícito en lugar de simular un resultado: una
+ * maqueta que parece funcionar es peor que una función que dice que no está.
+ */
+function assertRealStore(operation: string): void {
+  if (portalMode() === "demo") {
+    throw new DomainError(
+      "AI_UNAVAILABLE_IN_DEMO",
+      `${operation} necesita el almacén real (Firestore y un PDF de verdad). En modo demostración está desactivado a propósito.`,
+      409,
+    );
+  }
+}
+
+export async function aiStartCourse(
+  actor: Actor,
+  input: {
+    courseId: string;
+    title: string;
+    description?: string;
+    pageCount: number;
+    pdfBytes: Uint8Array;
+  },
+): Promise<StartedAiCourse> {
+  assertRealStore("Crear un curso con IA");
+  return startAiCourseFlow({ actor, ...input }, aiDependencies());
+}
+
+export async function aiProposeTopics(
+  actor: Actor,
+  input: { courseId: string; version: number; expectedRevision: number },
+): Promise<TopicProposalResult> {
+  assertRealStore("Proponer temas con IA");
+  return proposeDraftTopicsFlow({ actor, ...input }, aiDependencies());
+}
+
+export async function aiGenerateScreens(
+  actor: Actor,
+  input: {
+    courseId: string;
+    version: number;
+    expectedRevision: number;
+    topicId: string;
+    requestedScreens?: number;
+  },
+): Promise<ScreensGenerationResult> {
+  assertRealStore("Generar pantallas con IA");
+  return generateTopicScreensFlow({ actor, ...input }, aiDependencies());
+}
+
+export async function aiGenerateQuiz(
+  actor: Actor,
+  input: {
+    courseId: string;
+    version: number;
+    expectedRevision: number;
+    topicId: string;
+    questionCount: number;
+    allowMultiple: boolean;
+  },
+): Promise<QuizGenerationResult> {
+  assertRealStore("Generar un cuestionario con IA");
+  return generateTopicQuizFlow({ actor, ...input }, aiDependencies());
+}
+
+export async function aiGenerateFinalExam(
+  actor: Actor,
+  input: {
+    courseId: string;
+    version: number;
+    expectedRevision: number;
+    questionCount: number;
+    allowMultiple: boolean;
+  },
+): Promise<QuizGenerationResult> {
+  assertRealStore("Generar el examen final con IA");
+  return generateFinalExamFlow({ actor, ...input }, aiDependencies());
 }
 
 // ---------------------------------------------------------------------------
@@ -479,6 +586,23 @@ export async function adminSaveDraftAssessments(
   return portalMode() === "demo"
     ? demo.adminSaveDraftAssessments(actor, input)
     : firebase.adminSaveDraftAssessments(actor, input);
+}
+
+/** Guarda las pantallas de estudio de los temas indicados del borrador. */
+export async function adminSaveDraftScreens(
+  actor: Actor,
+  input: {
+    courseId: string;
+    version: number;
+    expectedRevision: number;
+    topicScreens: Record<string, StudyScreen[]>;
+    pageCount?: number | null;
+  },
+) {
+  assertAdmin(actor);
+  return portalMode() === "demo"
+    ? demo.adminSaveDraftScreens(actor, input)
+    : firebase.adminSaveDraftScreens(actor, input);
 }
 
 // ---------------------------------------------------------------------------
