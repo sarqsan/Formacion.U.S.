@@ -33,6 +33,7 @@ import {
   adminStartDraft,
   previewImport,
   readPage,
+  readTopicScreen,
   submitQuiz,
 } from "@/server/portal";
 import type { Actor } from "@/domain/auth/authorization";
@@ -160,6 +161,45 @@ export async function readScreenAction(formData: FormData): Promise<void> {
   redirect(
     `/cursos/${encodeURIComponent(courseId)}/documentos/${encodeURIComponent(documentId)}?pantalla=${page + 1}`,
   );
+}
+
+/**
+ * «Leído, continuar» en las pantallas de estudio de un tema.
+ *
+ * Igual que el lector de PDF: avanzar es una acción del servidor, que comprueba
+ * la secuencia y guarda el progreso. Si la petición se sale del orden, vuelve a
+ * la pantalla con el aviso en lugar de guardar nada.
+ */
+export async function readTopicScreenAction(formData: FormData): Promise<void> {
+  const actor = await actorOrNull();
+  const courseId = String(formData.get("courseId") ?? "");
+  const topicId = String(formData.get("topicId") ?? "");
+  const screen = Number(formData.get("screen") ?? "1");
+
+  if (!actor) redirect("/login");
+
+  const base = `/cursos/${encodeURIComponent(courseId)}/temas/${encodeURIComponent(topicId)}/pantallas`;
+  let finished = false;
+  let failure: string | null = null;
+
+  try {
+    const result = await readTopicScreen(actor, { courseId, topicId, screen });
+    finished = result.finished;
+  } catch (error) {
+    failure = errorMessage(error);
+  }
+
+  if (failure) {
+    redirect(`${base}?error=${encodeURIComponent(failure)}`);
+  }
+
+  revalidatePath(`/cursos/${courseId}`, "layout");
+
+  if (finished) {
+    redirect(`/cursos/${encodeURIComponent(courseId)}/temas/${encodeURIComponent(topicId)}?lectura=completa`);
+  }
+
+  redirect(`${base}?pantalla=${screen + 1}`);
 }
 
 export interface QuizResult extends ActionResult {

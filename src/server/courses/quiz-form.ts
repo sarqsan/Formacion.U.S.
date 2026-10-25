@@ -64,6 +64,8 @@ function parseScope(formData: FormData, scope: string, current: QuizScopeView): 
       }
     }
 
+    const explanation = text(formData, `${questionPrefix}:explanation`);
+
     // Opción añadida en este guardado.
     const newOptionId = text(formData, `${questionPrefix}:newOptionId`);
     const newOptionLabel = text(formData, `${questionPrefix}:newOptionLabel`);
@@ -99,6 +101,9 @@ function parseScope(formData: FormData, scope: string, current: QuizScopeView): 
       correctOptionIds,
       prompt: text(formData, `${questionPrefix}:prompt`),
       ...(Object.keys(optionLabels).length > 0 ? { optionLabels } : {}),
+      // La explicación se guarda en las claves (solo servidor), no en el
+      // documento público: aquí solo se transporta.
+      ...(explanation ? { explanation } : {}),
     });
   }
 
@@ -138,6 +143,8 @@ function parseScope(formData: FormData, scope: string, current: QuizScopeView): 
 
     const type = text(formData, `${prefix}:newQuestionType`);
 
+    const newExplanation = text(formData, `${prefix}:newQuestionExplanation`);
+
     questions.push({
       id: newId,
       type: type === "multi_choice" ? "multi_choice" : "single_choice",
@@ -145,6 +152,7 @@ function parseScope(formData: FormData, scope: string, current: QuizScopeView): 
       correctOptionIds,
       prompt: newPrompt,
       ...(Object.keys(optionLabels).length > 0 ? { optionLabels } : {}),
+      ...(newExplanation ? { explanation: newExplanation } : {}),
     });
   }
 

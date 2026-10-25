@@ -58,6 +58,10 @@ function question(
     // Con texto en cada opción, como el contenido real: sin él, el editor
     // mostraría un aviso (la opción se vería como su identificador).
     optionLabels: Object.fromEntries(options.map((option) => [option, `Opción ${option}`])),
+    // Justificación de la respuesta correcta, como el contenido generado con
+    // IA: se guarda en las claves (solo servidor) y el editor la muestra al
+    // administrador. Sin ella, el editor avisa.
+    explanation: `La opción ${correct} es la correcta según el tema.`,
   };
 }
 

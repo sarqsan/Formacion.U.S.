@@ -67,6 +67,7 @@ import {
   draftEditorView,
   resolveEditorVersion,
   saveDraftAssessments,
+  saveDraftScreens,
   saveDraftStructure,
   startDraft,
   type DraftEditorView,
@@ -74,6 +75,7 @@ import {
   type SaveAssessmentsResult,
 } from "@/server/courses/editor";
 import type { QuizQuestionDefinition } from "@/domain/assessments/scoring";
+import type { StudyScreen } from "@/domain/courses/screens";
 import { definitionFromDocuments as definitionFromDocs } from "@/server/courses/definition";
 import { FirestoreEnrollmentStore } from "@/server/firebase/enrollment-store";
 import { FirestoreLearningStore } from "@/server/firebase/learning-store";
@@ -706,6 +708,21 @@ export async function adminSaveDraftAssessments(
 ): Promise<SaveAssessmentsResult> {
   assertAdmin(actor);
   return saveDraftAssessments({ actor, ...input }, { store: firestoreDeps().catalog });
+}
+
+/** Guarda las pantallas de estudio de los temas indicados del borrador. */
+export async function adminSaveDraftScreens(
+  actor: Actor,
+  input: {
+    courseId: string;
+    version: number;
+    expectedRevision: number;
+    topicScreens: Record<string, StudyScreen[]>;
+    pageCount?: number | null;
+  },
+) {
+  assertAdmin(actor);
+  return saveDraftScreens({ actor, ...input }, { store: firestoreDeps().catalog });
 }
 
 // ---------------------------------------------------------------------------

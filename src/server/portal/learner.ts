@@ -1,4 +1,7 @@
 import { DomainError } from "@/domain/text";
+import type { StudyScreen } from "@/domain/courses/screens";
+import { screensProgressId } from "@/domain/courses/screens";
+import { initDocumentProgress, nextAllowedPage, recordPageViewed } from "@/domain/progress/reading";
 import { assertActiveAccount, type Actor } from "@/domain/auth/authorization";
 import { completionPercent, isFinalExamUnlocked } from "@/domain/progress/course-progress";
 import { isEnrollmentActive, type Enrollment } from "@/domain/courses/enrollment";
@@ -54,12 +57,25 @@ export interface DocumentView {
   read: boolean;
 }
 
+/**
+ * Estado de las pantallas de estudio de un tema (contenido estructurado, sin
+ * PDF). Se lee en orden, igual que un documento, y se registra con su propio
+ * identificador de progreso para no confundirse con ningún PDF.
+ */
+export interface TopicScreensView {
+  available: boolean;
+  total: number;
+  lastViewed: number;
+  completed: boolean;
+}
+
 export interface TopicView {
   id: string;
   title: string;
   order: number;
   mandatory: boolean;
   documents: DocumentView[];
+  screens: TopicScreensView;
   questions: PublicQuestion[];
   readComplete: boolean;
   quizAvailable: boolean;
@@ -229,13 +245,35 @@ function topicState(topic: PublicTopic, progress: StoredProgress) {
     };
   });
 
-  const readComplete = documents.every((document) => document.read);
+  const screenList = topic.screens ?? [];
+  const screensProgress = screenList.length > 0
+    ? progress.documents[screensProgressId(topic.id)]
+    : undefined;
+  const screensLastViewed = screensProgress?.lastPageViewed ?? 0;
+  const screens: TopicScreensView = {
+    available: screenList.length > 0,
+    total: screenList.length,
+    lastViewed: Math.min(screensLastViewed, screenList.length),
+    completed: screenList.length > 0 && screensLastViewed >= screenList.length,
+  };
+
+  // Dos caminos equivalentes para llegar al cuestionario: leer los documentos
+  // del tema entero o estudiar sus pantallas enteras. El que no exista, no
+  // exige nada (un tema solo con pantallas no pide PDF, y al revés).
+  const documentsRead = documents.every((document) => document.read);
+  const readComplete = screens.available
+    ? screens.completed || (documents.length > 0 && documentsRead)
+    : // Tema sin pantallas: manda la lectura de documentos. Un tema sin nada
+      // (no debería publicarse) se queda como estaba, para no bloquear cursos
+      // ya publicados con contenido antiguo.
+      documentsRead;
   const topicProgress = progress.mandatoryTopicIds.includes(topic.id)
     ? progress.topics[topic.id]
     : undefined;
 
   return {
     documents,
+    screens,
     questions: topic.quiz,
     readComplete,
     quizAvailable: readComplete && topic.quiz.length > 0,
@@ -295,4 +333,163 @@ export async function locatePublishedDocument(
   }
 
   throw new DomainError("DOCUMENT_NOT_FOUND", "El documento no existe en este curso.", 404);
+}
+
+// ---------------------------------------------------------------------------
+// Pantallas de estudio del tema (contenido estructurado, sin PDF)
+// ---------------------------------------------------------------------------
+
+/**
+ * Localiza un tema dentro de la versión **publicada** del curso.
+ *
+ * Misma comprobación que `locatePublishedDocument`: cuenta activa, matrícula,
+ * curso publicado y pertenencia del tema a esa versión. Cambiar el identificador
+ * en la URL no abre un tema de un borrador ni de otra versión.
+ */
+export async function locatePublishedTopic(
+  deps: LearnerDependencies,
+  actor: Actor,
+  courseId: string,
+  topicId: string,
+): Promise<PublishedTopicLocation> {
+  const active = assertActiveAccount(actor);
+  await assertCourseAccess(active, courseId, deps);
+
+  const course = await deps.catalog.getCourse(courseId);
+  if (!course || course.publishedVersion === null) {
+    throw new DomainError("COURSE_NOT_AVAILABLE", "El curso no está publicado.", 404);
+  }
+
+  const version = await deps.catalog.getVersion(courseId, course.publishedVersion);
+  if (!version) throw new DomainError("VERSION_NOT_FOUND", "La versión no existe.", 404);
+
+  const topic = version.topics.find((item) => item.id === topicId);
+  if (!topic) throw new DomainError("TOPIC_NOT_FOUND", "El tema no existe en este curso.", 404);
+
+  const enrollment = await deps.enrollments.get(active.uid, courseId);
+  const { progress } = await loadOrInitProgress({
+    learning: deps.learning,
+    uid: active.uid,
+    courseId,
+    publishedVersion: course.publishedVersion,
+    mandatoryTopicIds: mandatoryTopicsOf(version),
+    at: (deps.now?.() ?? new Date()).toISOString(),
+  });
+
+  return {
+    course: { courseId, title: course.title, publishedVersion: course.publishedVersion },
+    version,
+    topic,
+    enrollment,
+    progress,
+  };
+}
+
+export interface PublishedTopicLocation {
+  course: { courseId: string; title: string; publishedVersion: number };
+  version: CourseVersionDocument;
+  topic: PublicTopic;
+  enrollment: Enrollment | null;
+  progress: StoredProgress;
+}
+
+export interface ScreensReadingView {
+  kind: "screens";
+  courseId: string;
+  topicId: string;
+  topicTitle: string;
+  screen: StudyScreen;
+  screenNumber: number;
+  totalScreens: number;
+  lastViewed: number;
+  finished: boolean;
+}
+
+function screensOf(topic: PublicTopic): StudyScreen[] {
+  const screens = topic.screens ?? [];
+  if (screens.length === 0) {
+    throw new DomainError(
+      "TOPIC_SCREENS_EMPTY",
+      "Este tema no tiene pantallas de estudio: ábrelo desde el temario.",
+      404,
+    );
+  }
+  return screens;
+}
+
+/**
+ * Vista de una pantalla. No registra nada: avanzar es una acción explícita,
+ * igual que en el lector de PDF (abrir no es leer).
+ */
+export async function screensReadingView(
+  deps: LearnerDependencies,
+  actor: Actor,
+  input: { courseId: string; topicId: string; screen?: number },
+): Promise<ScreensReadingView> {
+  const located = await locatePublishedTopic(deps, actor, input.courseId, input.topicId);
+  const screens = screensOf(located.topic);
+
+  const progressId = screensProgressId(located.topic.id);
+  const current = located.progress.documents[progressId];
+  const lastViewed = Math.min(current?.lastPageViewed ?? 0, screens.length);
+  const allowed = Math.min(lastViewed + 1, screens.length);
+  const requested = input.screen ?? allowed;
+  const screenNumber = Math.min(Math.max(1, requested), allowed);
+
+  return {
+    kind: "screens",
+    courseId: input.courseId,
+    topicId: located.topic.id,
+    topicTitle: located.topic.title,
+    screen: screens[screenNumber - 1],
+    screenNumber,
+    totalScreens: screens.length,
+    lastViewed,
+    finished: lastViewed >= screens.length,
+  };
+}
+
+/**
+ * Registra la pantalla como vista y devuelve la siguiente permitida.
+ *
+ * Reutiliza `recordPageViewed`, que vuelve a comprobar el orden: si el cliente
+ * pide una pantalla que no toca, la petición se rechaza con 409 en lugar de
+ * guardarla fuera de orden. El progreso se guarda con el identificador del
+ * tema (`screens_<tema>`), así que no pisa el de ningún PDF.
+ */
+export async function readTopicScreen(
+  deps: LearnerDependencies,
+  actor: Actor,
+  input: { courseId: string; topicId: string; screen: number },
+): Promise<{ nextScreen: number; finished: boolean; topicId: string }> {
+  const active = assertActiveAccount(actor);
+  const located = await locatePublishedTopic(deps, active, input.courseId, input.topicId);
+  const screens = screensOf(located.topic);
+
+  const at = (deps.now?.() ?? new Date()).toISOString();
+  const progressId = screensProgressId(located.topic.id);
+  const current =
+    located.progress.documents[progressId] ??
+    initDocumentProgress(progressId, screens.length);
+
+  const updated = recordPageViewed(current, input.screen, at);
+
+  // Un administrador puede revisar el curso, pero su lectura no se guarda:
+  // el progreso es del alumnado.
+  if (active.role !== "admin") {
+    await deps.learning.saveProgress(
+      {
+        ...located.progress,
+        documents: { ...located.progress.documents, [progressId]: updated },
+        updatedAt: at,
+      },
+      null,
+    );
+  }
+
+  return {
+    nextScreen: nextAllowedPage(updated),
+    finished: updated.lastPageViewed >= screens.length,
+    topicId: located.topic.id,
+  };
 }

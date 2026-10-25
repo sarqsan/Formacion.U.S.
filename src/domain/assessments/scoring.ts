@@ -29,6 +29,14 @@ export interface QuizQuestionDefinition {
    * NUNCA lleva información de cuál es la correcta.
    */
   optionLabels?: Record<string, string>;
+  /**
+   * Justificación de por qué la respuesta marcada es la correcta, apoyada en el
+   * temario. Es **material del servidor**: explica la solución, así que se
+   * guarda en `answerKeys` y nunca viaja al navegador antes de corregir
+   * (`toClientQuiz` la elimina, y `assertNoAnswerLeak` falla si aparece en el
+   * documento público).
+   */
+  explanation?: string;
 }
 
 export interface SubmittedAnswer {
@@ -53,6 +61,8 @@ export interface GradedAttempt {
   unansweredQuestionIds: string[];
   perQuestion: GradedQuestion[];
 }
+
+export const MAX_EXPLANATION_CHARS = 600;
 
 export function validateQuizDefinition(
   questions: readonly QuizQuestionDefinition[],
@@ -238,6 +248,8 @@ export function toClientQuiz(questions: readonly QuizQuestionDefinition[]): Arra
     type: question.type,
     optionIds: [...question.optionIds],
     ...(question.prompt ? { prompt: question.prompt } : {}),
+    // `correctOptionIds` y `explanation` se quedan fuera a propósito: las dos
+    // revelan la solución.
     ...(question.optionLabels
       ? {
           optionLabels: Object.fromEntries(

@@ -92,7 +92,11 @@ export default async function CoursePage({ params }: { params: Promise<{ courseI
         {nextTopic ? (
           <div className="mt-4 flex flex-wrap items-center gap-3">
             <Link
-              href={`/cursos/${view.courseId}/documentos/${nextTopic.documents[0].id}`}
+              href={
+                nextTopic.documents.length > 0
+                  ? `/cursos/${view.courseId}/documentos/${nextTopic.documents[0].id}`
+                  : `/cursos/${view.courseId}/temas/${nextTopic.id}/pantallas`
+              }
               className="btn btn-primary"
             >
               Continuar donde lo dejé
@@ -130,8 +134,10 @@ export default async function CoursePage({ params }: { params: Promise<{ courseI
                 {!topic.quizPassed ? (
                   <span className="muted text-xs">
                     {topic.readComplete
-                      ? "lectura hecha · falta el cuestionario"
-                      : `lectura ${topic.documents.reduce((sum, document) => sum + document.lastPageViewed, 0)}/${topic.documents.reduce((sum, document) => sum + document.totalPages, 0)} pantallas`}
+                      ? "estudio hecho · falta el cuestionario"
+                      : topic.documents.length > 0
+                        ? `lectura ${topic.documents.reduce((sum, document) => sum + document.lastPageViewed, 0)}/${topic.documents.reduce((sum, document) => sum + document.totalPages, 0)} páginas`
+                        : `estudio ${topic.screens.lastViewed}/${topic.screens.total} pantallas`}
                   </span>
                 ) : null}
               </li>
@@ -186,9 +192,19 @@ export default async function CoursePage({ params }: { params: Promise<{ courseI
                   </div>
 
                   <p className="muted mt-1 text-xs">
-                    {topic.documents.length} documento
-                    {topic.documents.length === 1 ? "" : "s"} · {readDocuments} leído
-                    {readDocuments === 1 ? "" : "s"}
+                    {topic.documents.length > 0 ? (
+                      <>
+                        {topic.documents.length} documento
+                        {topic.documents.length === 1 ? "" : "s"} · {readDocuments} leído
+                        {readDocuments === 1 ? "" : "s"}
+                      </>
+                    ) : (
+                      <>
+                        {topic.screens.total} pantalla{topic.screens.total === 1 ? "" : "s"} ·{" "}
+                        {Math.min(topic.screens.lastViewed, topic.screens.total)} vista
+                        {Math.min(topic.screens.lastViewed, topic.screens.total) === 1 ? "" : "s"}
+                      </>
+                    )}
                     {topic.attempts > 0 ? ` · ${topic.attempts} intento${topic.attempts === 1 ? "" : "s"}` : ""}
                   </p>
 
@@ -203,16 +219,36 @@ export default async function CoursePage({ params }: { params: Promise<{ courseI
                         {document.title} ({document.lastPageViewed}/{document.totalPages})
                       </Link>
                     ))}
+                    {topic.screens.available ? (
+                      <Link
+                        href={`/cursos/${view.courseId}/temas/${topic.id}/pantallas`}
+                        className="pill pill-off"
+                      >
+                        {topic.screens.completed ? "✓ " : ""}
+                        Estudio por pantallas ({Math.min(topic.screens.lastViewed, topic.screens.total)}/
+                        {topic.screens.total})
+                      </Link>
+                    ) : null}
                   </div>
                 </div>
 
                 <div className="step-actions flex flex-wrap gap-2">
-                  <Link
-                    href={`/cursos/${view.courseId}/documentos/${topic.documents[0].id}`}
-                    className="btn btn-secondary btn-sm"
-                  >
-                    {topic.readComplete ? "Repasar" : "Estudiar"}
-                  </Link>
+                  {topic.documents.length > 0 ? (
+                    <Link
+                      href={`/cursos/${view.courseId}/documentos/${topic.documents[0].id}`}
+                      className="btn btn-secondary btn-sm"
+                    >
+                      {topic.readComplete ? "Repasar" : "Estudiar"}
+                    </Link>
+                  ) : null}
+                  {topic.screens.available ? (
+                    <Link
+                      href={`/cursos/${view.courseId}/temas/${topic.id}/pantallas`}
+                      className="btn btn-secondary btn-sm"
+                    >
+                      {topic.screens.completed ? "Repasar pantallas" : "Estudiar pantallas"}
+                    </Link>
+                  ) : null}
                   <Link
                     href={`/cursos/${view.courseId}/temas/${topic.id}`}
                     className={`btn btn-sm ${topic.quizAvailable ? "btn-primary" : "btn-secondary"}`}

@@ -791,6 +791,7 @@ describe("equivalencia demo ↔ contrato real", () => {
         documentList: [],
         questions: 0,
         quiz: [],
+        screens: [],
       },
     ]);
     expect(demoView?.revision).toBe(realSaved.revision);

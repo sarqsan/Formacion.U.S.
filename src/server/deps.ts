@@ -26,6 +26,7 @@ import type { EnrollmentDependencies } from "@/server/enrollments/service";
 import { ACTIVATION_TOKEN_TTL_HOURS } from "@/domain/auth/activation";
 import type { ImportDependencies } from "@/server/import/service";
 import type { ActivationDependencies } from "@/server/auth/activation-service";
+import type { AiFlowDependencies } from "@/server/courses/ai-flow";
 import {
   FirebaseCredentialService,
   FirestoreAccountProvisioner,
@@ -160,6 +161,25 @@ export function certificateDependencies(): CertificateDependencies {
     learning: new FirestoreLearningStore(),
     people: new FirestoreCertificatePeople(),
     audit: new FirestoreCertificateAudit(),
+  };
+}
+
+/**
+ * Creación de cursos con IA (Gemini).
+ *
+ * Comparte los almacenes reales del editor y de los documentos: el PDF que se
+ * analiza es el mismo activo fragmentado que luego lee el alumnado, no una
+ * segunda copia. La clave de Gemini **no** se cablea aquí: se lee del entorno
+ * en el cliente (`src/server/ai/config.ts`) y nunca sale del servidor.
+ */
+export function aiDependencies(): AiFlowDependencies {
+  const upload = documentDependencies();
+  return {
+    editor: courseEditorDependencies(),
+    draft: { store: new FirestoreCourseCatalogStore() },
+    upload,
+    catalog: upload.catalog,
+    documents: upload.documents,
   };
 }
 

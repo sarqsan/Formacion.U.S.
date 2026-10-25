@@ -1,5 +1,6 @@
 import type { CourseVersionDefinition, TopicDefinition } from "@/domain/courses/content";
 import { isSlug } from "@/domain/courses/content";
+import { normalizeScreens } from "@/domain/courses/screens";
 import { reviewDraftQuizzes } from "@/domain/courses/quiz-draft";
 
 /**
@@ -121,6 +122,22 @@ export function checkDraftStructure(definition: CourseVersionDefinition): DraftI
     if (typeof topic.mandatory !== "boolean") {
       error("TOPIC_MANDATORY_INVALID", "El tema debe indicar si es obligatorio.", `${path}.mandatory`);
     }
+
+    // Pantallas de estudio: si están, tienen que ser válidas. Una pantalla rota
+    // se vería en la pantalla del alumnado, así que esto sí bloquea el guardado.
+    if (topic.screens !== undefined) {
+      try {
+        normalizeScreens(topic.screens);
+      } catch (caught) {
+        error(
+          "TOPIC_SCREENS_INVALID",
+          `Pantallas del tema «${topic.title || topic.id}»: ${
+            caught instanceof Error ? caught.message : "no son válidas"
+          }`,
+          `${path}.screens`,
+        );
+      }
+    }
   });
 
   return issues;
@@ -157,10 +174,13 @@ export function reviewDraft(
   }
 
   definition.topics.forEach((topic, index) => {
-    if (topic.documents.length === 0) {
+    // Un tema se estudia por sus pantallas o por sus PDF. Sin ninguna de las
+    // dos cosas no hay nada que leer, y el cuestionario quedaría accesible sin
+    // haber estudiado nada: se avisa aquí y la publicación lo impide.
+    if (topic.documents.length === 0 && (topic.screens?.length ?? 0) === 0) {
       warnings.push({
         code: "TOPIC_WITHOUT_DOCUMENTS",
-        message: `El tema «${topic.title || topic.id}» no tiene ningún documento.`,
+        message: `El tema «${topic.title || topic.id}» no tiene ningún documento ni pantallas de estudio.`,
         path: `topics[${index}].documents`,
         severity: "warning",
       });
