@@ -67,6 +67,25 @@ describe("qué se enseña de cada evento", () => {
     expect(entry.detail).not.toContain("Motivo");
   });
 
+  it("curso eliminado: cuenta qué se borró y en qué condiciones", () => {
+    const entry = describeAuditEvent({
+      type: "course_deleted",
+      actorUid: "admin-1",
+      at: "2026-10-25T12:00:00.000Z",
+      courseId: "curso-prueba",
+      courseTitle: "Curso de prueba",
+      versions: 2,
+      documents: 1,
+    });
+
+    expect(entry.title).toBe("Curso eliminado");
+    expect(entry.detail).toContain("Curso de prueba");
+    expect(entry.detail).toContain("curso-prueba");
+    expect(entry.detail).toContain("2 versión(es)");
+    expect(entry.detail).toContain("1 documento(s)");
+    expect(entry.detail).toContain("sin publicar");
+  });
+
   it("contraseña restablecida por administración: dice que no se guarda", () => {
     const entry = describeAuditEvent({
       type: "password_reset_admin",

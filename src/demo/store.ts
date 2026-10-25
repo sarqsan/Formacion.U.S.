@@ -115,7 +115,8 @@ export interface DemoAuditEntry {
     | "account_enabled"
     | "activation_reissued"
     | "password_reset_admin"
-    | "certificate_issued";
+    | "certificate_issued"
+    | "course_deleted";
   actorUid: string;
   targetUid: string;
   at: string;

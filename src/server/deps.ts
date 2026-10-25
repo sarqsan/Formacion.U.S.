@@ -3,7 +3,9 @@ import { DomainError } from "@/domain/text";
 import { budgetBytesFromMiB } from "@/domain/storage/pdf-chunks";
 import { FirestoreCourseCatalogStore } from "@/server/firebase/catalog-store";
 import { FirestoreCourseEditorStore } from "@/server/firebase/course-editor-store";
+import { FirestoreCourseDeletionStore } from "@/server/firebase/course-deletion-store";
 import type { CourseEditorDependencies } from "@/server/courses/editor";
+import type { CourseDeletionDependencies } from "@/server/courses/deletion";
 import { FirestorePdfDocumentStore } from "@/server/firebase/document-store";
 import { FirestoreAccountAdminStore } from "@/server/firebase/account-admin-store";
 import type { AccountAdminDependencies } from "@/server/accounts/service";
@@ -180,6 +182,18 @@ export function aiDependencies(): AiFlowDependencies {
     upload,
     catalog: upload.catalog,
     documents: upload.documents,
+  };
+}
+
+/**
+ * Borrado de cursos. El registro de actividad es el general (`audits`), el mismo
+ * que lee `/admin/actividad`: una eliminación tiene que quedar en el mismo sitio
+ * que el resto de acciones sensibles.
+ */
+export function courseDeletionDependencies(): CourseDeletionDependencies {
+  return {
+    store: new FirestoreCourseDeletionStore(),
+    audit: new FirestoreAuditLog(),
   };
 }
 

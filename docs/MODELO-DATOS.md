@@ -433,6 +433,30 @@ base sigue en una versión anterior.
 - `restartForVersion` exige versión estrictamente mayor.
 - El progreso de v1 se conserva como histórico; no se borra.
 
+## 4 bis. Eliminar un curso
+
+Es la única operación que destruye datos. Solo se permite en cursos **que nunca
+se han publicado** y **sin nadie detrás**:
+
+| Se comprueba | Si falla |
+| --- | --- |
+| Quien lo pide es administración | `FORBIDDEN` |
+| Ha escrito el identificador del curso para confirmar | `COURSE_DELETE_CONFIRMATION` |
+| El curso existe | `COURSE_NOT_FOUND` |
+| No hay versión publicada ni archivada | `COURSE_DELETE_PUBLISHED` |
+| No hay matrículas | `COURSE_DELETE_ENROLLED` |
+| No hay progreso, intentos ni certificados | `COURSE_DELETE_IN_USE` |
+
+Qué se borra, en este orden: las versiones del curso, sus `answerKeys`, los
+fragmentos `pdfChunks` de sus documentos, los metadatos de `documents` y, **la
+última**, la ficha `courses/{id}`. La ficha va al final a propósito: si algo
+falla antes, el curso sigue existiendo y se puede reintentar; al revés quedarían
+versiones y fragmentos invisibles desde el panel y ocupando cuota. Los bytes de
+los PDF vuelven al contador `meta/storage`.
+
+La eliminación se anota en `audits` como `course_deleted` y se ve en
+`/admin/actividad`.
+
 ## 5. Inicialización y verificación
 
 | Comando | Qué hace | Escribe |

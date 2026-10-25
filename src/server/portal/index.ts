@@ -712,6 +712,23 @@ export async function adminPublish(actor: Actor, courseId: string, version: numb
     : firebase.adminPublish(actor, courseId, version);
 }
 
+/**
+ * Elimina un curso en borrador.
+ *
+ * Pasa por el mismo servicio en los dos modos: las comprobaciones (administrar,
+ * confirmación escrita, nada publicado, nadie matriculado) no dependen del
+ * almacén.
+ */
+export async function adminDeleteCourse(
+  actor: Actor,
+  input: { courseId: string; confirmation: string },
+) {
+  assertAdmin(actor);
+  return portalMode() === "demo"
+    ? demo.adminDeleteCourse(actor, input)
+    : firebase.adminDeleteCourse(actor, input);
+}
+
 // ---------------------------------------------------------------------------
 // Importación
 // ---------------------------------------------------------------------------

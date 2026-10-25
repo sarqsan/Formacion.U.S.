@@ -140,6 +140,22 @@ export function describeAuditEvent(raw: Record<string, unknown>): ActivityEntry 
       };
     }
 
+    case "course_deleted": {
+      const courseTitle = text(raw.courseTitle) ?? text(raw.courseId) ?? "un curso";
+      const versions = typeof raw.versions === "number" ? raw.versions : null;
+      const documents = typeof raw.documents === "number" ? raw.documents : null;
+      return {
+        ...base,
+        title: "Curso eliminado",
+        detail:
+          `Se eliminó el curso «${courseTitle}»` +
+          (text(raw.courseId) ? ` (${text(raw.courseId)})` : "") +
+          (versions !== null ? ` con ${versions} versión(es)` : "") +
+          (documents !== null ? ` y ${documents} documento(s)` : "") +
+          ". Solo se permite en cursos sin publicar, sin matrículas y sin progreso.",
+      };
+    }
+
     case "password_changed":
       return {
         ...base,
