@@ -128,6 +128,18 @@ export default async function AiCoursePage({
             El PDF se guarda con las comprobaciones de siempre (firma, tamaño, páginas y huella
             SHA-256). Nada de lo que subas aquí lo ve el alumnado hasta que publiques.
           </p>
+          {/*
+            Aviso de tratamiento: el temario sale de la aplicación para generar el
+            curso. Se dice aquí, antes de subir el fichero, no en una política que
+            nadie lee. Ver `docs/IA-Y-DATOS.md`.
+          */}
+          <p className="alert alert-warn mt-2 text-xs leading-relaxed">
+            <strong>El temario se envía a Google</strong> (API de Gemini) para separarlo en temas y
+            redactar el curso; no se publica en ningún sitio. Con facturación activa en el proyecto
+            de Google, Google no lo usa para mejorar sus productos; con la cuota gratuita, sí, y
+            puede leerlo un revisor. No subas aquí documentos con datos personales. Detalle:{" "}
+            <code>docs/IA-Y-DATOS.md</code>.
+          </p>
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2">
