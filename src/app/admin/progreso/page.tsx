@@ -24,13 +24,18 @@ export default async function ProgressPage() {
         / <span>Progreso</span>
       </nav>
 
-      <div>
-        <p className="eyebrow">Seguimiento</p>
-        <h1 className="page-title mt-1">Progreso y resultados</h1>
-        <p className="muted mt-1 text-sm">
-          Estado por matrícula: qué temas están superados, cuáles quedan y qué intentos se han
-          registrado.
-        </p>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="eyebrow">Seguimiento</p>
+          <h1 className="page-title mt-1">Progreso y resultados</h1>
+          <p className="muted mt-1 text-sm">
+            Estado por matrícula: qué temas están superados, cuáles quedan y qué intentos se han
+            registrado.
+          </p>
+        </div>
+        <a href="/api/admin/exports/progress" className="btn btn-secondary" download>
+          Descargar en Excel (CSV)
+        </a>
       </div>
 
       <div className="grid-stats">

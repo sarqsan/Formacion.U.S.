@@ -1,4 +1,5 @@
 import { getServerConfig } from "@/server/config";
+import { DomainError } from "@/domain/text";
 import { budgetBytesFromMiB } from "@/domain/storage/pdf-chunks";
 import { FirestoreCourseCatalogStore } from "@/server/firebase/catalog-store";
 import { FirestoreCourseEditorStore } from "@/server/firebase/course-editor-store";
@@ -6,6 +7,10 @@ import type { CourseEditorDependencies } from "@/server/courses/editor";
 import { FirestorePdfDocumentStore } from "@/server/firebase/document-store";
 import { FirestoreAccountAdminStore } from "@/server/firebase/account-admin-store";
 import type { AccountAdminDependencies } from "@/server/accounts/service";
+import type { PasswordChangeDependencies } from "@/server/accounts/password-service";
+import type { ActivityDependencies } from "@/server/audit/activity";
+import { FirestoreAuditReader } from "@/server/firebase/audit-store";
+import { verifyAccountPassword } from "@/server/auth/identity-toolkit";
 import { FirestoreEnrollmentStore } from "@/server/firebase/enrollment-store";
 import { FirestoreLearningStore } from "@/server/firebase/learning-store";
 import { pdfLimiter, uploadLimiter } from "@/server/ratelimit/limiter";
@@ -74,6 +79,42 @@ export function accountAdminDependencies(): AccountAdminDependencies {
     store: new FirestoreAccountAdminStore(),
     credentials: new FirebaseCredentialService(),
     activationTtlHours: ACTIVATION_TOKEN_TTL_HOURS,
+  };
+}
+
+/**
+ * Registro de actividad: solo lectura de `audits`, la misma colección en la que
+ * escriben todas las operaciones sensibles.
+ */
+export function activityDependencies(): ActivityDependencies {
+  return { audit: new FirestoreAuditReader() };
+}
+
+/**
+ * Cambio de contraseña por el propio usuario.
+ *
+ * La comprobación de la contraseña actual se hace contra Identity Toolkit con
+ * la clave web del proyecto: es pública (va en el bundle del navegador) y sirve
+ * para identificar el proyecto, no para autorizar. El SDK de Admin no puede
+ * verificar contraseñas, solo fijarlas.
+ */
+export function passwordChangeDependencies(): PasswordChangeDependencies {
+  const config = getServerConfig();
+  const apiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
+  if (!apiKey) {
+    throw new DomainError(
+      "CONFIG_MISSING",
+      "Falta NEXT_PUBLIC_FIREBASE_API_KEY: no se puede comprobar la contraseña actual.",
+      503,
+    );
+  }
+
+  return {
+    store: new FirestoreAccountAdminStore(),
+    credentials: new FirebaseCredentialService(),
+    verifyPassword: (email, password) => verifyAccountPassword({ email, password, apiKey }),
+    audit: new FirestoreAuditLog(),
+    authEmailDomain: config.AUTH_EMAIL_DOMAIN,
   };
 }
 

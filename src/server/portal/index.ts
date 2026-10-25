@@ -2,6 +2,7 @@ import { DomainError } from "@/domain/text";
 import { assertAdmin, type Actor } from "@/domain/auth/authorization";
 import type { CourseVersionDefinition } from "@/domain/courses/content";
 import type { ImportPreview } from "@/domain/people/import-rows";
+import { listActivity } from "@/server/audit/activity";
 import type { ImportDependencies } from "@/server/import/service";
 import type { DraftStructure, SaveAssessmentsResult } from "@/server/courses/editor";
 import type { QuizQuestionDefinition } from "@/domain/assessments/scoring";
@@ -245,6 +246,59 @@ export async function adminActivationSummary(actor: Actor, uid: string) {
   return portalMode() === "demo"
     ? demo.adminActivationSummary(actor, uid)
     : firebase.adminActivationSummary(actor, uid);
+}
+
+/**
+ * Contraseña temporal generada por el servidor para una cuenta activa.
+ *
+ * Solo existe en modo real: en la demostración no hay Firebase Authentication,
+ * así que no hay contraseña que cambiar. La pantalla lo dice y no ofrece el
+ * botón; esto es el cinturón por si alguien llama igualmente.
+ */
+export async function adminResetPassword(actor: Actor, uid: string) {
+  if (portalMode() === "demo") {
+    throw new DomainError(
+      "DEMO_UNSUPPORTED",
+      "La demostración no tiene contraseñas reales: el restablecimiento necesita Firebase.",
+      400,
+    );
+  }
+  return firebase.adminResetPassword(actor, uid);
+}
+
+/**
+ * Alta de una persona suelta. Mismo camino que la importación (misma
+ * validación, mismo código de un solo uso) con un formulario en vez de un Excel.
+ */
+export async function adminCreatePerson(
+  actor: Actor,
+  input: { apellido: string; rol: string },
+) {
+  if (portalMode() === "demo") {
+    throw new DomainError(
+      "DEMO_UNSUPPORTED",
+      "La demostración no crea cuentas reales: usa la importación de Excel o el modo real.",
+      400,
+    );
+  }
+  return firebase.adminCreatePerson(actor, input);
+}
+
+/**
+ * Registro de actividad. El servicio es el mismo en las dos persistencias; solo
+ * cambia de dónde lee los eventos (Firestore o memoria).
+ */
+export async function adminActivity(actor: Actor, limit?: number) {
+  return portalMode() === "demo"
+    ? listActivity(actor, { audit: demo.demoAuditReader() }, limit ? { limit } : {})
+    : firebase.adminActivity(actor, limit);
+}
+
+/** Matriculación en bloque: mismo servicio en las dos persistencias. */
+export async function adminEnrollMany(actor: Actor, courseId: string, uids: readonly string[]) {
+  return portalMode() === "demo"
+    ? demo.adminEnrollMany(actor, courseId, uids)
+    : firebase.adminEnrollMany(actor, courseId, uids);
 }
 
 /**

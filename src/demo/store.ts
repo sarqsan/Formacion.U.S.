@@ -97,7 +97,7 @@ export interface DemoActivationToken {
 }
 
 export interface DemoAuditEntry {
-  type: "account_disabled" | "account_enabled" | "activation_reissued";
+  type: "account_disabled" | "account_enabled" | "activation_reissued" | "password_reset_admin";
   actorUid: string;
   targetUid: string;
   at: string;

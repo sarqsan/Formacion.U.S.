@@ -16,12 +16,14 @@ export function SiteHeader({ session }: { session: UiSession }) {
   const links: Array<{ href: string; label: string }> = [];
   if (actor) {
     links.push({ href: "/panel", label: "Mi formación" });
+    links.push({ href: "/cuenta", label: "Mi cuenta" });
     if (actor.role === "admin") {
       links.push({ href: "/admin", label: "Administración" });
       links.push({ href: "/admin/cursos", label: "Cursos" });
       links.push({ href: "/admin/personas", label: "Personas" });
       links.push({ href: "/admin/matriculas", label: "Matrículas" });
       links.push({ href: "/admin/progreso", label: "Progreso" });
+      links.push({ href: "/admin/actividad", label: "Actividad" });
     }
   }
 

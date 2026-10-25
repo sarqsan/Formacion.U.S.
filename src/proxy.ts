@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { demoEnabled } from "@/server/config/demo-gate";
 
 /**
  * PUERTA DE ENTRADA (defensa en profundidad, NO autorización)
@@ -34,8 +35,10 @@ export function proxy(request: NextRequest) {
   // una cuenta ficticia. Este proxy solo evita entrar sin elegir perfil; la
   // autorización real de la demostración se comprueba en cada página y
   // servicio (`getUiSession` + `assertAdmin`/`assertCourseAccess`).
+  // El candado es el mismo que usa el resto de la aplicación: en producción la
+  // demostración está cerrada aunque alguien deje DEMO_MODE=1 en el entorno.
   const hasDemoCookie =
-    process.env.DEMO_MODE === "1" && Boolean(request.cookies.get("formacion_demo")?.value);
+    demoEnabled() && Boolean(request.cookies.get("formacion_demo")?.value);
 
   if (hasSessionCookie || hasDemoCookie) return NextResponse.next();
 

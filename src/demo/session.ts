@@ -1,12 +1,14 @@
 import { cookies } from "next/headers";
 import type { Actor } from "@/domain/auth/authorization";
 import { demoAccountByUid } from "@/demo/store";
+import { demoEnabled } from "@/server/config/demo-gate";
 
 /**
  * SESIÓN DE LA DEMOSTRACIÓN
  * =========================
  *
- * Se usa **solo** con `DEMO_MODE=1`. Es una cookie con el uid de una cuenta
+ * Se usa **solo** con `DEMO_MODE=1` y **nunca** en producción (ver
+ * `src/server/config/demo-gate.ts`). Es una cookie con el uid de una cuenta
  * inventada; no hay contraseña, ni token firmado, ni Firebase Authentication.
  *
  * Por eso mismo:
@@ -18,8 +20,14 @@ import { demoAccountByUid } from "@/demo/store";
 
 export const DEMO_COOKIE = "formacion_demo";
 
+/**
+ * ¿Se puede usar la demostración en este proceso?
+ *
+ * La decisión NO se toma aquí: `src/server/config/demo-gate.ts` la toma una sola
+ * vez y niega la demostración en producción aunque `DEMO_MODE=1` esté definido.
+ */
 export function isDemoMode(): boolean {
-  return process.env.DEMO_MODE === "1";
+  return demoEnabled();
 }
 
 /** ¿Hay configuración suficiente para hablar con Firebase de verdad? */

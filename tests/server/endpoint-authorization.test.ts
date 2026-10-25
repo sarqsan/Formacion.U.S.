@@ -75,6 +75,7 @@ describe("inventario de endpoints", () => {
   it("encuentra las rutas esperadas", () => {
     const paths = routes.map((route) => route.relativePath).sort();
     expect(paths).toEqual([
+      "account/password/route.ts",
       "activate/route.ts",
       "admin/documents/[documentId]/attach/route.ts",
       "admin/documents/route.ts",
@@ -83,6 +84,8 @@ describe("inventario de endpoints", () => {
       "admin/documents/uploads/[documentId]/parts/[index]/route.ts",
       "admin/documents/uploads/route.ts",
       "admin/enrollments/route.ts",
+      "admin/exports/activity/route.ts",
+      "admin/exports/progress/route.ts",
       "admin/import/confirm/route.ts",
       "admin/import/preview/route.ts",
       "auth/session/route.ts",

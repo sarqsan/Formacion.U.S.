@@ -8,7 +8,8 @@ import {
 } from "@/domain/progress/reading";
 import type { CourseVersionDefinition } from "@/domain/courses/content";
 import { mandatoryTopicsOf, type PublicQuestion } from "@/server/courses/catalog";
-import { revokeEnrollment, enrollStudent } from "@/server/enrollments/service";
+import { enrollMany, revokeEnrollment, enrollStudent } from "@/server/enrollments/service";
+import type { AuditReader } from "@/server/audit/activity";
 import { loadOrInitProgress } from "@/server/learning/progress-loader";
 import { accountHistory, learnerHistory } from "@/server/learning/history";
 import {
@@ -547,6 +548,25 @@ export function demoLearners() {
 
 export async function adminEnroll(actor: Actor, uid: string, courseId: string) {
   return enrollStudent({ actor, uid, courseId }, demoDeps());
+}
+
+/**
+ * Lector del registro de actividad de la demostración: la misma colección en
+ * memoria en la que escriben deshabilitar, reemitir e importar.
+ */
+export function demoAuditReader(): AuditReader {
+  return {
+    async listRecent(limit: number) {
+      return demoState()
+        .audits.slice()
+        .sort((a, b) => String(b.at).localeCompare(String(a.at)))
+        .slice(0, limit) as Array<Record<string, unknown>>;
+    },
+  };
+}
+
+export async function adminEnrollMany(actor: Actor, courseId: string, uids: readonly string[]) {
+  return enrollMany({ actor, courseId, uids }, demoDeps());
 }
 
 export async function adminRevokeEnrollment(actor: Actor, uid: string, courseId: string) {

@@ -137,3 +137,98 @@ export async function revokeEnrollment(
     revokedBy: admin.uid,
   });
 }
+
+/**
+ * Matriculación en bloque.
+ *
+ * Motivo concreto: `/admin/matriculas` matriculaba de una en una, así que dar de
+ * alta a un curso entero eran decenas de clics con su espera entre cada uno.
+ *
+ * Propiedades:
+ *
+ *   · **Un solo `assertAdmin`** para todo el lote, y luego el mismo
+ *     `enrollStudent` de siempre para cada persona: no hay una segunda versión
+ *     de la regla de matriculación que pueda desviarse.
+ *   · **Idempotente**: quien ya estaba matriculado no cambia de fecha ni
+ *     duplica nada; se informa aparte de cuántas eran nuevas.
+ *   · **Nunca falla en silencio ni a medias sin decirlo**: si una persona
+ *     concreta falla, se recoge el motivo y se sigue con el resto. El resumen
+ *     dice exactamente qué pasó con cada una.
+ *   · **No vacía ni revoca nada**: matricular de más no quita matrículas.
+ */
+export interface BulkEnrollResult {
+  courseId: string;
+  /** Personas distintas recibidas (tras quitar huecos y repetidos). */
+  requested: number;
+  /** Se han matriculado ahora. */
+  enrolled: string[];
+  /** Ya estaban activas: no se ha tocado nada. */
+  already: string[];
+  failed: Array<{ uid: string; message: string }>;
+}
+
+/** Tope defensivo: un lote gigante no debe tumbar la función desplegada. */
+export const MAX_BULK_ENROLL = 500;
+
+export async function enrollMany(
+  input: { actor: Actor; courseId: string; uids: readonly unknown[] },
+  deps: EnrollmentDependencies,
+): Promise<BulkEnrollResult> {
+  const admin = assertAdmin(input.actor);
+  assertEnrollmentSegment(input.courseId, "courseId");
+
+  const course = await deps.catalog.getCourse(input.courseId);
+  if (!course) {
+    throw new DomainError("COURSE_NOT_FOUND", "El curso no existe.", 404);
+  }
+
+  const uids = [
+    ...new Set(
+      input.uids
+        .map((value) => (typeof value === "string" ? value.trim() : ""))
+        .filter((value) => value.length > 0),
+    ),
+  ];
+
+  if (uids.length === 0) {
+    throw new DomainError("ENROLLMENT_NOTHING_TO_DO", "No hay ninguna persona que matricular.", 400);
+  }
+  if (uids.length > MAX_BULK_ENROLL) {
+    throw new DomainError(
+      "ENROLLMENT_TOO_LARGE",
+      `Como máximo se pueden matricular ${MAX_BULK_ENROLL} personas de una vez.`,
+      400,
+    );
+  }
+
+  const result: BulkEnrollResult = {
+    courseId: input.courseId,
+    requested: uids.length,
+    enrolled: [],
+    already: [],
+    failed: [],
+  };
+
+  for (const uid of uids) {
+    const existing = await deps.enrollments.get(uid, input.courseId);
+    if (existing && isEnrollmentActive(existing)) {
+      result.already.push(uid);
+      continue;
+    }
+
+    try {
+      await enrollStudent({ actor: admin, uid, courseId: input.courseId }, deps);
+      result.enrolled.push(uid);
+    } catch (error) {
+      result.failed.push({
+        uid,
+        message:
+          error instanceof DomainError
+            ? error.message
+            : "No se ha podido matricular a esta persona.",
+      });
+    }
+  }
+
+  return result;
+}
