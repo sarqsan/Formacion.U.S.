@@ -24,6 +24,16 @@ const nextConfig: NextConfig = {
     },
   },
   poweredByHeader: false,
+  experimental: {
+    // El asistente «Crear con IA» manda el PDF del temario en **una** petición
+    // (server action). Next corta por defecto esos cuerpos en 1 MB, antes de
+    // que se ejecute nuestro código, así que un PDF de 1–4 MB fallaba con un
+    // 413 de la plataforma en lugar del aviso que da la aplicación. Se sube a
+    // 5 MB: el límite real lo pone la aplicación (4 MiB, `MAX_AI_UPLOAD_BYTES`)
+    // y Vercel (4,5 MB por petición a una función), y ninguno de los dos se
+    // relaja con esto.
+    serverActions: { bodySizeLimit: "5mb" },
+  },
   async headers() {
     return [
       {
