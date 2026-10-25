@@ -1,5 +1,22 @@
 # Estado real y qué falta para terminar
 
+> ## ✅ Hecho el 25 de octubre (dos cosas que pediste)
+>
+> 1. **Exportar a Excel.** `/admin/progreso` y `/admin/actividad` tienen el botón
+>    «Descargar en Excel (CSV)». El fichero abre bien en Excel en español: lleva
+>    BOM UTF-8 (las tildes salen bien), separador `;` y CRLF. Solo administración
+>    puede descargarlo, y una celda que empiece por `=`, `+`, `-` o `@` se
+>    neutraliza para que Excel no la ejecute como fórmula.
+> 2. **Certificados.** Quien completa un curso ve «Obtener certificado» en
+>    `/panel`; administración puede emitirlo desde `/admin/progreso`. El PDF se
+>    genera al pedirlo (A4, sin dependencias nuevas) y lleva un código que
+>    cualquiera puede comprobar en `/verificar` **sin cuenta y sin que aparezca el
+>    nombre completo** (sale enmascarado: `G***** L****, M****`).
+>
+> El certificado guarda el curso y la versión **del momento en que se cursó**:
+> republicar un curso no cambia uno ya emitido. Y pedirlo dos veces devuelve el
+> mismo documento, no un duplicado.
+
 > ## ⏰ Para mañana: la única cosa que no puedo hacer yo
 >
 > **Ejecutar las 57 pruebas de reglas.** Aquí no hay Java ni se puede descargar
@@ -21,7 +38,8 @@
 > pasa.
 
 > **Fecha de la auditoría: 24 de octubre de 2026** (P1 y la parte ejecutable de
-> P0 completados el mismo día).
+> P0 completados el mismo día). **Actualizado el 25 de octubre** con la
+> exportación a CSV y los certificados.
 > Todo lo que dice «verificado» se ha comprobado contra el repositorio o contra
 > la aplicación desplegada en `https://formacionus.vercel.app`. Lo que no se ha
 > podido comprobar se dice expresamente y **no se cuenta como hecho**.
@@ -50,10 +68,12 @@ en el código, con lo que ya existe y lo que no.
 | Lectura de PDF por páginas con matrícula | **Implementado** | Endpoints `/api/documents/...` con comprobación de matrícula y versión |
 | Administración de cuentas (deshabilitar, reactivar, reemitir código) | **Funciona** | `/admin/personas/<uid>`, con protección del último administrador |
 | **Registro de actividad visible** | **Nuevo (24-10)** | `/admin/actividad`: las operaciones sensibles se escribían en `audits` desde el principio y **no había forma de leerlas**. Lista blanca de campos, solo administración, 15 pruebas |
+| **Exportación a CSV (progreso y actividad)** | **Nuevo (25-10)** | `/admin/progreso` y `/admin/actividad`: BOM UTF-8, `;`, CRLF y fórmulas neutralizadas. 22 pruebas; probado por HTTP (200 con sesión de administración, 403 con la de alumno, 401 sin sesión) |
+| **Certificados y verificación pública** | **Nuevo (25-10)** | `/panel` → «Obtener certificado» → `/certificado/<código>` → PDF; `/verificar` comprueba un código sin sesión con el nombre enmascarado. 40 pruebas; PDF validado byte a byte |
 | Copia de seguridad cifrada | **Implementado** | `npm run backup:export` / `backup:restore`, AES-256-GCM |
 
-Cifras del último `npm run verify` (24-10): **1078 pruebas superadas, 9
-omitidas, 64 ficheros**, `tsc`, `eslint` y `next build` limpios.
+Cifras del último `npm run verify` (25-10): **1207 pruebas superadas, 9
+omitidas, 71 ficheros**, `tsc`, `eslint` y `next build` limpios.
 
 ---
 
@@ -140,13 +160,33 @@ tuya** (ver sección 4).
 
 ### P2 — Producto formativo: lo que aún no existe
 
-**7. Certificados.** No hay nada en el código: ni generación, ni plantilla, ni
-verificación por código. Si un alumno termina un curso, no obtiene documento.
+**7. Certificados — HECHO (25-10).** Documento en PDF con código verificable:
+
+- **Quién**: el propio alumnado (`/panel`, solo si el curso está completado) y
+  administración (`/admin/progreso`). El servicio **vuelve a comprobar** el
+  progreso: el botón no es la prueba, `completedAt` lo es.
+- **Qué se certifica**: la versión que se completó, aunque el curso se haya
+  republicado después. El histórico de progreso archivado también cuenta, así que
+  nadie pierde un certificado ya ganado.
+- **Código**: `sha256(uid | curso | versión)` en 20 caracteres hexadecimales. Al
+  derivarse del contenido, pedirlo dos veces **no duplica nada** (y no hace falta
+  transacción ni índice nuevo).
+- **PDF**: A4 595×842, Helvetica, generado sin bibliotecas nuevas. No lleva firma
+  digital ni manuscrita: la autenticidad se demuestra con el código.
+- **Verificación pública** (`/verificar`): sin sesión, muestra curso, versión,
+  fechas y **nombre enmascarado**. El nombre completo y el PDF exigen la sesión
+  del titular (o de administración): el código se puede reenviar.
+- **Límite honesto**: aquí no hay visor de PDF instalado, así que la maquetación
+  se ha validado por estructura (cabecera, `xref` con desplazamientos en bytes
+  correctos, texto presente) y no abriéndola en pantalla. Ábrelo tú una vez y
+  dime si quieres otro diseño.
 
 **8. Vídeos.** No existe nada. Hoy el contenido es texto y PDF.
 
-**9. Informes y exportación.** `/admin/progreso` muestra resultados en pantalla;
-no hay exportación a Excel/CSV ni informe descargable.
+**9. Informes y exportación — HECHO EN PARTE (25-10).** Progreso y actividad se
+descargan en CSV para Excel. **Sigue pendiente** un informe agregado (por curso o
+por persona, con gráficos y comparación entre cursos): hoy se exportan los datos,
+no un informe redactado.
 
 ### P2 bis — Límite del modelo: mismo apellido y mismo rol *(cerrado por decisión)*
 
@@ -171,10 +211,12 @@ pruebas de reglas ejecutadas»). La aplicación ya está desplegada con Firebase
 dobles. Nadie comprueba de forma automática que un clic real en producción
 llegue a su sitio.
 
-**13. El registro de actividad no se puede exportar ni se rota.**
-Se ven los 100 eventos más recientes (`/admin/actividad`) y se filtran por tipo,
-pero no hay descarga ni política de conservación. Es pequeño y está contenido;
-si necesitas justificar formación ante una inspección, es lo siguiente que haría.
+**13. El registro de actividad se exporta, pero no se rota (mitad hecha el 25-10).**
+Se ven los 100 eventos más recientes (`/admin/actividad`), se filtran por tipo y
+**ya se descargan en CSV** (`/api/admin/exports/activity`). Lo que falta es la
+política de conservación: no hay borrado automático ni archivo por años. Es
+pequeño y está contenido; si necesitas justificar formación ante una inspección,
+lo que falta es decidir cuánto tiempo se guarda.
 
 **14. La copia de seguridad nunca se ha ensayado contra el proyecto real.**
 `npm run rehearse:backup` existe, pero se ha ejecutado con datos sintéticos.

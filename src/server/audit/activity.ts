@@ -127,6 +127,19 @@ export function describeAuditEvent(raw: Record<string, unknown>): ActivityEntry 
         detail: `Se generó una contraseña temporal${aboutUser(targetUid)} y se cerraron sus sesiones. La contraseña no se guarda.`,
       };
 
+    case "certificate_issued": {
+      const courseTitle = text(raw.courseTitle) ?? text(raw.courseId) ?? "un curso";
+      const version = typeof raw.version === "number" ? raw.version : null;
+      return {
+        ...base,
+        title: "Certificado emitido",
+        detail:
+          `Se emitió el certificado de «${courseTitle}»` +
+          (version !== null ? ` (versión ${version})` : "") +
+          `${aboutUser(targetUid)}. La emisión es idempotente: pedirlo otra vez no crea otro.`,
+      };
+    }
+
     case "password_changed":
       return {
         ...base,

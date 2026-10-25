@@ -43,6 +43,8 @@ aplicación de cuadrantes. Ese botón **no** modifica su lógica funcional.
 | Candado de la demostración en producción | Implementado y probado: con `NODE_ENV=production`, `DEMO_MODE=1` se ignora y no hay variable de escape (`/api/health` → `"demo": false`) |
 | Publicación de reglas con pruebas obligatorias | `npm run rules:deploy` se niega a publicar si las pruebas están BLOCKED o FAILED |
 | Registro de actividad en el panel (`/admin/actividad`) | Implementado y probado: qué se hizo, quién y cuándo, solo lectura y sin secretos |
+| Exportación de progreso y actividad a CSV para Excel | Implementada y probada (BOM UTF-8, punto y coma, neutralización de fórmulas, solo administración) |
+| Certificados de aprovechamiento con verificación pública | Implementado y probado: PDF A4 sin dependencias, código derivado del contenido (idempotente) y página `/verificar` con el nombre enmascarado |
 
 ## Puesta en marcha (desarrollo)
 

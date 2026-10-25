@@ -2,10 +2,16 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getUiSession } from "@/demo/session";
 import { adminProgress } from "@/server/portal";
+import { issueCertificateAction } from "@/app/actions/certificates";
 
 export const dynamic = "force-dynamic";
 
-export default async function ProgressPage() {
+export default async function ProgressPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ certificado?: string; motivo?: string }>;
+}) {
+  const { certificado, motivo } = await searchParams;
   const session = await getUiSession();
   if (session.mode === "unconfigured") redirect("/admin");
   if (!session.actor) redirect("/login");
@@ -17,6 +23,12 @@ export default async function ProgressPage() {
 
   return (
     <div className="space-y-5">
+      {certificado === "error" ? (
+        <p className="alert alert-warn text-sm">
+          No se ha podido emitir el certificado: {motivo ?? "inténtalo de nuevo."}
+        </p>
+      ) : null}
+
       <nav className="text-xs muted">
         <Link href="/admin" className="underline">
           Administración
@@ -69,13 +81,29 @@ export default async function ProgressPage() {
                     {row.finalExamPassed ? "examen final superado" : "examen final pendiente"}
                   </p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   {row.completed ? (
                     <span className="pill pill-ok">Completado</span>
                   ) : (
                     <span className="pill pill-warn">En curso</span>
                   )}
                   <span className="badge badge-info">{row.percent}%</span>
+                  {/*
+                    Emitir a mano sirve para un caso concreto: alguien completó
+                    el curso antes de que existiera la función, o pide el
+                    documento tiempo después. No es un botón de «aprobar»: el
+                    servicio comprueba el progreso y se niega si falta algo.
+                  */}
+                  {row.completed ? (
+                    <form action={issueCertificateAction}>
+                      <input type="hidden" name="uid" value={row.uid} />
+                      <input type="hidden" name="courseId" value={row.courseId} />
+                      <input type="hidden" name="volver" value="/admin/progreso" />
+                      <button type="submit" className="btn btn-secondary btn-sm">
+                        Certificado
+                      </button>
+                    </form>
+                  ) : null}
                 </div>
               </div>
 

@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { getUiSession } from "@/demo/session";
 import { accountProfile, coursesForLearner, learnerCourseHistory } from "@/server/portal";
 import { DataUnavailable, isUnavailable } from "@/app/components/data-unavailable";
+import { issueCertificateAction } from "@/app/actions/certificates";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +15,12 @@ function formatDate(value: string | null): string {
   return new Intl.DateTimeFormat("es-ES", { dateStyle: "medium", timeZone: "UTC" }).format(date);
 }
 
-export default async function PanelPage() {
+export default async function PanelPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ certificado?: string; motivo?: string }>;
+}) {
+  const { certificado, motivo } = await searchParams;
   const session = await getUiSession();
 
   if (session.mode === "unconfigured") {
@@ -57,6 +63,12 @@ export default async function PanelPage() {
 
   return (
     <div className="space-y-6">
+      {certificado === "error" ? (
+        <p className="alert alert-warn text-sm">
+          No se ha podido emitir el certificado: {motivo ?? "inténtalo de nuevo."}
+        </p>
+      ) : null}
+
       <section className="card p-5">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
@@ -129,11 +141,26 @@ export default async function PanelPage() {
                 </p>
               </div>
 
-              <div className="mt-4 flex items-center justify-between gap-2">
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
                 <Link href={`/cursos/${course.courseId}`} className="btn btn-primary btn-sm">
                   {course.completed ? "Repasar el curso" : "Continuar"}
                 </Link>
-                {course.completed ? <span className="pill pill-ok">Completado</span> : null}
+                {course.completed ? (
+                  /*
+                    El botón solo aparece con el curso completado, pero la
+                    decisión real la toma el servicio: vuelve a leer el progreso
+                    y exige `completedAt`. Un formulario (y no un enlace) porque
+                    emite un documento: recargar la página o compartir la URL no
+                    debe crear certificados.
+                  */
+                  <form action={issueCertificateAction}>
+                    <input type="hidden" name="courseId" value={course.courseId} />
+                    <input type="hidden" name="volver" value="/panel" />
+                    <button type="submit" className="btn btn-secondary btn-sm">
+                      Obtener certificado
+                    </button>
+                  </form>
+                ) : null}
               </div>
             </article>
           ))}

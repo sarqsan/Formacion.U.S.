@@ -14,6 +14,7 @@ import { parsePeopleWorkbook } from "@/server/import/excel";
 import { buildImportPreview } from "@/server/import/service";
 import { isDemoMode } from "@/demo/session";
 import * as demo from "@/demo/service";
+import * as demoCertificates from "@/demo/certificates";
 import { definitionOf as demoDefinitionOf, demoState } from "@/demo/store";
 import * as firebase from "@/server/portal/firebase";
 
@@ -315,6 +316,43 @@ export async function accountCourseHistory(actor: Actor, uid: string) {
   return portalMode() === "demo"
     ? demo.accountCourseHistory(actor, uid)
     : firebase.accountCourseHistory(actor, uid);
+}
+
+// ---------------------------------------------------------------------------
+// Certificados
+// ---------------------------------------------------------------------------
+
+/**
+ * Emite (o recupera) el certificado de un curso completado.
+ *
+ * Mismo servicio en las dos persistencias; solo cambia el almacén. Pedirlo dos
+ * veces devuelve el mismo documento porque el código se deriva de
+ * persona + curso + versión.
+ */
+export async function issueCertificateFor(actor: Actor, input: { uid: string; courseId: string }) {
+  return portalMode() === "demo"
+    ? demoCertificates.issueCertificateFor(actor, input)
+    : firebase.issueCertificateFor(actor, input);
+}
+
+/** Certificado para verlo o descargar: el titular o administración. */
+export async function certificateRecordFor(actor: Actor, code: string) {
+  return portalMode() === "demo"
+    ? demoCertificates.certificateRecordFor(actor, code)
+    : firebase.certificateRecordFor(actor, code);
+}
+
+/**
+ * Verificación pública por código (sin sesión).
+ *
+ * No recibe actor a propósito: no hay nada que autorizar más allá de conocer el
+ * código, y lo que devuelve (curso, versión, fecha y nombre enmascarado) no
+ * identifica a nadie.
+ */
+export async function certificateVerification(code: unknown) {
+  return portalMode() === "demo"
+    ? demoCertificates.certificateVerification(code)
+    : firebase.certificateVerification(code);
 }
 
 export async function adminProgress(actor: Actor) {

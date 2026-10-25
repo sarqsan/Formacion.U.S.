@@ -17,11 +17,17 @@ import { buildImportPreview, createPerson } from "@/server/import/service";
 import {
   accountAdminDependencies,
   activityDependencies,
+  certificateDependencies,
   courseEditorDependencies,
   documentDependencies,
   documentFileDependencies,
   importDependencies,
 } from "@/server/deps";
+import {
+  certificateForDownload,
+  issueCertificate,
+  verifyCertificate,
+} from "@/server/certificates/service";
 import { listActivity } from "@/server/audit/activity";
 import {
   activationSummary,
@@ -874,6 +880,32 @@ export async function adminActivationSummary(actor: Actor, uid: string) {
 /** Últimos eventos de auditoría, ya filtrados y sin campos sensibles. */
 export async function adminActivity(actor: Actor, limit?: number) {
   return guard(() => listActivity(actor, activityDependencies(), limit ? { limit } : {}));
+}
+
+// ---------------------------------------------------------------------------
+// Certificados
+// ---------------------------------------------------------------------------
+
+/**
+ * Emite (o recupera) el certificado de una persona en un curso completado.
+ *
+ * El servicio comprueba la sesión, que se pide lo propio —o que quien pide es
+ * administración— y que el progreso tenga `completedAt`. Devolver el existente
+ * es el caso normal: el código es determinista, así que el mismo curso y la
+ * misma versión dan siempre el mismo documento.
+ */
+export async function issueCertificateFor(actor: Actor, input: { uid: string; courseId: string }) {
+  return issueCertificate({ actor, uid: input.uid, courseId: input.courseId }, certificateDependencies());
+}
+
+/** Certificado por código para verlo o descargarlo; exige ser el titular o admin. */
+export async function certificateRecordFor(actor: Actor, code: string) {
+  return certificateForDownload({ actor, code }, certificateDependencies());
+}
+
+/** Verificación pública por código: sin sesión y con el nombre enmascarado. */
+export async function certificateVerification(code: unknown) {
+  return verifyCertificate(code, certificateDependencies());
 }
 
 export async function adminResetPassword(actor: Actor, uid: string) {

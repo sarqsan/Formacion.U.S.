@@ -10,6 +10,12 @@ import type { AccountAdminDependencies } from "@/server/accounts/service";
 import type { PasswordChangeDependencies } from "@/server/accounts/password-service";
 import type { ActivityDependencies } from "@/server/audit/activity";
 import { FirestoreAuditReader } from "@/server/firebase/audit-store";
+import {
+  FirestoreCertificateAudit,
+  FirestoreCertificatePeople,
+  FirestoreCertificateStore,
+} from "@/server/firebase/certificate-store";
+import type { CertificateDependencies } from "@/server/certificates/service";
 import { verifyAccountPassword } from "@/server/auth/identity-toolkit";
 import { FirestoreEnrollmentStore } from "@/server/firebase/enrollment-store";
 import { FirestoreLearningStore } from "@/server/firebase/learning-store";
@@ -140,6 +146,21 @@ export function documentFileDependencies(): DocumentFileDependencies {
  */
 export function courseEditorDependencies(): CourseEditorDependencies {
   return { store: new FirestoreCourseEditorStore() };
+}
+
+/**
+ * Certificados: el almacén propio (`certificates/{code}`) y, prestados, el
+ * catálogo y el progreso. El servicio **vuelve a comprobar** que el curso está
+ * completado: no se fía de que la pantalla solo enseñe el botón cuando toca.
+ */
+export function certificateDependencies(): CertificateDependencies {
+  return {
+    certificates: new FirestoreCertificateStore(),
+    catalog: new FirestoreCourseCatalogStore(),
+    learning: new FirestoreLearningStore(),
+    people: new FirestoreCertificatePeople(),
+    audit: new FirestoreCertificateAudit(),
+  };
 }
 
 export function enrollmentDependencies(): EnrollmentDependencies {
