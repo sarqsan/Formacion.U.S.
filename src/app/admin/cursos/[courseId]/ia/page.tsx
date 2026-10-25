@@ -203,6 +203,14 @@ export default async function AiCourseWizardPage({
         </p>
       ) : null}
 
+      {status.provider === "gemini" && !status.diagnostics.keys.groq ? (
+        <p className="alert alert-warn text-sm">
+          <strong>Falta GROQ_API_KEY en el servidor</strong> y por eso se usa Google Gemini. Añade
+          la variable en Vercel → Settings → Environment Variables (entorno <strong>Production</strong>)
+          y vuelve a desplegar. Detalle: <code>docs/IA-Y-DATOS.md</code> §6.
+        </p>
+      ) : null}
+
       <form action={checkAiConnectionAction} className="flex flex-wrap items-center gap-2">
         <input type="hidden" name="returnTo" value={`${base}?v=${view.version}&paso=${currentStep}`} />
         <button type="submit" className="btn btn-secondary btn-sm">
