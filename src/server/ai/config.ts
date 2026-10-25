@@ -88,14 +88,98 @@ export function requireGemini(env: GeminiEnv = process.env): GeminiSettings & { 
   return { ...settings, apiKey: settings.apiKey };
 }
 
+// ---------------------------------------------------------------------------
+// GROQ (alternativa a Gemini)
+// ---------------------------------------------------------------------------
+
+/**
+ * PROVEEDOR ACTIVO
+ * ================
+ *
+ * `AI_PROVIDER` manda siempre. Si no está puesta, se elige **el que tenga
+ * clave**: Groq si existe `GROQ_API_KEY` (y no hay clave de Gemini), Gemini en
+ * cualquier otro caso. Así, añadir la variable de Groq en el despliegue cambia
+ * de proveedor sin tocar código, y volver a Gemini es tan simple como poner
+ * `AI_PROVIDER=gemini`.
+ */
+export type AiProviderId = "gemini" | "groq";
+
+export function aiProvider(env: GeminiEnv = process.env): AiProviderId {
+  const declared = clean(env.AI_PROVIDER)?.toLowerCase();
+  if (declared === "groq" || declared === "gemini") return declared;
+  if (clean(env.GROQ_API_KEY) && !clean(env.GEMINI_API_KEY)) return "groq";
+  return "gemini";
+}
+
+export function aiProviderLabel(provider: AiProviderId): string {
+  return provider === "groq" ? "Groq" : "Google Gemini";
+}
+
+export interface GroqSettings {
+  apiKey: string | null;
+  model: string;
+  /** Raíz compatible con OpenAI (`/openai/v1`), sin barra final. */
+  apiBase: string;
+  timeoutMs: number;
+  /** Tokens por minuto del plan contratado; el tramo gratuito da 8 000. */
+  tokensPerMinute: number;
+}
+
+/** El modelo abierto grande de Groq: el único gratuito con calidad suficiente. */
+export const DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b";
+export const DEFAULT_GROQ_API_BASE = "https://api.groq.com/openai/v1";
+
+/** Límite publicado del tramo gratuito (`openai/gpt-oss-120b`). */
+export const DEFAULT_GROQ_TOKENS_PER_MINUTE = 8_000;
+
+export function groqSettings(env: GeminiEnv = process.env): GroqSettings {
+  const model = clean(env.GROQ_MODEL) ?? DEFAULT_GROQ_MODEL;
+  const apiBase = (clean(env.GROQ_API_BASE) ?? DEFAULT_GROQ_API_BASE).replace(/\/+$/, "");
+
+  const rawTimeout = Number(clean(env.GROQ_TIMEOUT_MS) ?? "90000");
+  const timeoutMs = Number.isFinite(rawTimeout)
+    ? Math.min(Math.max(Math.round(rawTimeout), 10_000), 300_000)
+    : 90_000;
+
+  const rawTpm = Number(clean(env.GROQ_TPM) ?? String(DEFAULT_GROQ_TOKENS_PER_MINUTE));
+  // Nunca por debajo de 1 000 (haría imposible cualquier petición) ni por
+  // encima de 1 000 000 (dejaría de espaciar y chocaría con el límite real).
+  const tokensPerMinute = Number.isFinite(rawTpm)
+    ? Math.min(Math.max(Math.round(rawTpm), 1_000), 1_000_000)
+    : DEFAULT_GROQ_TOKENS_PER_MINUTE;
+
+  return { apiKey: clean(env.GROQ_API_KEY), model, apiBase, timeoutMs, tokensPerMinute };
+}
+
+export function isGroqConfigured(env: GeminiEnv = process.env): boolean {
+  return groqSettings(env).apiKey !== null;
+}
+
+/** Falla cerrado, con un mensaje que el administrador pueda accionar. */
+export function requireGroq(env: GeminiEnv = process.env): GroqSettings & { apiKey: string } {
+  const settings = groqSettings(env);
+  if (!settings.apiKey) {
+    throw new DomainError(
+      "AI_NOT_CONFIGURED",
+      "La creación con IA está configurada para Groq, pero falta GROQ_API_KEY en el servidor. Añádela en el entorno (console.groq.com) y vuelve a intentarlo.",
+      503,
+    );
+  }
+  return { ...settings, apiKey: settings.apiKey };
+}
+
 /**
  * La clave nunca debe aparecer en un mensaje de error ni en un log. Esta
  * función se aplica a todo texto antes de lanzarlo o registrarlo.
  */
 export function redactSecrets(text: string, env: GeminiEnv = process.env): string {
-  const key = clean(env.GEMINI_API_KEY);
   let out = text;
-  if (key) out = out.split(key).join("[clave oculta]");
-  // Por si la clave llegase desde otra variable del proceso.
-  return out.replace(/AIza[0-9A-Za-z_-]{20,}/g, "[clave oculta]");
+  for (const key of [clean(env.GEMINI_API_KEY), clean(env.GROQ_API_KEY)]) {
+    if (key) out = out.split(key).join("[clave oculta]");
+  }
+  // Por si la clave llegase desde otra variable del proceso: las de Google
+  // empiezan por `AIza` y las de Groq por `gsk_`.
+  return out
+    .replace(/AIza[0-9A-Za-z_-]{20,}/g, "[clave oculta]")
+    .replace(/gsk_[0-9A-Za-z]{20,}/g, "[clave oculta]");
 }

@@ -10,7 +10,22 @@ import {
   type AiTopicPlan,
 } from "@/domain/courses/ai-plan";
 import type { StudyScreen } from "@/domain/courses/screens";
-import { generateJson, type GeminiDeps, type GeminiRequest } from "@/server/ai/gemini";
+import { DomainError } from "@/domain/text";
+import type { GeminiPart, GeminiRequest } from "@/server/ai/gemini";
+import { createPacer } from "@/server/ai/pacing";
+import {
+  activeProvider,
+  generateJson,
+  type AiDeps,
+} from "@/server/ai/provider";
+import { groqSettings } from "@/server/ai/config";
+import {
+  approximateTokens,
+  chunkPages,
+  renderPages,
+  selectPages,
+  type PdfTextPage,
+} from "@/server/ai/text";
 
 /**
  * GENERACIÓN DE CONTENIDO CON GEMINI
@@ -32,6 +47,53 @@ export interface PdfSource {
   bytes: Uint8Array;
   /** Páginas declaradas del documento; `null` si no se conocen. */
   pageCount: number | null;
+  /**
+   * Texto del PDF por páginas, ya extraído.
+   *
+   * Solo se rellena cuando el proveedor activo **no** sabe leer un PDF (Groq):
+   * Gemini recibe los bytes y hace su propia lectura. Si falta con Groq, el
+   * flujo falla con un mensaje claro en vez de enviar un documento que el otro
+   * extremo no entiende.
+   */
+  textPages?: readonly PdfTextPage[];
+}
+
+/**
+ * Los `parts` que se envían al modelo, según quién responda.
+ *
+ *   · Gemini: el PDF entero, tal cual (lo lee él).
+ *   · Groq: el **texto** de las páginas que hagan falta a esta tarea, con su
+ *     número delante. Mandar solo las páginas del tema no es un ahorro menor:
+ *     gasta menos cuota y centra la respuesta.
+ */
+function sourceParts(
+  pdf: PdfSource,
+  pages: readonly number[] | null,
+  deps: AiDeps,
+): GeminiPart[] {
+  if (activeProvider(deps.env ?? process.env) === "gemini") {
+    return [{ pdf: { bytes: pdf.bytes } }];
+  }
+
+  const textPages = pdf.textPages;
+  if (!textPages || textPages.length === 0) {
+    throw new DomainError(
+      "AI_TEXT_NOT_EXTRACTED",
+      "No hay texto extraído del PDF y el proveedor configurado no puede leer el documento directamente. Vuelve a intentarlo; si se repite, avisa a quien mantiene la aplicación.",
+      500,
+    );
+  }
+
+  const selected = pages && pages.length > 0 ? selectPages(textPages, pages) : textPages;
+  if (selected.every((page) => page.text === "")) {
+    throw new DomainError(
+      "PDF_WITHOUT_TEXT",
+      "Las páginas de este tema no tienen texto (puede que sean imágenes o un escaneo). El proveedor de IA configurado solo lee texto.",
+      422,
+    );
+  }
+
+  return [{ text: renderPages(selected) }];
 }
 
 export interface AiCourseContext {
@@ -69,36 +131,221 @@ function pageLine(pdf: PdfSource): string {
  * `existingIds` evita que la propuesta reutilice un identificador ya usado en
  * el curso (por ejemplo, el tema que guarda el propio PDF).
  */
+export function topicsPrompt(context: AiCourseContext, range?: { from: number; to: number }): string {
+  return [
+    courseLine(context),
+    pageLine(context.pdf),
+    range
+      ? `Estas páginas son SOLO el tramo ${range.from}–${range.to} del documento: propone únicamente los temas que aparecen en este tramo.`
+      : "",
+    "",
+    "Tarea: divide el documento en temas de estudio.",
+    `- Entre ${AI_LIMITS.minTopics} y ${range ? 5 : AI_LIMITS.maxTopics} temas, en el orden en que aparecen en el documento.`,
+    "- Cada tema debe existir de verdad en el documento: usa los títulos y secciones que aparecen.",
+    "- Indica en «pages» las páginas del PDF en las que está ese tema. Si un tema ocupa un rango, incluye las páginas del rango.",
+    "- «summary»: una o dos frases sobre lo que cubre el tema.",
+    "- Si hay partes del documento que no encajan en ningún tema (índice, anexos, portada), no las conviertas en tema: menciónalas en «notes».",
+    "- No repitas títulos ni inventes temas que el documento no tenga.",
+  ]
+    .filter((line) => line !== "")
+    .join("\n");
+}
+
+interface RawTopic {
+  title: string;
+  pages: number[];
+  summary: string | null;
+}
+
+/** Lee los temas de una respuesta sin fiarse: lo inválido se descarta aquí. */
+function readTopics(data: unknown): RawTopic[] {
+  const root = (data ?? {}) as { topics?: unknown };
+  if (!Array.isArray(root.topics)) return [];
+  const out: RawTopic[] = [];
+  for (const item of root.topics) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as { title?: unknown; pages?: unknown; summary?: unknown };
+    const title = typeof record.title === "string" ? record.title.trim() : "";
+    if (title === "") continue;
+    const pages = Array.isArray(record.pages)
+      ? record.pages.filter((page): page is number => typeof page === "number" && Number.isFinite(page))
+      : [];
+    out.push({
+      title,
+      pages: [...new Set(pages)].sort((a, b) => a - b),
+      summary: typeof record.summary === "string" ? record.summary : null,
+    });
+  }
+  return out;
+}
+
+function topicKey(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/^[0-9]+[.)]\s*/, "")
+    .replace(/[^a-z0-9áéíóúñü ]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Une los temas de varios tramos.
+ *
+ * El mismo tema puede aparecer en dos tandas si ocupa el final de una y el
+ * principio de la siguiente: se queda uno, con las páginas sumadas. El orden es
+ * el del documento (primera página citada), no el de llegada.
+ */
+function mergeTopics(all: readonly RawTopic[]): RawTopic[] {
+  const byTitle = new Map<string, RawTopic>();
+  for (const topic of all) {
+    const key = topicKey(topic.title);
+    const existing = byTitle.get(key);
+    if (existing) {
+      existing.pages = [...new Set([...existing.pages, ...topic.pages])].sort((a, b) => a - b);
+      existing.summary = existing.summary ?? topic.summary;
+    } else {
+      byTitle.set(key, { ...topic, pages: [...topic.pages] });
+    }
+  }
+  return [...byTitle.values()].sort((a, b) => (a.pages[0] ?? 99_999) - (b.pages[0] ?? 99_999));
+}
+
+/**
+ * Reparto en temas cuando hay que mandar **texto troceado** (Groq).
+ *
+ * Cada tramo se pregunta por separado y se unen al final. No se puede mandar el
+ * documento entero porque el tramo gratuito limita los tokens por minuto; el
+ * espaciado lo lleva `pacer`, que espera lo justo entre llamada y llamada.
+ */
+async function proposeTopicsChunked(
+  context: AiCourseContext,
+  deps: AiDeps,
+): Promise<{ topics: RawTopic[]; notes?: string }> {
+  const textPages = context.pdf.textPages;
+  if (!textPages || textPages.length === 0) {
+    throw new DomainError(
+      "AI_TEXT_NOT_EXTRACTED",
+      "No hay texto extraído del PDF y el proveedor configurado no puede leer el documento. Vuelve a intentarlo.",
+      500,
+    );
+  }
+
+  const env = deps.env ?? process.env;
+  const tokensPerMinute = (deps.groqSettings ?? groqSettings(env)).tokensPerMinute;
+  const outputBudget = 2048;
+  const overhead = 900;
+  const inputBudget = Math.max(600, Math.floor(tokensPerMinute * 0.85) - outputBudget - overhead);
+  const chunks = chunkPages(textPages, inputBudget * 4);
+
+  // Tope de tiempo razonable: una función de Vercel corta a los 300 s. Si el
+  // espaciado necesario se acerca a ese límite, es mejor decirlo antes de
+  // empezar que dejar al administrador mirando una pantalla que se cae.
+  const totalTokens = chunks.reduce(
+    (total, chunk) => total + approximateTokens(renderPages(chunk)) + outputBudget + overhead,
+    0,
+  );
+  const estimatedSeconds = (totalTokens / tokensPerMinute) * 60;
+  if (estimatedSeconds > 200) {
+    throw new DomainError(
+      "AI_DOCUMENT_TOO_LONG",
+      `El temario es muy largo para el plan gratuito del proveedor actual: calcula unos ${Math.round(
+        estimatedSeconds / 60,
+      )} minutos solo para proponer los temas, y la plataforma corta a los 5. Divide el PDF en partes más pequeñas (por ejemplo, por bloques de temas) o cambia a un proveedor con más cuota.`,
+      413,
+    );
+  }
+
+  const pacer = createPacer({
+    tokensPerMinute,
+    ...(deps.nowMs ? { now: deps.nowMs } : {}),
+    ...(deps.sleep ? { sleep: deps.sleep } : {}),
+  });
+
+  const collected: RawTopic[] = [];
+  const notes: string[] = [];
+
+  for (const chunk of chunks) {
+    const from = chunk[0].page;
+    const to = chunk[chunk.length - 1].page;
+    const prompt = topicsPrompt(
+      context,
+      chunks.length > 1 ? { from, to } : undefined,
+    );
+    const text = renderPages(chunk);
+
+    const estimate =
+      approximateTokens(prompt) + approximateTokens(BASE_RULES) + approximateTokens(text) + outputBudget;
+
+    await pacer.wait(estimate);
+
+    const result = await generateJson(
+      {
+        instruction: BASE_RULES,
+        prompt,
+        parts: [{ text }],
+        schema: TOPICS_SCHEMA,
+        temperature: 0.1,
+        maxOutputTokens: outputBudget,
+      },
+      deps,
+    );
+
+    const used = (result.usage.promptTokens ?? 0) + (result.usage.outputTokens ?? 0);
+    pacer.record(used > 0 ? used : estimate);
+
+    collected.push(...readTopics(result.data));
+    const data = result.data as { notes?: unknown };
+    if (typeof data.notes === "string" && data.notes.trim() !== "") notes.push(data.notes.trim());
+  }
+
+  const merged = mergeTopics(collected);
+  if (merged.length === 0) {
+    throw new DomainError(
+      "AI_INVALID_OUTPUT",
+      "La IA no ha encontrado ningún tema en el documento. Comprueba que el PDF tiene texto seleccionable y vuelve a intentarlo.",
+      422,
+    );
+  }
+  if (merged.length > AI_LIMITS.maxTopics) {
+    throw new DomainError(
+      "AI_INVALID_OUTPUT",
+      `La IA ha propuesto ${merged.length} temas y el máximo son ${AI_LIMITS.maxTopics}. Divide el temario en documentos más pequeños o agrupa temas a mano en el editor.`,
+      422,
+    );
+  }
+
+  return {
+    topics: merged,
+    ...(notes.length > 0 ? { notes: notes.join(" ").slice(0, AI_LIMITS.summaryChars) } : {}),
+  };
+}
+
 export async function proposeTopics(
   context: AiCourseContext,
   options: { existingIds?: readonly string[] } = {},
-  deps: GeminiDeps = {},
+  deps: AiDeps = {},
 ): Promise<AiTopicPlan> {
+  const parseOptions = {
+    pageCount: context.pdf.pageCount,
+    existingIds: options.existingIds ?? [],
+  };
+
+  if (activeProvider(deps.env ?? process.env) === "groq") {
+    const plan = await proposeTopicsChunked(context, deps);
+    return parseTopicPlan(plan, parseOptions);
+  }
+
   const request: GeminiRequest = {
     instruction: BASE_RULES,
-    prompt: [
-      courseLine(context),
-      pageLine(context.pdf),
-      "",
-      "Tarea: divide el documento en temas de estudio.",
-      `- Entre ${AI_LIMITS.minTopics} y ${AI_LIMITS.maxTopics} temas, en el orden en que aparecen en el documento.`,
-      "- Cada tema debe existir de verdad en el documento: usa los títulos y secciones que aparecen.",
-      "- Indica en «pages» las páginas del PDF en las que está ese tema. Si un tema ocupa un rango, incluye las páginas del rango.",
-      "- «summary»: una o dos frases sobre lo que cubre el tema.",
-      "- Si hay partes del documento que no encajan en ningún tema (índice, anexos, portada), no las conviertas en tema: menciónalas en «notes».",
-      "- No repitas títulos ni inventes temas que el documento no tenga.",
-    ].join("\n"),
-    parts: [{ pdf: { bytes: context.pdf.bytes } }],
+    prompt: topicsPrompt(context),
+    parts: sourceParts(context.pdf, null, deps),
     schema: TOPICS_SCHEMA,
     temperature: 0.1,
     maxOutputTokens: 4096,
   };
 
   const result = await generateJson(request, deps);
-  return parseTopicPlan(result.data, {
-    pageCount: context.pdf.pageCount,
-    existingIds: options.existingIds ?? [],
-  });
+  return parseTopicPlan(result.data, parseOptions);
 }
 
 // ---------------------------------------------------------------------------
@@ -118,6 +365,7 @@ export function screensRequest(
   input: TopicMaterialInput,
   pdf: PdfSource,
   requested?: number,
+  deps: AiDeps = {},
 ): GeminiRequest {
   const focus =
     input.pages.length > 0
@@ -145,7 +393,7 @@ export function screensRequest(
     ]
       .filter((line) => line !== "")
       .join("\n"),
-    parts: [{ pdf: { bytes: pdf.bytes } }],
+    parts: sourceParts(pdf, input.pages, deps),
     schema: SCREENS_SCHEMA,
     temperature: 0.25,
     maxOutputTokens: 8192,
@@ -155,9 +403,12 @@ export function screensRequest(
 export async function proposeScreens(
   input: TopicMaterialInput,
   pdf: PdfSource,
-  deps: GeminiDeps & { requestedScreens?: number } = {},
+  deps: AiDeps & { requestedScreens?: number } = {},
 ): Promise<StudyScreen[]> {
-  const result = await generateJson(screensRequest(input, pdf, deps.requestedScreens), deps);
+  const result = await generateJson(
+    screensRequest(input, pdf, deps.requestedScreens, deps),
+    deps,
+  );
   return parseScreens(result.data, { pageCount: pdf.pageCount });
 }
 
@@ -177,7 +428,11 @@ export interface QuizMaterialInput {
   pages?: readonly number[];
 }
 
-export function quizRequest(input: QuizMaterialInput, pdf: PdfSource): GeminiRequest {
+export function quizRequest(
+  input: QuizMaterialInput,
+  pdf: PdfSource,
+  deps: AiDeps = {},
+): GeminiRequest {
   const count = Math.min(Math.max(Math.round(input.questionCount), 1), AI_LIMITS.maxQuestions);
   const typeRule = input.allowMultiple
     ? "Mezcla preguntas de respuesta única («single_choice», exactamente una correcta) y de respuesta múltiple («multi_choice», dos o más correctas) cuando tenga sentido."
@@ -205,7 +460,12 @@ export function quizRequest(input: QuizMaterialInput, pdf: PdfSource): GeminiReq
     ]
       .filter((line) => line !== "")
       .join("\n"),
-    parts: [{ pdf: { bytes: pdf.bytes } }],
+    // Examen final: el material ya va en el enunciado, así que con texto no
+    // hace falta repetir el documento entero (y en el tramo gratuito no cabría).
+    parts:
+      activeProvider(deps.env ?? process.env) === "groq" && (!input.pages || input.pages.length === 0)
+        ? []
+        : sourceParts(pdf, input.pages ?? null, deps),
     schema: QUIZ_SCHEMA,
     temperature: 0.3,
     maxOutputTokens: 8192,
@@ -215,9 +475,9 @@ export function quizRequest(input: QuizMaterialInput, pdf: PdfSource): GeminiReq
 export async function proposeQuiz(
   input: QuizMaterialInput,
   pdf: PdfSource,
-  deps: GeminiDeps = {},
+  deps: AiDeps = {},
 ): Promise<QuizQuestionDefinition[]> {
-  const result = await generateJson(quizRequest(input, pdf), deps);
+  const result = await generateJson(quizRequest(input, pdf, deps), deps);
   return parseGeneratedQuiz(result.data, { questionCount: input.questionCount }).questions;
 }
 

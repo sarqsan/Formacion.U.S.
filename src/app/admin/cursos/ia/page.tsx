@@ -66,12 +66,12 @@ export default async function AiCoursePage({
       </div>
 
       {/* ---------------------------------------------------------------- */}
-      {/* Estado de la conexión con Gemini                                  */}
+      {/* Estado de la conexión con el proveedor de IA                       */}
       {/* ---------------------------------------------------------------- */}
       <section className="card p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h2 className="text-sm font-semibold">Conexión con Gemini</h2>
+            <h2 className="text-sm font-semibold">Conexión con {status.providerLabel}</h2>
             <p className="muted mt-1 text-xs leading-relaxed">
               La clave vive solo en el servidor. Aquí nunca se muestra, ni completa ni en parte.
             </p>
@@ -127,6 +127,20 @@ export default async function AiCoursePage({
           <p className="muted mt-1 text-xs leading-relaxed">
             El PDF se guarda con las comprobaciones de siempre (firma, tamaño, páginas y huella
             SHA-256). Nada de lo que subas aquí lo ve el alumnado hasta que publiques.
+          </p>
+          {/*
+            Aviso de tratamiento: el temario sale de la aplicación para generar el
+            curso. Se dice aquí, antes de subir el fichero, no en una política que
+            nadie lee. Ver `docs/IA-Y-DATOS.md`.
+          */}
+          <p className="alert alert-warn mt-2 text-xs leading-relaxed">
+            <strong>El temario se envía a {status.providerLabel}</strong> para separarlo en temas y
+            redactar el curso; no se publica en ningún sitio.{" "}
+            {status.provider === "groq"
+              ? "El acuerdo de servicio de Groq prohíbe usar lo que se le envía para entrenar modelos."
+              : "Con la cuota gratuita de Google, el contenido sí se usa para mejorar sus productos y puede leerlo un revisor; con facturación activa, no."}{" "}
+            No subas aquí documentos con datos personales. Detalle:{" "}
+            <code>docs/IA-Y-DATOS.md</code>.
           </p>
         </div>
 

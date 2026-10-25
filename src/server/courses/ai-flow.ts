@@ -26,6 +26,8 @@ import { readDraftDocumentFile } from "@/server/documents/draft-file";
 import { uploadPdfDocument, type UploadDependencies } from "@/server/documents/service";
 import type { PdfDocumentStore } from "@/server/documents/store";
 import type { GeminiDeps } from "@/server/ai/gemini";
+import { activeProvider } from "@/server/ai/provider";
+import { extractPdfText } from "@/server/ai/text";
 import { assertPageCountDeclared, assertPdfHeader } from "@/domain/storage/pdf-upload";
 import { MAX_AI_UPLOAD_BYTES } from "@/server/ai/config";
 
@@ -245,8 +247,20 @@ async function loadDraft(input: {
     { documents: input.deps.documents, catalog: input.deps.catalog },
   );
 
+  // El proveedor activo decide **cuándo** se lee el PDF. Gemini lo recibe tal
+  // cual y lo interpreta; Groq solo entiende texto, así que aquí se extrae una
+  // vez, página a página, y se arrastra en `PdfSource` al resto del flujo.
+  const textPages =
+    activeProvider(input.deps.gemini?.env ?? process.env) === "groq"
+      ? (await extractPdfText(file.bytes)).pages
+      : undefined;
+
   return {
-    pdf: { bytes: file.bytes, pageCount: file.pageCount || sourceDocument.pageCount || null },
+    pdf: {
+      bytes: file.bytes,
+      pageCount: file.pageCount || sourceDocument.pageCount || null,
+      ...(textPages ? { textPages } : {}),
+    },
     documentId: file.documentId,
     title: file.title,
     courseTitle: definition.title,
