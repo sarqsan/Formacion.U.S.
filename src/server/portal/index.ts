@@ -22,7 +22,10 @@ import {
   generateFinalExam as generateFinalExamFlow,
   generateTopicQuiz as generateTopicQuizFlow,
   generateTopicScreens as generateTopicScreensFlow,
+  planDraftTopicBatches as planDraftTopicBatchesFlow,
+  proposeDraftTopicBatch as proposeDraftTopicBatchFlow,
   proposeDraftTopics as proposeDraftTopicsFlow,
+  saveProposedTopics as saveProposedTopicsFlow,
   startAiCourse as startAiCourseFlow,
   type ScreensGenerationResult,
   type QuizGenerationResult,
@@ -30,6 +33,7 @@ import {
   type TopicProposalResult,
 } from "@/server/courses/ai-flow";
 import { geminiStatus, type GeminiStatus } from "@/server/ai/status";
+import type { TopicBatchPlanResult, TopicBatchResult } from "@/server/courses/ai-flow";
 import { isDemoMode } from "@/demo/session";
 import * as demo from "@/demo/service";
 import * as demoCertificates from "@/demo/certificates";
@@ -231,6 +235,43 @@ export async function aiProposeTopics(
 ): Promise<TopicProposalResult> {
   assertRealStore("Proponer temas con IA");
   return proposeDraftTopicsFlow({ actor, ...input }, aiDependencies());
+}
+
+/**
+ * Temas por tandas: el camino para temarios de **cualquier tamaño**.
+ *
+ * Tres pasos, cada uno una petición corta: planificar las tandas, pedir una
+ * tanda y guardar el plan completo. Así ninguna función se acerca al corte de
+ * 300 s de Vercel y el navegador puede enseñar el avance real.
+ */
+export async function aiTopicBatchPlan(
+  actor: Actor,
+  input: { courseId: string; version: number },
+): Promise<TopicBatchPlanResult> {
+  assertRealStore("Proponer temas con IA");
+  return planDraftTopicBatchesFlow({ actor, ...input }, aiDependencies());
+}
+
+export async function aiProposeTopicBatch(
+  actor: Actor,
+  input: { courseId: string; version: number; from: number; to: number },
+): Promise<TopicBatchResult> {
+  assertRealStore("Proponer temas con IA");
+  return proposeDraftTopicBatchFlow({ actor, ...input }, aiDependencies());
+}
+
+export async function aiSaveProposedTopics(
+  actor: Actor,
+  input: {
+    courseId: string;
+    version: number;
+    expectedRevision: number;
+    topics: unknown;
+    notes?: string | null;
+  },
+): Promise<TopicProposalResult> {
+  assertRealStore("Proponer temas con IA");
+  return saveProposedTopicsFlow({ actor, ...input }, aiDependencies());
 }
 
 export async function aiGenerateScreens(

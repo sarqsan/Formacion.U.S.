@@ -478,3 +478,75 @@ describe("pantallas y cuestionarios con texto", () => {
     expect(withGemini.parts?.[0]?.pdf).toBeDefined();
   });
 });
+
+/**
+ * CUÁNTO TEMARIO CABE EN UNA PASADA
+ * =================================
+ *
+ * El plan gratuito de Groq limita a 8 000 tokens por minuto y una función de
+ * Vercel corta a los 300 s, así que el límite real no es el tamaño del fichero
+ * sino la cantidad de texto. Estas pruebas fijan el comportamiento que se
+ * promete en la documentación: un temario normal de ~30 páginas entra; uno de
+ * 120 páginas se rechaza **antes de empezar** y con un mensaje accionable.
+ */
+describe("tamaño que cabe en una pasada", () => {
+  function pdfOf(pages: number, charsPerPage: number) {
+    return {
+      bytes: new Uint8Array([0x25, 0x50, 0x44, 0x46]),
+      pageCount: pages,
+      textPages: Array.from({ length: pages }, (_, index) => ({
+        page: index + 1,
+        text: `Contenido de la página ${index + 1}. `.repeat(Math.ceil(charsPerPage / 30)),
+      })),
+    };
+  }
+
+  it("un temario de 30 páginas se procesa (2-3 tandas)", async () => {
+    let calls = 0;
+    const fetchImpl: FetchLike = async () => {
+      calls += 1;
+      return {
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify(
+            completion(
+              JSON.stringify({
+                topics: [{ title: `Tema ${calls}`, pages: [calls, calls + 1], summary: null }],
+              }),
+            ),
+          ),
+      };
+    };
+
+    const plan = await proposeTopics(
+      { title: "Curso", description: null, pdf: pdfOf(30, 2_500) },
+      {},
+      groqDeps(fetchImpl),
+    );
+
+    expect(calls).toBeGreaterThan(1);
+    expect(plan.topics.length).toBeGreaterThan(0);
+  });
+
+  it("un temario de 120 páginas se rechaza antes de llamar a la IA", async () => {
+    let calls = 0;
+    const fetchImpl: FetchLike = async () => {
+      calls += 1;
+      throw new Error("no debería llamarse");
+    };
+
+    const error = await failure(
+      proposeTopics(
+        { title: "Curso", description: null, pdf: pdfOf(120, 2_500) },
+        {},
+        groqDeps(fetchImpl),
+      ),
+    );
+
+    expect(error.code).toBe("AI_DOCUMENT_TOO_LONG");
+    expect(error.status).toBe(413);
+    expect(error.message).toMatch(/Divide el PDF/);
+    expect(calls).toBe(0);
+  });
+});

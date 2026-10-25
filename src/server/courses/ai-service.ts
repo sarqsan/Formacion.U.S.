@@ -12,6 +12,7 @@ import {
 import type { StudyScreen } from "@/domain/courses/screens";
 import { DomainError } from "@/domain/text";
 import type { GeminiPart, GeminiRequest } from "@/server/ai/gemini";
+import { TOPIC_OUTPUT_TOKENS } from "@/server/ai/batches";
 import { createPacer } from "@/server/ai/pacing";
 import {
   activeProvider,
@@ -151,14 +152,14 @@ export function topicsPrompt(context: AiCourseContext, range?: { from: number; t
     .join("\n");
 }
 
-interface RawTopic {
+export interface RawTopic {
   title: string;
   pages: number[];
   summary: string | null;
 }
 
 /** Lee los temas de una respuesta sin fiarse: lo inválido se descarta aquí. */
-function readTopics(data: unknown): RawTopic[] {
+export function readTopics(data: unknown): RawTopic[] {
   const root = (data ?? {}) as { topics?: unknown };
   if (!Array.isArray(root.topics)) return [];
   const out: RawTopic[] = [];
@@ -195,7 +196,7 @@ function topicKey(title: string): string {
  * principio de la siguiente: se queda uno, con las páginas sumadas. El orden es
  * el del documento (primera página citada), no el de llegada.
  */
-function mergeTopics(all: readonly RawTopic[]): RawTopic[] {
+export function mergeTopics(all: readonly RawTopic[]): RawTopic[] {
   const byTitle = new Map<string, RawTopic>();
   for (const topic of all) {
     const key = topicKey(topic.title);
@@ -232,25 +233,39 @@ async function proposeTopicsChunked(
 
   const env = deps.env ?? process.env;
   const tokensPerMinute = (deps.groqSettings ?? groqSettings(env)).tokensPerMinute;
-  const outputBudget = 2048;
-  const overhead = 900;
-  const inputBudget = Math.max(600, Math.floor(tokensPerMinute * 0.85) - outputBudget - overhead);
+
+  /*
+   * Presupuesto de una tanda.
+   *
+   * La lista de temas de un temario real ocupa bastante menos de lo que se
+   * reservaba antes (2 048 tokens de salida y 900 de margen por tanda): eso
+   * inflaba la estimación, y con ella el tiempo calculado, hasta rechazar
+   * documentos de 30 páginas que sí cabían. Ahora se reserva lo que de verdad
+   * ocupa un JSON de temas (1 024) y un margen más ajustado (400), y se usa el
+   * 95 % del minuto en lugar del 85 %.
+   */
+  const outputBudget = 1_024;
+  const overhead = 400;
+  const inputBudget = Math.max(600, Math.floor(tokensPerMinute * 0.95) - outputBudget - overhead);
   const chunks = chunkPages(textPages, inputBudget * 4);
 
-  // Tope de tiempo razonable: una función de Vercel corta a los 300 s. Si el
-  // espaciado necesario se acerca a ese límite, es mejor decirlo antes de
-  // empezar que dejar al administrador mirando una pantalla que se cae.
+  /*
+   * Tope de tiempo. Una función de Vercel corta a los 300 s, así que se deja un
+   * margen de 40 s para la subida, la extracción del texto y la escritura del
+   * borrador. Si el cálculo se pasa, es mejor decirlo antes de empezar que
+   * dejar al administrador mirando una pantalla que se cae.
+   */
   const totalTokens = chunks.reduce(
     (total, chunk) => total + approximateTokens(renderPages(chunk)) + outputBudget + overhead,
     0,
   );
   const estimatedSeconds = (totalTokens / tokensPerMinute) * 60;
-  if (estimatedSeconds > 200) {
+  const BUDGET_SECONDS = 260;
+  if (estimatedSeconds > BUDGET_SECONDS) {
+    const minutes = Math.max(1, Math.round(estimatedSeconds / 60));
     throw new DomainError(
       "AI_DOCUMENT_TOO_LONG",
-      `El temario es muy largo para el plan gratuito del proveedor actual: calcula unos ${Math.round(
-        estimatedSeconds / 60,
-      )} minutos solo para proponer los temas, y la plataforma corta a los 5. Divide el PDF en partes más pequeñas (por ejemplo, por bloques de temas) o cambia a un proveedor con más cuota.`,
+      `Este temario no cabe en una sola pasada con el plan gratuito del proveedor actual: calcula unos ${minutes} minutos solo para proponer los temas, y la plataforma corta a los 5. Divide el PDF en dos o tres partes (por bloques de temas) y genera cada parte como un curso; o cambia a un plan con más cuota (GROQ_TPM) si no quieres partirlo.`,
       413,
     );
   }
@@ -346,6 +361,82 @@ export async function proposeTopics(
 
   const result = await generateJson(request, deps);
   return parseTopicPlan(result.data, parseOptions);
+}
+
+/**
+ * Temas de **un tramo** del documento, en una sola llamada.
+ *
+ * Es la pieza que usa el navegador para procesar un temario de cualquier tamaño:
+ * pide un tramo, lo recibe, y sigue con el siguiente. Aquí no se valida el plan
+ * completo ni se guarda nada (de eso se encarga `saveProposedTopics` cuando
+ * están todos los tramos), pero sí se descarta lo que no tiene forma de tema.
+ */
+export async function proposeTopicsBatch(
+  input: {
+    title: string;
+    description: string | null;
+    pdf: PdfSource;
+    from: number;
+    to: number;
+  },
+  deps: AiDeps = {},
+): Promise<{
+  topics: RawTopic[];
+  notes: string | null;
+  usedTokens: number;
+}> {
+  const textPages = input.pdf.textPages;
+  if (!textPages || textPages.length === 0) {
+    throw new DomainError(
+      "AI_TEXT_NOT_EXTRACTED",
+      "No hay texto extraído del PDF y el proveedor configurado no puede leer el documento. Vuelve a intentarlo.",
+      500,
+    );
+  }
+
+  const from = Math.max(1, Math.round(input.from));
+  const to = Math.max(from, Math.round(input.to));
+  const slice = selectPages(textPages, rangeOf(from, to)).filter((page) => page.text !== "");
+
+  if (slice.length === 0) {
+    throw new DomainError(
+      "PDF_WITHOUT_TEXT",
+      `Las páginas ${from}–${to} no tienen texto (puede que sean imágenes). El proveedor de IA configurado solo lee texto.`,
+      422,
+    );
+  }
+
+  const context: AiCourseContext = {
+    title: input.title,
+    description: input.description,
+    pdf: input.pdf,
+  };
+
+  const result = await generateJson(
+    {
+      instruction: BASE_RULES,
+      prompt: topicsPrompt(context, { from, to }),
+      parts: [{ text: renderPages(slice) }],
+      schema: TOPICS_SCHEMA,
+      temperature: 0.1,
+      maxOutputTokens: TOPIC_OUTPUT_TOKENS,
+    },
+    deps,
+  );
+
+  const data = result.data as { notes?: unknown };
+  return {
+    topics: readTopics(result.data),
+    notes: typeof data.notes === "string" && data.notes.trim() !== "" ? data.notes.trim() : null,
+    usedTokens: (result.usage.promptTokens ?? 0) + (result.usage.outputTokens ?? 0),
+  };
+}
+
+/** Lista de números entre dos inclusive; `selectPages` la usa como filtro. */
+function rangeOf(from: number, to: number): number[] {
+  const pages: number[] = [];
+  for (let page = from; page <= to; page += 1) pages.push(page);
+  return pages;
 }
 
 // ---------------------------------------------------------------------------

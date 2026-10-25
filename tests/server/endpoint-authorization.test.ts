@@ -77,6 +77,9 @@ describe("inventario de endpoints", () => {
     expect(paths).toEqual([
       "account/password/route.ts",
       "activate/route.ts",
+      "admin/courses/[courseId]/ai/topics/batch/route.ts",
+      "admin/courses/[courseId]/ai/topics/plan/route.ts",
+      "admin/courses/[courseId]/ai/topics/save/route.ts",
       "admin/documents/[documentId]/attach/route.ts",
       "admin/documents/route.ts",
       "admin/documents/uploads/[documentId]/abort/route.ts",
@@ -178,6 +181,11 @@ describe("endpoints de administración", () => {
         route.source.includes("adminFinalizePdfUpload(") ||
         route.source.includes("adminAbortPdfUpload(") ||
         route.source.includes("adminAttachDocument(") ||
+        // Temas por tandas: cada paso delega en una función del portal que
+        // empieza por `assertAdmin` (vía `loadDraft`).
+        route.source.includes("aiTopicBatchPlan(") ||
+        route.source.includes("aiProposeTopicBatch(") ||
+        route.source.includes("aiSaveProposedTopics(") ||
         route.source.includes("assertAdmin(");
       expect(
         delegates,

@@ -3,9 +3,13 @@ import { assertAdmin, type Actor } from "@/domain/auth/authorization";
 import type { QuizQuestionDefinition } from "@/domain/assessments/scoring";
 import type { TopicDefinition } from "@/domain/courses/content";
 import type { StudyScreen } from "@/domain/courses/screens";
+import type { AiTopicPlan } from "@/domain/courses/ai-plan";
+import { parseTopicPlan } from "@/domain/courses/ai-plan";
 import {
+  mergeTopics,
   proposeQuiz,
   proposeScreens,
+  proposeTopicsBatch,
   proposeTopics,
   screensDigest,
   type PdfSource,
@@ -25,8 +29,16 @@ import { attachDocumentToDraft } from "@/server/documents/attach";
 import { readDraftDocumentFile } from "@/server/documents/draft-file";
 import { uploadPdfDocument, type UploadDependencies } from "@/server/documents/service";
 import type { PdfDocumentStore } from "@/server/documents/store";
-import type { GeminiDeps } from "@/server/ai/gemini";
+import type { AiDeps } from "@/server/ai/provider";
+import {
+  estimatePlanSeconds,
+  nextBatchDelayMs,
+  planTopicBatches,
+  type TopicBatch,
+} from "@/server/ai/batches";
+import { groqSettings } from "@/server/ai/config";
 import { activeProvider } from "@/server/ai/provider";
+import type { RawTopic } from "@/server/courses/ai-service";
 import { extractPdfText } from "@/server/ai/text";
 import { assertPageCountDeclared, assertPdfHeader } from "@/domain/storage/pdf-upload";
 import { MAX_AI_UPLOAD_BYTES } from "@/server/ai/config";
@@ -68,7 +80,7 @@ export interface AiFlowDependencies {
   upload: UploadDependencies;
   catalog: CourseCatalogStore;
   documents: PdfDocumentStore;
-  gemini?: GeminiDeps;
+  gemini?: AiDeps;
   now?: () => Date;
 }
 
@@ -311,6 +323,25 @@ export async function proposeDraftTopics(
     deps.gemini ?? {},
   );
 
+  return applyTopicPlan({ actor: admin, input, loaded, plan, deps });
+}
+
+/**
+ * Guarda un plan de temas ya decidido.
+ *
+ * Es la parte común de los dos caminos: el de una sola llamada (Gemini, o un
+ * documento corto) y el de tandas que dirige el navegador. Valida con las
+ * mismas reglas del dominio y conserva el tema del PDF.
+ */
+async function applyTopicPlan(inputArgs: {
+  actor: Actor;
+  input: { courseId: string; version: number; expectedRevision: number };
+  loaded: LoadedSource;
+  plan: AiTopicPlan;
+  deps: AiFlowDependencies;
+}): Promise<TopicProposalResult> {
+  const { actor: admin, input, loaded, plan, deps } = inputArgs;
+
   // El tema del PDF se conserva tal cual (con su documento).
   const sourceTopic = loaded.topics.find((topic) => topic.id === SOURCE_TOPIC_ID);
 
@@ -359,6 +390,187 @@ export async function proposeDraftTopics(
     notes: plan.notes,
     warnings,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Paso 2 bis · temas por tandas (documentos de cualquier tamaño)
+// ---------------------------------------------------------------------------
+
+/**
+ * Plan de tandas para este borrador.
+ *
+ * No llama a la IA: extrae el texto, lo parte y devuelve qué se va a pedir y
+ * cuánto se va a tardar. La pantalla lo usa para enseñar el avance real y para
+ * que el navegador sepa cuántas peticiones tiene que hacer.
+ */
+export interface TopicBatchPlanResult {
+  courseId: string;
+  version: number;
+  totalPages: number;
+  totalChars: number;
+  tokensPerMinute: number;
+  estimatedSeconds: number;
+  batches: TopicBatch[];
+}
+
+export async function planDraftTopicBatches(
+  input: { actor: Actor; courseId: string; version: number },
+  deps: AiFlowDependencies,
+): Promise<TopicBatchPlanResult> {
+  const admin = assertAdmin(input.actor);
+  const loaded = await loadDraft({ actor: admin, courseId: input.courseId, version: input.version, deps });
+
+  if (!loaded.pdf.textPages || loaded.pdf.textPages.length === 0) {
+    throw new DomainError(
+      "AI_TEXT_NOT_EXTRACTED",
+      "No se ha podido extraer el texto del PDF de este borrador. Vuelve a intentarlo.",
+      500,
+    );
+  }
+
+  const tokensPerMinute = (deps.gemini?.groqSettings ?? groqSettings(deps.gemini?.env ?? process.env))
+    .tokensPerMinute;
+  const plan = planTopicBatches(loaded.pdf.textPages, { tokensPerMinute });
+
+  return {
+    courseId: input.courseId,
+    version: input.version,
+    totalPages: plan.totalPages,
+    totalChars: plan.totalChars,
+    tokensPerMinute: plan.tokensPerMinute,
+    estimatedSeconds: estimatePlanSeconds(plan),
+    batches: plan.batches,
+  };
+}
+
+export interface TopicBatchResult {
+  courseId: string;
+  version: number;
+  from: number;
+  to: number;
+  topics: RawTopic[];
+  notes: string | null;
+  usedTokens: number;
+  /** Milisegundos que el navegador debe esperar antes de la siguiente tanda. */
+  nextDelayMs: number;
+}
+
+/**
+ * Una tanda: una llamada al modelo y nada más.
+ *
+ * No guarda nada (ni toca el borrador): si el navegador se cierra a medias, lo
+ * único que se pierde es el avance, nunca un borrador a medio escribir. El
+ * guardado es un paso aparte, con el plan completo ya validado.
+ */
+export async function proposeDraftTopicBatch(
+  input: { actor: Actor; courseId: string; version: number; from: number; to: number },
+  deps: AiFlowDependencies,
+): Promise<TopicBatchResult> {
+  const admin = assertAdmin(input.actor);
+  const loaded = await loadDraft({ actor: admin, courseId: input.courseId, version: input.version, deps });
+
+  const result = await proposeTopicsBatch(
+    {
+      title: loaded.courseTitle,
+      description: loaded.courseDescription,
+      pdf: loaded.pdf,
+      from: input.from,
+      to: input.to,
+    },
+    deps.gemini ?? {},
+  );
+
+  const tokensPerMinute = (deps.gemini?.groqSettings ?? groqSettings(deps.gemini?.env ?? process.env))
+    .tokensPerMinute;
+  const used = result.usedTokens > 0 ? result.usedTokens : 0;
+
+  return {
+    courseId: input.courseId,
+    version: input.version,
+    from: input.from,
+    to: input.to,
+    topics: result.topics,
+    notes: result.notes,
+    usedTokens: used,
+    nextDelayMs: nextBatchDelayMs(used, tokensPerMinute),
+  };
+}
+
+/** Máximo de temas que se aceptan de una vez (el dominio permite 30). */
+const MAX_INCOMING_TOPICS = 400;
+
+function sanitizeIncomingTopics(value: unknown): RawTopic[] {
+  if (!Array.isArray(value)) return [];
+  const topics: RawTopic[] = [];
+  for (const item of value.slice(0, MAX_INCOMING_TOPICS)) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as { title?: unknown; pages?: unknown; summary?: unknown };
+    const title = typeof record.title === "string" ? record.title.trim().slice(0, 200) : "";
+    if (title === "") continue;
+    const pages = Array.isArray(record.pages)
+      ? record.pages
+          .filter((page): page is number => typeof page === "number" && Number.isFinite(page))
+          .map((page) => Math.round(page))
+          .filter((page) => page >= 1 && page <= 10_000)
+      : [];
+    topics.push({
+      title,
+      pages: [...new Set(pages)].sort((a, b) => a - b),
+      summary: typeof record.summary === "string" ? record.summary.slice(0, 800) : null,
+    });
+  }
+  return topics;
+}
+
+/**
+ * Guarda el plan completo, ya unido.
+ *
+ * Es el único punto en el que el borrador cambia: hasta aquí no se ha escrito
+ * nada. Lo que llega del navegador se sanea, se une (el mismo tema puede
+ * aparecer en dos tandas) y pasa por `parseTopicPlan`, que aplica las reglas de
+ * siempre: páginas que existen, sin títulos repetidos y sin pasar del máximo.
+ */
+export async function saveProposedTopics(
+  input: {
+    actor: Actor;
+    courseId: string;
+    version: number;
+    expectedRevision: number;
+    topics: unknown;
+    notes?: string | null;
+  },
+  deps: AiFlowDependencies,
+): Promise<TopicProposalResult> {
+  const admin = assertAdmin(input.actor);
+  const loaded = await loadDraft({ actor: admin, courseId: input.courseId, version: input.version, deps });
+
+  const incoming = sanitizeIncomingTopics(input.topics);
+  if (incoming.length === 0) {
+    throw new DomainError(
+      "AI_EMPTY_RESPONSE",
+      "No ha llegado ningún tema que guardar. Vuelve a empezar la propuesta.",
+      400,
+    );
+  }
+
+  const plan = parseTopicPlan(
+    {
+      topics: mergeTopics(incoming),
+      notes: typeof input.notes === "string" ? input.notes.slice(0, 800) : null,
+    },
+    {
+      pageCount: loaded.pdf.pageCount,
+      existingIds: loaded.topics.map((topic) => topic.id).filter((id) => id === SOURCE_TOPIC_ID),
+    },
+  );
+
+  return applyTopicPlan({
+    actor: admin,
+    input: { courseId: input.courseId, version: input.version, expectedRevision: input.expectedRevision },
+    loaded,
+    plan,
+    deps,
+  });
 }
 
 // ---------------------------------------------------------------------------
