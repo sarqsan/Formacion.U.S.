@@ -107,7 +107,7 @@ function fakeGemini(): Fake {
     calls: [],
     failNext: false,
     fetch: async (_url, init) => {
-      const body = JSON.parse(init.body) as {
+      const body = JSON.parse(init.body ?? "") as {
         contents: Array<{ parts: Array<{ text?: string; inlineData?: unknown }> }>;
       };
       const parts = body.contents[0].parts;

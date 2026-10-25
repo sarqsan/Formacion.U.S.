@@ -62,7 +62,9 @@ documentos del tema, si también los tiene).
   del sandbox no lo permite). Lo verificado son las pruebas con `fetch` inyectado y el flujo
   completo contra almacenes en memoria. La comprobación en producción es
   `GET /api/health` → `gemini.configured` / `gemini.reachable`, o el botón «Comprobar conexión»
-  de `/admin/cursos/ia`.
+  de `/admin/cursos/ia`. Esa comprobación consulta el catálogo de modelos con un **GET sin cuerpo**
+  (la API no admite body en un GET y la plataforma lo rechaza); `generateContent` es una petición
+  **POST** aparte. Que el catálogo responda no valida la generación: son comprobaciones distintas.
 
 ## Archivos
 
@@ -110,6 +112,6 @@ src/app/api/health/route.ts          estado de Gemini (sin secretos)
 ```
 ./node_modules/.bin/tsc --noEmit     sin errores
 ./node_modules/.bin/eslint .         sin avisos
-npx vitest run                       1269 pruebas correctas, 9 omitidas (78 archivos)
+npx vitest run                       1272 pruebas correctas, 9 omitidas (78 archivos)
 ./node_modules/.bin/next build       compila; las rutas nuevas se generan como dinámicas
 ```

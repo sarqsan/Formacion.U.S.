@@ -107,10 +107,13 @@ async function probeOnce(
   const timer = setTimeout(() => controller.abort(), Math.min(settings.timeoutMs, 15_000));
 
   try {
+    // `GET` **sin cuerpo**: `ListModels` no admite body y la plataforma lanza
+    // «Request with GET/HEAD method cannot have body» si se envía uno (aunque
+    // sea la cadena vacía). La clave va en la cabecera `x-goog-api-key`, que es
+    // el mecanismo oficial y no aparece en la URL ni en los errores.
     const response = await fetchImpl(`${settings.apiBase}/models?pageSize=200`, {
       method: "GET",
       headers: { "x-goog-api-key": settings.apiKey ?? "" },
-      body: "",
       signal: controller.signal,
     });
     const text = await response.text();

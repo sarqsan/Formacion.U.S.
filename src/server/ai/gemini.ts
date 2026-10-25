@@ -62,12 +62,18 @@ export interface GeminiResult {
   usage: { promptTokens: number | null; outputTokens: number | null };
 }
 
+/**
+ * `fetch` inyectable. `body` es **opcional a propósito**: la comprobación de
+ * conexión (`status.ts`) es un `GET` al catálogo de modelos y la plataforma
+ * rechaza cualquier `GET` o `HEAD` con cuerpo —«Request with GET/HEAD method
+ * cannot have body»—, así que la petición se construye sin esa propiedad.
+ */
 export type FetchLike = (
   input: string,
   init: {
     method: string;
     headers: Record<string, string>;
-    body: string;
+    body?: string;
     signal?: AbortSignal;
   },
 ) => Promise<{

@@ -25,7 +25,7 @@ const ENV = { GEMINI_API_KEY: KEY };
 
 interface Captured {
   url: string;
-  init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal };
+  init: { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal };
 }
 
 function responder(payload: unknown, status = 200): { fetch: FetchLike; captured: Captured[] } {
@@ -79,9 +79,14 @@ describe("generateJson: petición", () => {
     expect(captured[0].init.method).toBe("POST");
     expect(captured[0].init.headers["x-goog-api-key"]).toBe(KEY);
     expect(captured[0].url).not.toContain(KEY);
+    // `generateContent` es POST con cuerpo JSON: una petición distinta de la
+    // comprobación de salud (GET al catálogo, sin cuerpo) y también tiene que
+    // poder construirla la plataforma sin protestar.
+    expect(captured[0].init.body).toBeDefined();
     expect(captured[0].init.body).not.toContain(KEY);
+    expect(() => new Request(captured[0].url, captured[0].init as RequestInit)).not.toThrow();
 
-    const body = JSON.parse(captured[0].init.body) as {
+    const body = JSON.parse(captured[0].init.body ?? "{}") as {
       contents: Array<{ parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> }>;
       generationConfig: { responseMimeType: string; responseSchema: unknown; temperature: number };
     };

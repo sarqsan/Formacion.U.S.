@@ -19,13 +19,20 @@ const KEY = "AIzaTEST_0123456789abcdefghijklmnop";
 const ENV = { GEMINI_API_KEY: KEY };
 const NOW = new Date("2026-03-01T10:00:00.000Z");
 
+interface Call {
+  url: string;
+  init: { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal };
+}
+
 function modelsFetch(
   models: string[],
   status = 200,
-): { fetch: FetchLike; calls: string[] } {
+): { fetch: FetchLike; calls: string[]; inits: Call[] } {
   const calls: string[] = [];
-  const fetchImpl: FetchLike = async (url) => {
+  const inits: Call[] = [];
+  const fetchImpl: FetchLike = async (url, init) => {
     calls.push(url);
+    inits.push({ url, init });
     return {
       ok: status === 200,
       status,
@@ -40,7 +47,7 @@ function modelsFetch(
           : JSON.stringify({ error: { message: "denegado" } }),
     };
   };
-  return { fetch: fetchImpl, calls };
+  return { fetch: fetchImpl, calls, inits };
 }
 
 beforeEach(() => {
@@ -114,6 +121,47 @@ describe("geminiStatus", () => {
 
     await geminiStatus({ env: ENV, fetchImpl: fetch, now: () => NOW, force: true });
     expect(calls).toHaveLength(2);
+  });
+
+  it("consulta el catálogo con GET y sin cuerpo, como exige la API oficial", async () => {
+    // Regresión: la petición llevaba `body: ""` y la plataforma la rechazaba con
+    // «Request with GET/HEAD method cannot have body», así que la comprobación
+    // de salud nunca llegaba a Gemini.
+    const { fetch, inits } = modelsFetch(["gemini-2.5-flash"]);
+    await geminiStatus({ env: ENV, fetchImpl: fetch, now: () => NOW });
+
+    expect(inits).toHaveLength(1);
+    const [{ url, init }] = inits;
+    expect(init.method).toBe("GET");
+    expect("body" in init).toBe(false);
+    expect(url).toBe("https://generativelanguage.googleapis.com/v1beta/models?pageSize=200");
+    expect(init.headers["x-goog-api-key"]).toBe(KEY);
+    // La clave viaja en cabecera: no puede quedar escrita en la URL.
+    expect(url).not.toContain(KEY);
+  });
+
+  it("construye una Request real válida (la misma que usa el servidor)", async () => {
+    // La prueba anterior usa un doble; esta pasa la petición por el constructor
+    // real, que es donde el cuerpo en un GET explota. Sin red de por medio.
+    const { fetch, inits } = modelsFetch(["gemini-2.5-flash"]);
+    await geminiStatus({ env: ENV, fetchImpl: fetch, now: () => NOW });
+
+    const [{ url, init }] = inits;
+    expect(() => new Request(url, init as RequestInit)).not.toThrow();
+    // Y deja constancia de que un GET con cuerpo sí sería rechazado: es el fallo
+    // que se corrigió, no una precaución teórica.
+    expect(() => new Request(url, { method: "GET", body: "" })).toThrow(/cannot have body/i);
+  });
+
+  it("informa de un error HTTP sin cuerpo útil sin filtrar la clave", async () => {
+    const { fetch } = modelsFetch([], 500);
+    const status = await geminiStatus({ env: ENV, fetchImpl: fetch, now: () => NOW });
+
+    expect(status.configured).toBe(true);
+    expect(status.reachable).toBe(false);
+    expect(status.modelAvailable).toBeNull();
+    expect(status.message).toContain("HTTP 500");
+    expect(status.message).not.toContain(KEY);
   });
 
   it("no comprueba nada si se pide solo la configuración", async () => {
