@@ -17,7 +17,12 @@ const STATUS_CLASS: Record<string, string> = {
   archived: "pill pill-off",
 };
 
-export default async function AdminCoursesPage() {
+export default async function AdminCoursesPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ ok?: string; curso?: string; versiones?: string; documentos?: string }>;
+}) {
+  const { ok, curso, versiones, documentos } = await searchParams;
   const session = await getUiSession();
   if (session.mode === "unconfigured") redirect("/admin");
   if (!session.actor) redirect("/login");
@@ -27,6 +32,12 @@ export default async function AdminCoursesPage() {
 
   return (
     <div className="space-y-5">
+      {ok === "eliminado" && curso ? (
+        <p className="alert alert-ok">
+          Curso «{curso}» eliminado: {Number(versiones ?? 0)} versiones y{" "}
+          {Number(documentos ?? 0)} documentos. No queda nada de él en la base.
+        </p>
+      ) : null}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="eyebrow">Contenido</p>

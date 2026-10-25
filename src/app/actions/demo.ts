@@ -18,6 +18,7 @@ import {
   accounts as listAllAccounts,
   adminCreateCourse,
   adminCreatePerson,
+  adminDeleteCourse,
   adminDisableAccount,
   adminDraftEditor,
   adminEnableAccount,
@@ -309,6 +310,48 @@ export async function createCourseAction(formData: FormData): Promise<void> {
   }
 
   redirect(`/admin/cursos/${encodeURIComponent(created.courseId)}?ok=creado`);
+}
+
+/**
+ * Elimina un curso en borrador.
+ *
+ * Exige escribir el identificador del curso: es la única operación del panel
+ * que borra datos y un botón «eliminar» se pulsa sin querer. Si el curso tiene
+ * algo colgando (versión publicada, matrículas, progreso, certificados) el
+ * servicio lo rechaza y el mensaje vuelve a la ficha del curso.
+ */
+export async function deleteCourseAction(formData: FormData): Promise<void> {
+  const actor = await actorOrNull();
+  if (!actor) redirect("/login");
+
+  const courseId = String(formData.get("courseId") ?? "").trim();
+  const confirmation = String(formData.get("confirmation") ?? "");
+
+  let failure: string | null = null;
+  let deleted: { courseId: string; versions: number; documents: number } | null = null;
+  try {
+    deleted = await adminDeleteCourse(actor, { courseId, confirmation });
+  } catch (error) {
+    failure = errorMessage(error);
+  }
+
+  revalidatePath("/admin/cursos");
+  revalidatePath("/admin");
+  revalidatePath("/panel", "layout");
+
+  if (failure || !deleted) {
+    redirect(
+      `/admin/cursos/${encodeURIComponent(courseId)}?error=${encodeURIComponent(
+        failure ?? "No se pudo eliminar el curso.",
+      )}`,
+    );
+  }
+
+  redirect(
+    `/admin/cursos?ok=eliminado&curso=${encodeURIComponent(deleted.courseId)}&versiones=${
+      deleted.versions
+    }&documentos=${deleted.documents}`,
+  );
 }
 
 export async function enrollAction(formData: FormData): Promise<void> {

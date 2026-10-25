@@ -21,6 +21,8 @@ import {
   type DocumentView,
 } from "@/server/portal/learner";
 import { publishCourseVersion } from "@/server/courses/catalog";
+import { deleteCourse } from "@/server/courses/deletion";
+import { DemoCourseDeletionStore, DemoDeletionAudit } from "@/demo/deletion";
 import {
   activationSummary,
   disableAccount,
@@ -756,6 +758,22 @@ export async function adminPublish(actor: Actor, courseId: string, version: numb
   return publishCourseVersion(
     { actor, courseId, version },
     { store: catalogStore(), documents: new MemoryPdfDocumentStore(demoState().pdf) },
+  );
+}
+
+/**
+ * Elimina un curso en borrador (demostración).
+ *
+ * Mismo servicio que en producción: las reglas no se relajan por estar en la
+ * demo. Lo único que cambia es el almacén que hay debajo.
+ */
+export async function adminDeleteCourse(
+  actor: Actor,
+  input: { courseId: string; confirmation: string },
+) {
+  return deleteCourse(
+    { actor, ...input },
+    { store: new DemoCourseDeletionStore(), audit: new DemoDeletionAudit() },
   );
 }
 

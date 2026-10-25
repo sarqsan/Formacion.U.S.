@@ -10,6 +10,7 @@ import { mandatoryTopicsOf } from "@/server/courses/catalog";
 import { accountHistory, learnerHistory } from "@/server/learning/history";
 import { definitionFromDocuments } from "@/server/courses/definition";
 import { publishCourseVersion } from "@/server/courses/catalog";
+import { deleteCourse } from "@/server/courses/deletion";
 import { enrollMany, enrollStudent, revokeEnrollment } from "@/server/enrollments/service";
 import { submitAssessment } from "@/server/assessments/service";
 import { parsePeopleWorkbook } from "@/server/import/excel";
@@ -18,6 +19,7 @@ import {
   accountAdminDependencies,
   activityDependencies,
   certificateDependencies,
+  courseDeletionDependencies,
   courseEditorDependencies,
   documentDependencies,
   documentFileDependencies,
@@ -850,6 +852,19 @@ export async function adminPublish(actor: Actor, courseId: string, version: numb
     { actor, courseId, version },
     { store: deps.catalog, documents: deps.documents },
   );
+}
+
+/**
+ * Elimina un curso en borrador y todo lo que colgaba solo de él.
+ *
+ * El servicio comprueba permisos, confirmación y que no haya versiones
+ * publicadas, matrículas, progreso ni certificados. Aquí solo se cablea.
+ */
+export async function adminDeleteCourse(
+  actor: Actor,
+  input: { courseId: string; confirmation: string },
+) {
+  return deleteCourse({ actor, ...input }, courseDeletionDependencies());
 }
 
 // ---------------------------------------------------------------------------

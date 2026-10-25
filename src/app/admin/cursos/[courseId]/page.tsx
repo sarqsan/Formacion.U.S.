@@ -3,7 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { getUiSession } from "@/demo/session";
 import { adminCourseDetail } from "@/server/portal";
 import { validateCourseVersion } from "@/domain/courses/content";
-import { publishAction, startDraftAction } from "@/app/actions/demo";
+import { deleteCourseAction, publishAction, startDraftAction } from "@/app/actions/demo";
 
 export const dynamic = "force-dynamic";
 
@@ -254,7 +254,44 @@ export default async function AdminCoursePage({
             </section>
           )}
         </>
+
       )}
+
+      {/*
+        Eliminar solo se ofrece en cursos que nunca se han publicado: si hay una
+        versión publicada, el servicio lo rechaza igualmente, pero es mejor no
+        enseñar un botón que va a decir que no.
+      */}
+      {detail.publishedVersion === null &&
+      detail.versions.every((version) => version.status === "draft") ? (
+        <section className="card border-l-4 border-l-red-400 p-5">
+          <h2 className="text-sm font-semibold">Eliminar este curso</h2>
+          <p className="muted mt-1 text-xs">
+            Borra el curso, sus versiones en borrador, sus claves de corrección y los PDF que solo
+            usaba este curso. No se puede deshacer. Si hay personas matriculadas, progreso o
+            certificados, la aplicación se negará y no borrará nada.
+          </p>
+          <form action={deleteCourseAction} className="mt-3 flex flex-wrap items-end gap-2">
+            <input type="hidden" name="courseId" value={detail.courseId} />
+            <label className="text-xs">
+              <span className="muted">
+                Escribe <span className="mono">{detail.courseId}</span> para confirmar
+              </span>
+              <input
+                type="text"
+                name="confirmation"
+                required
+                autoComplete="off"
+                placeholder={detail.courseId}
+                className="mt-1 block w-72 rounded border border-slate-300 px-2 py-1 text-sm"
+              />
+            </label>
+            <button type="submit" className="btn btn-secondary">
+              Eliminar curso definitivamente
+            </button>
+          </form>
+        </section>
+      ) : null}
     </div>
   );
 }
