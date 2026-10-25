@@ -231,12 +231,30 @@ Preview/Development, y volver a desplegar. `/api/health` publica lo mismo en
 
 ### 6.4 Límites que hay que conocer
 
-- **8 000 tokens por minuto.** Un temario de 40 páginas tarda unos **3 minutos**
-  solo en proponer los temas. Por encima de ~200 s estimados, la aplicación se
-  niega antes de empezar y pide dividir el PDF (mensaje `AI_DOCUMENT_TOO_LONG`).
+- **8 000 tokens por minuto.** Es el límite que manda de verdad, mucho antes que
+  el tamaño del fichero. Medido con el ajuste actual (páginas de ~2 500
+  caracteres):
+
+  | Páginas | Tandas | Tiempo estimado | Resultado |
+  | --- | --- | --- | --- |
+  | 10 | 1 | ~60 s | entra |
+  | 20 | 2 | ~114 s | entra |
+  | 30 | 3 | ~171 s | entra |
+  | 40 | 4 | ~228 s | entra (justo) |
+  | 50 | 5 | ~285 s | se niega |
+  | 120 | 12 | ~11 min | se niega |
+
+  Por encima de **260 s** estimados la aplicación se niega **antes de empezar**
+  (`AI_DOCUMENT_TOO_LONG`) y pide dividir el PDF: una función de Vercel corta a
+  los 300 s y el resto del margen es para la subida y el guardado.
 - **200 000 tokens al día.** Salen unos **6-8 cursos diarios**. Si se agota, la
   pantalla lo dice y el borrador queda intacto.
 - **PDF escaneado: no vale.** No hay OCR gratuito; haría falta otro servicio.
+- **Tamaño del fichero, por sitio:** el asistente admite **4 MiB** en una sola
+  petición (el despliegue corta los cuerpos a 4,5 MB y el formulario va entero);
+  el editor admite **8 MiB** porque sube el PDF por partes de 768 KiB. Un temario
+  de texto de 30 páginas suele ocupar 150-800 KiB: el tamaño casi nunca es el
+  problema, el texto sí.
 - **Todo se procesa en EE. UU.** Para temarios sin datos personales no hay
   problema; con datos de alumnos habría que firmar el acuerdo de tratamiento y
   valorar la transferencia internacional.

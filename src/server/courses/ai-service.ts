@@ -232,25 +232,39 @@ async function proposeTopicsChunked(
 
   const env = deps.env ?? process.env;
   const tokensPerMinute = (deps.groqSettings ?? groqSettings(env)).tokensPerMinute;
-  const outputBudget = 2048;
-  const overhead = 900;
-  const inputBudget = Math.max(600, Math.floor(tokensPerMinute * 0.85) - outputBudget - overhead);
+
+  /*
+   * Presupuesto de una tanda.
+   *
+   * La lista de temas de un temario real ocupa bastante menos de lo que se
+   * reservaba antes (2 048 tokens de salida y 900 de margen por tanda): eso
+   * inflaba la estimación, y con ella el tiempo calculado, hasta rechazar
+   * documentos de 30 páginas que sí cabían. Ahora se reserva lo que de verdad
+   * ocupa un JSON de temas (1 024) y un margen más ajustado (400), y se usa el
+   * 95 % del minuto en lugar del 85 %.
+   */
+  const outputBudget = 1_024;
+  const overhead = 400;
+  const inputBudget = Math.max(600, Math.floor(tokensPerMinute * 0.95) - outputBudget - overhead);
   const chunks = chunkPages(textPages, inputBudget * 4);
 
-  // Tope de tiempo razonable: una función de Vercel corta a los 300 s. Si el
-  // espaciado necesario se acerca a ese límite, es mejor decirlo antes de
-  // empezar que dejar al administrador mirando una pantalla que se cae.
+  /*
+   * Tope de tiempo. Una función de Vercel corta a los 300 s, así que se deja un
+   * margen de 40 s para la subida, la extracción del texto y la escritura del
+   * borrador. Si el cálculo se pasa, es mejor decirlo antes de empezar que
+   * dejar al administrador mirando una pantalla que se cae.
+   */
   const totalTokens = chunks.reduce(
     (total, chunk) => total + approximateTokens(renderPages(chunk)) + outputBudget + overhead,
     0,
   );
   const estimatedSeconds = (totalTokens / tokensPerMinute) * 60;
-  if (estimatedSeconds > 200) {
+  const BUDGET_SECONDS = 260;
+  if (estimatedSeconds > BUDGET_SECONDS) {
+    const minutes = Math.max(1, Math.round(estimatedSeconds / 60));
     throw new DomainError(
       "AI_DOCUMENT_TOO_LONG",
-      `El temario es muy largo para el plan gratuito del proveedor actual: calcula unos ${Math.round(
-        estimatedSeconds / 60,
-      )} minutos solo para proponer los temas, y la plataforma corta a los 5. Divide el PDF en partes más pequeñas (por ejemplo, por bloques de temas) o cambia a un proveedor con más cuota.`,
+      `Este temario no cabe en una sola pasada con el plan gratuito del proveedor actual: calcula unos ${minutes} minutos solo para proponer los temas, y la plataforma corta a los 5. Divide el PDF en dos o tres partes (por bloques de temas) y genera cada parte como un curso; o cambia a un plan con más cuota (GROQ_TPM) si no quieres partirlo.`,
       413,
     );
   }

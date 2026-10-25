@@ -234,10 +234,13 @@ export default async function AiCoursePage({
               required
             />
             <p className="muted mt-1 text-xs">
-              Máximo {Math.round(MAX_AI_UPLOAD_BYTES / (1024 * 1024))} MB en este asistente (el
-              temario se envía de una vez). Tiene que tener texto seleccionable: un escaneo sin
-              reconocimiento no se puede leer. Para PDF mayores, súbelo por partes desde el editor
-              del curso.
+              Hasta {Math.round(MAX_AI_UPLOAD_BYTES / (1024 * 1024))} MB por fichero, y tiene que
+              tener texto seleccionable: un escaneo sin reconocimiento no se puede leer. Con el plan
+              gratuito, el texto que cabe en una sola pasada ronda las <strong>30 páginas</strong>:
+              si el temario es mayor, la aplicación lo dirá antes de empezar y bastará con dividirlo
+              en dos o tres partes. Para PDF de más de{" "}
+              {Math.round(MAX_AI_UPLOAD_BYTES / (1024 * 1024))} MB, súbelo por partes desde el
+              editor del curso (hasta 8 MB).
             </p>
           </div>
 
