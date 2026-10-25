@@ -20,6 +20,10 @@ export function SiteHeader({ session }: { session: UiSession }) {
     if (actor.role === "admin") {
       links.push({ href: "/admin", label: "Administración" });
       links.push({ href: "/admin/cursos", label: "Cursos" });
+      // La creación con IA es la vía normal para preparar un curso: si solo
+      // estuviera dentro de «Cursos», hay que saber que está ahí. Se enlaza
+      // desde la cabecera y, en el móvil, desde el resumen y los formularios.
+      links.push({ href: "/admin/cursos/ia", label: "Crear con IA" });
       links.push({ href: "/admin/personas", label: "Personas" });
       links.push({ href: "/admin/matriculas", label: "Matrículas" });
       links.push({ href: "/admin/progreso", label: "Progreso" });
@@ -30,14 +34,19 @@ export function SiteHeader({ session }: { session: UiSession }) {
   return (
     <header className="site-header">
       <div className="shell flex items-center justify-between gap-3 py-3">
-        <Link href={actor ? "/panel" : "/"} className="brand">
-          <span className="brand-mark" aria-hidden="true">
+        {/*
+          La marca puede encogerse (`min-w-0` + `truncate`): con el nombre
+          completo y el botón de sesión, en un móvil estrecho el conjunto
+          empujaba el botón fuera de la pantalla y se cortaba.
+        */}
+        <Link href={actor ? "/panel" : "/"} className="brand min-w-0">
+          <span className="brand-mark shrink-0" aria-hidden="true">
             F
           </span>
-          Formación U.G.–U.S.
+          <span className="truncate">Formación U.G.–U.S.</span>
         </Link>
 
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           <nav aria-label="Principal" className="nav hidden sm:flex">
             {links.map((link) => (
               <Link key={link.href} href={link.href} className="nav-link">
@@ -73,7 +82,7 @@ export function SiteHeader({ session }: { session: UiSession }) {
       {links.length > 0 ? (
         <nav
           aria-label="Principal móvil"
-          className="shell flex gap-1 overflow-x-auto pb-2 sm:hidden"
+          className="shell flex flex-nowrap gap-1 overflow-x-auto pb-2 sm:hidden"
         >
           {links.map((link) => (
             <Link key={link.href} href={link.href} className="nav-link whitespace-nowrap">

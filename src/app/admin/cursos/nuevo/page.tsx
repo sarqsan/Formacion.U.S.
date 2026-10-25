@@ -50,10 +50,21 @@ export default async function NewCoursePage({
             el temario se prepara después, en un borrador.
           </p>
         </div>
-        <Link href="/admin/cursos" className="btn btn-secondary">
-          Volver a cursos
-        </Link>
+        <div className="flex flex-wrap gap-2">
+          <Link href="/admin/cursos/ia" className="btn btn-primary">
+            Crear curso con IA
+          </Link>
+          <Link href="/admin/cursos" className="btn btn-secondary">
+            Volver a cursos
+          </Link>
+        </div>
       </div>
+
+      <p className="alert alert-info text-sm">
+        ¿El temario ya está en un PDF? <strong>Crear curso con IA</strong> crea el curso, sube el
+        PDF y propone temas, pantallas y cuestionarios en un solo recorrido. Este formulario es
+        para crear la ficha vacía y escribir el contenido a mano.
+      </p>
 
       {error ? <p className="alert alert-error">{error}</p> : null}
 
