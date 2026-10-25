@@ -29,6 +29,8 @@ export const QUIZ_DRAFT_LIMITS = {
   maxOptions: 8,
   /** Preguntas por cuestionario (de tema o examen final). */
   maxQuestions: 50,
+  /** Justificación de la respuesta correcta (solo servidor). */
+  explanation: 600,
 } as const;
 
 const QUESTION_TYPES = new Set(["single_choice", "multi_choice"]);
@@ -89,6 +91,16 @@ export function checkQuestionStructure(
       "QUESTION_PROMPT_TOO_LONG",
       `El enunciado no puede pasar de ${QUIZ_DRAFT_LIMITS.prompt} caracteres.`,
       `${path}.prompt`,
+    );
+  }
+
+  const explanation = question.explanation?.trim() ?? "";
+  if (explanation.length > QUIZ_DRAFT_LIMITS.explanation) {
+    pushError(
+      issues,
+      "QUESTION_EXPLANATION_TOO_LONG",
+      `La explicación no puede pasar de ${QUIZ_DRAFT_LIMITS.explanation} caracteres.`,
+      `${path}.explanation`,
     );
   }
 
@@ -267,6 +279,15 @@ export function reviewQuizLabels(
   const issues: DraftIssue[] = [];
 
   questions.forEach((question, index) => {
+    if (!question.explanation?.trim()) {
+      issues.push({
+        code: "QUESTION_WITHOUT_EXPLANATION",
+        message: `La pregunta «${question.prompt || question.id}» no explica por qué su respuesta es la correcta.`,
+        path: `${path}[${index}].explanation`,
+        severity: "warning",
+      });
+    }
+
     for (const optionId of question.optionIds) {
       if (!question.optionLabels?.[optionId]?.trim()) {
         issues.push({

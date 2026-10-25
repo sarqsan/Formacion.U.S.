@@ -10,6 +10,10 @@ import type { CreateUploadInput, StorageUsage } from "@/server/documents/service
 import type { PdfDocumentMeta } from "@/server/documents/store";
 import type { AttachResult } from "@/server/documents/attach";
 import { submitAssessment } from "@/server/assessments/service";
+import {
+  readTopicScreen as readTopicScreenShared,
+  screensReadingView as screensReadingViewShared,
+} from "@/server/portal/learner";
 import { parsePeopleWorkbook } from "@/server/import/excel";
 import { buildImportPreview } from "@/server/import/service";
 import { isDemoMode } from "@/demo/session";
@@ -121,6 +125,35 @@ export async function readPage(
     return { ...result, topicId: view.topicId };
   }
   return firebase.learnerReadPage(actor, input);
+}
+
+/**
+ * Pantallas de estudio de un tema (contenido estructurado, no PDF).
+ *
+ * La misma función sirve a la demostración y a Firestore: recibe los almacenes
+ * por parámetro, así que el progreso se calcula igual en los dos modos.
+ */
+export async function topicScreensView(
+  actor: Actor,
+  input: { courseId: string; topicId: string; screen?: number },
+) {
+  return screensReadingViewShared(
+    portalMode() === "demo" ? demo.demoDeps() : firebase.firestoreDeps(),
+    actor,
+    input,
+  );
+}
+
+/** Registra una pantalla como estudiada. Devuelve la siguiente permitida. */
+export async function readTopicScreen(
+  actor: Actor,
+  input: { courseId: string; topicId: string; screen: number },
+) {
+  return readTopicScreenShared(
+    portalMode() === "demo" ? demo.demoDeps() : firebase.firestoreDeps(),
+    actor,
+    input,
+  );
 }
 
 export async function submitQuiz(input: {

@@ -12,6 +12,7 @@ import {
 } from "@/domain/courses/versioning";
 import { toClientQuiz, type QuestionType } from "@/domain/assessments/scoring";
 import { isSafeDocumentId } from "@/domain/storage/document-id";
+import type { StudyScreen } from "@/domain/courses/screens";
 import { definitionFromDocuments } from "@/server/courses/definition";
 
 /**
@@ -57,6 +58,12 @@ export interface PublicTopic {
   order: number;
   mandatory: boolean;
   documents: PublicDocument[];
+  /**
+   * Pantallas de estudio (contenido público, sin respuestas). Si existen, son
+   * la vía de estudio del tema y sustituyen a la lectura del PDF como requisito
+   * para abrir el cuestionario.
+   */
+  screens?: StudyScreen[];
   quiz: PublicQuestion[];
 }
 
@@ -83,6 +90,11 @@ export interface CourseVersionDocument {
 export interface AnswerKeyQuestion {
   id: string;
   correctOptionIds: string[];
+  /**
+   * Justificación de la respuesta correcta, cuando existe. Vive aquí (documento
+   * solo-servidor) y no en el contenido público porque explica la solución.
+   */
+  explanation?: string;
 }
 
 export interface AnswerKeysDocument {
@@ -204,6 +216,18 @@ export function toPublicVersion(
       title: document.title,
       pageCount: document.pageCount,
     })),
+    // Copia explícita, campo a campo: lo que no está aquí no se publica.
+    ...(topic.screens && topic.screens.length > 0
+      ? {
+          screens: topic.screens.map((screen) => ({
+            id: screen.id,
+            title: screen.title,
+            paragraphs: [...screen.paragraphs],
+            bullets: [...screen.bullets],
+            pages: [...screen.pages],
+          })),
+        }
+      : {}),
     quiz: toClientQuiz(topic.quiz) as PublicQuestion[],
   }));
 
@@ -232,6 +256,7 @@ export function toAnswerKeys(
     quizByTopic[topic.id] = topic.quiz.map((question) => ({
       id: question.id,
       correctOptionIds: [...question.correctOptionIds],
+      ...(question.explanation ? { explanation: question.explanation } : {}),
     }));
   }
 
@@ -242,6 +267,7 @@ export function toAnswerKeys(
     finalExam: definition.finalExam.map((question) => ({
       id: question.id,
       correctOptionIds: [...question.correctOptionIds],
+      ...(question.explanation ? { explanation: question.explanation } : {}),
     })),
     createdAt: meta.createdAt,
   };
@@ -250,7 +276,7 @@ export function toAnswerKeys(
 /** Comprobación defensiva: el documento público no debe llevar la clave. */
 export function assertNoAnswerLeak(version: CourseVersionDocument): void {
   const serialized = JSON.stringify(version);
-  if (serialized.includes("correctOptionIds")) {
+  if (serialized.includes("correctOptionIds") || serialized.includes("explanation")) {
     throw new DomainError(
       "CONTENT_LEAK",
       "El contenido público contiene respuestas correctas. Escritura abortada.",

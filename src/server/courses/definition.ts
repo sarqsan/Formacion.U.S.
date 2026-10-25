@@ -29,12 +29,25 @@ export function definitionFromDocuments(
       title: document.title,
       pageCount: document.pageCount,
     })),
-    quiz: topic.quiz.map((question) => ({
-      ...question,
-      correctOptionIds:
-        keys?.quizByTopic[topic.id]?.find((key) => key.id === question.id)?.correctOptionIds ??
-          [],
-    })),
+    ...(topic.screens && topic.screens.length > 0
+      ? {
+          screens: topic.screens.map((screen) => ({
+            id: screen.id,
+            title: screen.title,
+            paragraphs: [...screen.paragraphs],
+            bullets: [...screen.bullets],
+            pages: [...screen.pages],
+          })),
+        }
+      : {}),
+    quiz: topic.quiz.map((question) => {
+      const key = keys?.quizByTopic[topic.id]?.find((item) => item.id === question.id);
+      return {
+        ...question,
+        correctOptionIds: key?.correctOptionIds ?? [],
+        ...(key?.explanation ? { explanation: key.explanation } : {}),
+      };
+    }),
   }));
 
   return {
@@ -43,10 +56,13 @@ export function definitionFromDocuments(
     title: version.title,
     description: version.description ?? undefined,
     topics,
-    finalExam: version.finalExam.map((question) => ({
-      ...question,
-      correctOptionIds:
-        keys?.finalExam.find((key) => key.id === question.id)?.correctOptionIds ?? [],
-    })),
+    finalExam: version.finalExam.map((question) => {
+      const key = keys?.finalExam.find((item) => item.id === question.id);
+      return {
+        ...question,
+        correctOptionIds: key?.correctOptionIds ?? [],
+        ...(key?.explanation ? { explanation: key.explanation } : {}),
+      };
+    }),
   };
 }

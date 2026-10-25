@@ -86,12 +86,40 @@ export default async function TopicPage({
         </p>
       ) : null}
 
+      {topic.screens.available ? (
+        <div className="card p-5">
+          <h2 className="text-sm font-semibold">
+            {topic.screens.completed ? "Repasar el tema" : "Estudiar el tema"}
+          </h2>
+          <p className="muted mt-2 text-sm leading-relaxed">
+            Este tema se estudia pantalla a pantalla ({topic.screens.total} en total
+            {topic.screens.lastViewed > 0
+              ? `, ${Math.min(topic.screens.lastViewed, topic.screens.total)} ya vista(s)`
+              : ""}
+            ). El cuestionario se abre al llegar a la última, o al terminar los documentos del
+            tema si también los tiene.
+          </p>
+          <div className="mt-3">
+            <Link
+              href={`/cursos/${courseId}/temas/${topic.id}/pantallas${
+                topic.screens.completed ? "" : `?pantalla=${Math.min(topic.screens.lastViewed + 1, topic.screens.total)}`
+              }`}
+              className="btn btn-primary btn-sm"
+            >
+              {topic.screens.completed
+                ? "Repasar desde el principio"
+                : `Estudiar (pantalla ${Math.min(topic.screens.lastViewed + 1, topic.screens.total)} de ${topic.screens.total})`}
+            </Link>
+          </div>
+        </div>
+      ) : null}
+
       {!topic.readComplete ? (
         <div className="card p-5">
           <h2 className="text-sm font-semibold">Primero, el temario</h2>
           <p className="muted mt-2 text-sm leading-relaxed">
-            El cuestionario se abre cuando has leído todos los documentos del tema. El servidor
-            comprueba esta condición antes de corregir nada.
+            El cuestionario se abre cuando has estudiado el tema entero. El servidor comprueba esta
+            condición antes de corregir nada.
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             {topic.documents.map((document) => (
@@ -107,10 +135,15 @@ export default async function TopicPage({
         </div>
       ) : (
         <div className="space-y-3">
-          {topic.documents.length > 0 ? (
+          {topic.readComplete ? (
             <p className="alert alert-ok">
-              Lectura completada ({topic.documents.length} documento
-              {topic.documents.length === 1 ? "" : "s"}). Ya puedes responder.
+              Tema estudiado
+              {topic.documents.length > 0
+                ? ` (${topic.documents.length} documento${topic.documents.length === 1 ? "" : "s"})`
+                : topic.screens.available
+                  ? ` (${topic.screens.total} pantalla${topic.screens.total === 1 ? "" : "s"})`
+                  : ""}
+              . Ya puedes responder.
             </p>
           ) : null}
           <QuizForm

@@ -75,6 +75,24 @@ export function QuizFields({ scope, questions, hint }: QuizFieldsProps) {
             </div>
           </div>
 
+          <div className="mt-2">
+            <label
+              className="label"
+              htmlFor={`${prefix}:question:${question.id}:explanation`}
+            >
+              Explicación de la respuesta correcta (solo la ve administración)
+            </label>
+            <textarea
+              id={`${prefix}:question:${question.id}:explanation`}
+              name={`${prefix}:question:${question.id}:explanation`}
+              className="input"
+              rows={2}
+              maxLength={QUIZ_DRAFT_LIMITS.explanation}
+              defaultValue={question.explanation ?? ""}
+              placeholder="Por qué esa opción es la correcta, apoyándose en el temario"
+            />
+          </div>
+
           <div className="mt-2 space-y-1">
             {question.optionIds.map((optionId) => (
               <div
@@ -207,6 +225,20 @@ export function QuizFields({ scope, questions, hint }: QuizFieldsProps) {
               <option value="multi_choice">Respuesta múltiple</option>
             </select>
           </div>
+        </div>
+
+        <div className="mt-2">
+          <label className="label" htmlFor={`${prefix}:newQuestionExplanation`}>
+            Explicación de la respuesta correcta (solo servidor)
+          </label>
+          <textarea
+            id={`${prefix}:newQuestionExplanation`}
+            name={`${prefix}:newQuestionExplanation`}
+            className="input"
+            rows={2}
+            maxLength={QUIZ_DRAFT_LIMITS.explanation}
+            placeholder="Por qué esa opción es la correcta, apoyándose en el temario"
+          />
         </div>
 
         <div className="mt-2 space-y-1">

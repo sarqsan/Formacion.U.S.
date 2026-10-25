@@ -23,6 +23,7 @@ import {
   type DraftIssue,
 } from "@/domain/courses/draft";
 import type { CourseVersionStatus } from "@/domain/courses/versioning";
+import { normalizeScreens, type StudyScreen } from "@/domain/courses/screens";
 import { definitionFromDocuments } from "@/server/courses/definition";
 import {
   toAnswerKeys,
@@ -652,6 +653,139 @@ export async function saveDraftAssessments(
 }
 
 // ---------------------------------------------------------------------------
+// Pantallas de estudio (contenido generado con IA o escrito a mano)
+// ---------------------------------------------------------------------------
+
+export interface SaveScreensResult {
+  courseId: string;
+  version: number;
+  revision: number;
+  /** Lo que falta para publicar; no bloquea el guardado. */
+  warnings: DraftIssue[];
+  screens: { topics: number; total: number };
+}
+
+/**
+ * Guarda las pantallas de estudio de uno o varios temas de un borrador.
+ *
+ * Es el punto de escritura del contenido generado con IA, y por eso está aquí y
+ * no en el servicio de IA: **lo que se guarda pasa por las mismas reglas que el
+ * contenido escrito a mano**. El servicio de IA no escribe en la base; propone
+ * pantallas y esta función las valida y las funde con el borrador.
+ *
+ * Qué toca y qué no:
+ *   - sustituye **solo** las pantallas de los temas indicados;
+ *   - conserva documentos, cuestionarios, examen final, título y descripción;
+ *   - los temas que no se indican quedan exactamente igual (regenerar un tema
+ *     no borra las correcciones hechas en los demás);
+ *   - solo admite borradores: la versión publicada y el histórico no se tocan.
+ *
+ * La revisión esperada (`expectedRevision`) evita que dos pestañas se pisen: si
+ * el borrador cambió desde que se abrió la página, se devuelve `DRAFT_STALE` y
+ * no se escribe nada.
+ */
+export async function saveDraftScreens(
+  input: {
+    actor: Actor;
+    courseId: string;
+    version: number;
+    expectedRevision: number;
+    /** Pantallas nuevas por tema. Los temas que no aparezcan no se tocan. */
+    topicScreens: Record<string, StudyScreen[]>;
+    /** Páginas conocidas del PDF de origen, para no aceptar citas imposibles. */
+    pageCount?: number | null;
+  },
+  deps: DraftDependencies,
+): Promise<SaveScreensResult> {
+  assertAdmin(input.actor);
+
+  const current = await deps.store.getVersion(input.courseId, input.version);
+  if (!current) {
+    throw new DomainError("VERSION_NOT_FOUND", "El borrador no existe.", 404);
+  }
+  if (current.status !== "draft") {
+    throw new DomainError(
+      "VERSION_NOT_EDITABLE",
+      "Solo se puede editar un borrador. Una versión publicada o archivada no se modifica: prepara la siguiente.",
+      409,
+    );
+  }
+
+  const keys = await deps.store.getAnswerKeys(input.courseId, input.version);
+  const definition = definitionFromDocuments(current, keys);
+
+  const unknown = Object.keys(input.topicScreens).filter(
+    (topicId) => !definition.topics.some((topic) => topic.id === topicId),
+  );
+  if (unknown.length > 0) {
+    throw new DomainError(
+      "TOPIC_NOT_FOUND",
+      `No existe el tema «${unknown[0]}» en esta versión. Recarga la página.`,
+      404,
+    );
+  }
+
+  const topics: TopicDefinition[] = definition.topics.map((topic) => {
+    const incoming = input.topicScreens[topic.id];
+    if (!incoming) return topic;
+    return {
+      ...topic,
+      screens: normalizeScreens(incoming, { pageCount: input.pageCount ?? null }),
+    };
+  });
+
+  const merged: CourseVersionDefinition = { ...definition, topics };
+
+  const issues = checkDraftStructure(merged);
+  const blocking = issues.filter((issue) => issue.severity === "error");
+  if (blocking.length > 0) {
+    throw new DomainError("COURSE_SCREENS_INVALID", blocking[0].message, 400, {
+      issues: blocking,
+    });
+  }
+
+  const versionDoc = toPublicVersion(merged, {
+    createdAt: current.createdAt,
+    createdBy: current.createdBy,
+    status: "draft",
+  });
+  versionDoc.revision = input.expectedRevision + 1;
+
+  const answerKeys = toAnswerKeys(merged, {
+    createdAt: keys?.createdAt ?? current.createdAt,
+  });
+
+  const bytes = jsonByteLength(versionDoc) + jsonByteLength(answerKeys);
+  if (bytes > DRAFT_LIMITS.definitionBytes) {
+    throw new DomainError(
+      "DEFINITION_TOO_LARGE",
+      `El borrador ocupa ${bytes} bytes y el máximo son ${DRAFT_LIMITS.definitionBytes}. Reduce las pantallas de algún tema o reparte el contenido en más temas.`,
+      413,
+      { bytes, maxBytes: DRAFT_LIMITS.definitionBytes },
+    );
+  }
+
+  await deps.store.replaceDraftContent({
+    versionDoc,
+    answerKeys,
+    expectedRevision: input.expectedRevision,
+  });
+
+  const withScreens = merged.topics.filter((topic) => (topic.screens?.length ?? 0) > 0);
+
+  return {
+    courseId: input.courseId,
+    version: input.version,
+    revision: versionDoc.revision,
+    warnings: reviewDraft(merged, validateCourseVersion(merged)),
+    screens: {
+      topics: withScreens.length,
+      total: withScreens.reduce((sum, topic) => sum + (topic.screens?.length ?? 0), 0),
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Vista del editor
 // ---------------------------------------------------------------------------
 
@@ -670,6 +804,8 @@ export interface DraftTopicView {
    * `correctOptionIds` (ver `toClientQuiz`).
    */
   quiz: QuizQuestionDefinition[];
+  /** Pantallas de estudio del tema (contenido, sin respuestas). */
+  screens: StudyScreen[];
 }
 
 export interface DraftEditorView {
@@ -738,6 +874,13 @@ export function draftEditorView(input: {
           id: document.id,
           title: document.title,
           pageCount: document.pageCount,
+        })),
+        screens: (topic.screens ?? []).map((screen) => ({
+          id: screen.id,
+          title: screen.title,
+          paragraphs: [...screen.paragraphs],
+          bullets: [...screen.bullets],
+          pages: [...screen.pages],
         })),
         questions: topic.quiz.length,
         quiz: topic.quiz.map((question) => ({

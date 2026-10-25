@@ -4,6 +4,12 @@ import {
   type QuizQuestionDefinition,
 } from "@/domain/assessments/scoring";
 import { isSafeDocumentId } from "@/domain/storage/document-id";
+import {
+  SCREEN_LIMITS,
+  normalizeScreens,
+  screensChars,
+  type StudyScreen,
+} from "@/domain/courses/screens";
 
 /**
  * MODELO DE CONTENIDO (autoría del administrador)
@@ -41,6 +47,14 @@ export interface TopicDefinition {
   /** Si es false, no bloquea el examen final. */
   mandatory: boolean;
   documents: TopicDocumentDefinition[];
+  /**
+   * Pantallas de estudio del tema (contenido estructurado, sin respuestas).
+   *
+   * Es opcional para no romper el contenido ya publicado, que solo tiene PDF.
+   * Cuando existe, es la vía de estudio del tema y también lo que hay que leer
+   * antes de abrir su cuestionario.
+   */
+  screens?: StudyScreen[];
   /** Cuestionario del tema; obligatorio si el tema es obligatorio. */
   quiz: QuizQuestionDefinition[];
 }
@@ -138,6 +152,39 @@ export function validateCourseVersion(definition: CourseVersionDefinition): Cont
         );
       }
     });
+
+    if (topic.screens !== undefined) {
+      try {
+        normalizeScreens(topic.screens);
+      } catch (error) {
+        add(
+          "TOPIC_SCREENS_INVALID",
+          error instanceof DomainError ? error.message : "Pantallas del tema no válidas.",
+          `${path}.screens`,
+        );
+      }
+      if (topic.screens.length > SCREEN_LIMITS.maxPerTopic) {
+        add(
+          "TOPIC_SCREENS_TOO_MANY",
+          `El tema «${topic.title}» tiene más de ${SCREEN_LIMITS.maxPerTopic} pantallas.`,
+          `${path}.screens`,
+        );
+      }
+      // Sin texto no hay nada que estudiar: se avisa como error de contenido.
+      if (topic.screens.length > 0 && screensChars(topic.screens) === 0) {
+        add("TOPIC_SCREENS_EMPTY", "Las pantallas del tema están vacías.", `${path}.screens`);
+      }
+    }
+
+    // Un tema sin nada que estudiar deja su cuestionario accesible sin haber
+    // estudiado: o tiene documentos, o tiene pantallas.
+    if (topic.documents.length === 0 && (topic.screens?.length ?? 0) === 0) {
+      add(
+        "TOPIC_WITHOUT_CONTENT",
+        `El tema «${topic.title || topic.id}» no tiene contenido que estudiar (ni documentos ni pantallas).`,
+        path,
+      );
+    }
 
     if (topic.mandatory && topic.quiz.length === 0) {
       add("TOPIC_QUIZ_REQUIRED", "Un tema obligatorio debe tener cuestionario.", `${path}.quiz`);
