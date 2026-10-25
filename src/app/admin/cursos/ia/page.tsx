@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { getUiSession } from "@/demo/session";
 import { adminCourses, aiConnectionStatus } from "@/server/portal";
 import { checkAiConnectionAction, startAiCourseAction } from "@/app/actions/ai";
-import { MAX_PDF_BYTES } from "@/domain/storage/pdf-chunks";
+import { MAX_AI_UPLOAD_BYTES } from "@/server/ai/config";
 
 export const dynamic = "force-dynamic";
 
@@ -192,8 +192,10 @@ export default async function AiCoursePage({
               required
             />
             <p className="muted mt-1 text-xs">
-              Máximo {Math.round(MAX_PDF_BYTES / (1024 * 1024))} MB. El documento tiene que tener
-              texto seleccionable: un escaneo sin reconocimiento no se puede leer.
+              Máximo {Math.round(MAX_AI_UPLOAD_BYTES / (1024 * 1024))} MB en este asistente (el
+              temario se envía de una vez). Tiene que tener texto seleccionable: un escaneo sin
+              reconocimiento no se puede leer. Para PDF mayores, súbelo por partes desde el editor
+              del curso.
             </p>
           </div>
 

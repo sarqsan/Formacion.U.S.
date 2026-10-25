@@ -241,6 +241,32 @@ describe("startAiCourse", () => {
     });
   });
 
+  it("rechaza un PDF mayor de 4 MB sin crear nada (límite de la petición en el despliegue)", async () => {
+    const fake = fakeGemini();
+    const { deps, store } = buildDeps(fake);
+
+    // Vercel corta las peticiones a funciones en 4,5 MB con un 413 que no llega
+    // al código: el asistente se queda por debajo (4 MiB) y lo dice antes.
+    const big = new Uint8Array(4 * 1024 * 1024 + 1);
+    const header = "%PDF-1.7\n";
+    for (let index = 0; index < header.length; index += 1) big[index] = header.charCodeAt(index);
+
+    await expect(
+      startAiCourse(
+        {
+          actor: ADMIN,
+          courseId: "curso-grande",
+          title: "Curso grande",
+          pageCount: 200,
+          pdfBytes: big,
+        },
+        deps,
+      ),
+    ).rejects.toMatchObject({ code: "PDF_TOO_LARGE_FOR_WIZARD", status: 413 });
+
+    expect(await store.getCourse("curso-grande")).toBeNull();
+  });
+
   it("rechaza un fichero que no es PDF sin crear nada", async () => {
     const fake = fakeGemini();
     const { deps, store } = buildDeps(fake);

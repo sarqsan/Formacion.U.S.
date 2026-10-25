@@ -46,8 +46,10 @@ documentos del tema, si también los tiene).
    `GEMINI_API_KEY`. Sin ella, la pantalla lo dice y los botones de generación quedan desactivados;
    el resto de la aplicación funciona igual.
 2. Opcional: `GEMINI_MODEL` (por defecto `gemini-2.5-flash`) y `GEMINI_TIMEOUT_MS` (120 s).
-3. El PDF tiene que tener **texto seleccionable** y pesar **menos de 8 MiB**. Un escaneo sin OCR no
-   se puede leer.
+3. El PDF tiene que tener **texto seleccionable** y, en este asistente, pesar **menos de 4 MiB**: el
+   formulario lo envía en una sola petición y el despliegue (Vercel) corta los cuerpos de más de
+   4,5 MB con un 413 que no llega a la aplicación. Para temarios mayores se sube por partes desde el
+   editor del curso, que no pasa por ese límite. Un escaneo sin OCR no se puede leer.
 4. El número de páginas del PDF se indica a mano en el paso 1 (la aplicación no incorpora un lector
    de PDF). Si no coincide, las citas de páginas se rechazan en lugar de guardarse mal.
 
@@ -108,6 +110,6 @@ src/app/api/health/route.ts          estado de Gemini (sin secretos)
 ```
 ./node_modules/.bin/tsc --noEmit     sin errores
 ./node_modules/.bin/eslint .         sin avisos
-npx vitest run                       1268 pruebas correctas, 9 omitidas (78 archivos)
+npx vitest run                       1269 pruebas correctas, 9 omitidas (78 archivos)
 ./node_modules/.bin/next build       compila; las rutas nuevas se generan como dinámicas
 ```

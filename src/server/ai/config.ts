@@ -32,6 +32,20 @@ export const DEFAULT_GEMINI_API_BASE = "https://generativelanguage.googleapis.co
 /** Límite oficial de una petición con el PDF en línea (20 MB de cuerpo). */
 export const MAX_INLINE_PDF_BYTES = 8 * 1024 * 1024;
 
+/**
+ * Tamaño máximo del PDF que se sube en el asistente.
+ *
+ * La aplicación admite PDF de hasta 8 MiB, pero el asistente los envía **en una
+ * sola petición** (formulario → acción de servidor). Vercel corta cualquier
+ * petición a una función en 4,5 MB con un 413 que no llega a nuestro código, así
+ * que el límite real en el despliegue es más bajo que el de la aplicación. Se
+ * deja margen para las cabeceras del formulario: 4 MiB.
+ *
+ * Para temarios mayores no hay que tocar esto: en el editor de siempre se suben
+ * por partes (endpoint fragmentado), sin pasar por este límite.
+ */
+export const MAX_AI_UPLOAD_BYTES = 4 * 1024 * 1024;
+
 function clean(value: string | undefined): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();

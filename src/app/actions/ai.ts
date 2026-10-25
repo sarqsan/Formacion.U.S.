@@ -15,7 +15,7 @@ import {
   adminSaveDraftScreens,
 } from "@/server/portal";
 import { parseScreensForm } from "@/server/courses/screens-form";
-import { MAX_PDF_BYTES } from "@/domain/storage/pdf-chunks";
+import { MAX_AI_UPLOAD_BYTES } from "@/server/ai/config";
 import type { Actor } from "@/domain/auth/authorization";
 
 /**
@@ -107,9 +107,14 @@ export async function startAiCourseAction(formData: FormData): Promise<void> {
   if (!(file instanceof File) || file.size === 0) backToForm("Adjunta el PDF del temario.");
 
   const pdf = file as File;
-  if (pdf.size > MAX_PDF_BYTES) {
+  // El navegador ya corta aquí: el asistente sube el PDF en una sola petición y
+  // el despliegue no admite cuerpos mayores (ver `MAX_AI_UPLOAD_BYTES`). Es
+  // mejor un aviso claro que un 413 del proveedor sin explicación.
+  if (pdf.size > MAX_AI_UPLOAD_BYTES) {
     backToForm(
-      `El PDF ocupa ${(pdf.size / (1024 * 1024)).toFixed(1)} MB y el máximo son ${Math.round(MAX_PDF_BYTES / (1024 * 1024))} MB. Compártelo en partes más pequeñas.`,
+      `El PDF ocupa ${(pdf.size / (1024 * 1024)).toFixed(1)} MB y el asistente admite hasta ${Math.round(
+        MAX_AI_UPLOAD_BYTES / (1024 * 1024),
+      )} MB. Si el temario es mayor, prepáralo desde el editor del curso, que sube el PDF por partes.`,
     );
   }
   if (!pdf.name.toLowerCase().endsWith(".pdf")) {

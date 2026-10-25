@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getUiSession } from "@/demo/session";
 import { adminDraftEditor, aiConnectionStatus } from "@/server/portal";
-import { MAX_PDF_BYTES } from "@/domain/storage/pdf-chunks";
+import { MAX_AI_UPLOAD_BYTES } from "@/server/ai/config";
 import {
   checkAiConnectionAction,
   generateFinalExamAction,
@@ -189,8 +189,8 @@ export default async function AiCourseWizardPage({
           <Link href={editorHref} className="underline">
             en el editor
           </Link>{" "}
-          (máximo {Math.round(MAX_PDF_BYTES / (1024 * 1024))} MB): la IA trabaja siempre sobre ese
-          documento.
+          (máximo {Math.round(MAX_AI_UPLOAD_BYTES / (1024 * 1024))} MB en este asistente): la IA
+          trabaja siempre sobre ese documento.
         </p>
       ) : null}
 

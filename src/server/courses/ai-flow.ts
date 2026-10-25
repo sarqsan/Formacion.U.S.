@@ -27,7 +27,7 @@ import { uploadPdfDocument, type UploadDependencies } from "@/server/documents/s
 import type { PdfDocumentStore } from "@/server/documents/store";
 import type { GeminiDeps } from "@/server/ai/gemini";
 import { assertPageCountDeclared, assertPdfHeader } from "@/domain/storage/pdf-upload";
-import { MAX_PDF_BYTES } from "@/domain/storage/pdf-chunks";
+import { MAX_AI_UPLOAD_BYTES } from "@/server/ai/config";
 
 /**
  * «CREAR CURSO CON IA»: EL RECORRIDO COMPLETO
@@ -102,11 +102,14 @@ export async function startAiCourse(
   // El PDF se comprueba **antes** de crear nada: si el fichero no vale, no
   // queda un curso vacío a medias que alguien tenga que borrar a mano.
   assertPdfHeader(input.pdfBytes);
-  if (input.pdfBytes.length > MAX_PDF_BYTES) {
+  if (input.pdfBytes.length > MAX_AI_UPLOAD_BYTES) {
     throw new DomainError(
-      "PDF_TOO_LARGE",
-      `El documento supera el máximo permitido (${Math.round(MAX_PDF_BYTES / (1024 * 1024))} MB).`,
+      "PDF_TOO_LARGE_FOR_WIZARD",
+      `El asistente envía el PDF en una sola petición y admite hasta ${Math.round(
+        MAX_AI_UPLOAD_BYTES / (1024 * 1024),
+      )} MB. Para un temario mayor, súbelo por partes desde el editor del curso.`,
       413,
+      { maxBytes: MAX_AI_UPLOAD_BYTES, bytes: input.pdfBytes.length },
     );
   }
   assertPageCountDeclared(input.pageCount, input.pdfBytes.length);
