@@ -1,8 +1,10 @@
 import {
   DEFAULT_GEMINI_MODEL,
   DEFAULT_GROQ_MODEL,
+  aiKeysPresent,
   aiProvider,
   aiProviderLabel,
+  declaredProvider,
   geminiSettings,
   groqSettings,
   redactSecrets,
@@ -38,7 +40,22 @@ export interface GeminiStatus {
   modelAvailable: boolean | null;
   checkedAt: string | null;
   message: string;
+  /**
+   * Diagnóstico para la pantalla: qué claves ve el servidor y si el proveedor
+   * está forzado. Nunca dice el valor de una clave, solo si existe.
+   *
+   * Existe por el fallo del 25/10/2026: la aplicación seguía usando Gemini sin
+   * que hubiera forma de saber, desde la interfaz, si faltaba la clave de Groq
+   * o si era una decisión de `AI_PROVIDER`.
+   */
+  diagnostics: {
+    keys: { groq: boolean; gemini: boolean };
+    declared: AiProviderId | null;
+  };
 }
+
+/** Lo que devuelve cada comprobación, antes de añadir el diagnóstico. */
+type AiProbe = Omit<GeminiStatus, "diagnostics">;
 
 export interface GeminiStatusDeps {
   env?: GeminiEnv;
@@ -52,7 +69,7 @@ export interface GeminiStatusDeps {
 
 const CACHE_MS = 5 * 60 * 1000;
 
-let cache: { at: number; provider: AiProviderId; status: GeminiStatus } | null = null;
+let cache: { at: number; provider: AiProviderId; status: AiProbe } | null = null;
 
 /** Solo pruebas. */
 export function resetGeminiStatusCache(): void {
@@ -70,10 +87,25 @@ export async function geminiStatus(deps: GeminiStatusDeps = {}): Promise<GeminiS
   const now = deps.now ?? (() => new Date());
   const at = now();
 
-  if (provider === "groq") {
-    return groqStatus(deps, env, at);
-  }
+  const status =
+    provider === "groq"
+      ? await groqStatus(deps, env, at)
+      : await geminiOnlyStatus(deps, env, at, provider);
 
+  // El diagnóstico se añade al final y en un solo sitio: los dos caminos
+  // (Groq y Gemini) devuelven la misma forma.
+  return {
+    ...status,
+    diagnostics: { keys: aiKeysPresent(env), declared: declaredProvider(env) },
+  };
+}
+
+async function geminiOnlyStatus(
+  deps: GeminiStatusDeps,
+  env: GeminiEnv,
+  at: Date,
+  provider: AiProviderId,
+): Promise<AiProbe> {
   const settings = geminiSettings(env);
 
   if (!settings.apiKey) {
@@ -121,7 +153,7 @@ async function probeOnce(
   at: Date,
   env: GeminiEnv,
   provider: AiProviderId,
-): Promise<GeminiStatus> {
+): Promise<AiProbe> {
   const checkedAt = at.toISOString();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Math.min(settings.timeoutMs, 15_000));
@@ -238,7 +270,7 @@ async function groqStatus(
   deps: GeminiStatusDeps,
   env: GeminiEnv,
   at: Date,
-): Promise<GeminiStatus> {
+): Promise<AiProbe> {
   const settings = groqSettings(env);
   const provider: AiProviderId = "groq";
   const providerLabel = aiProviderLabel(provider);
@@ -282,7 +314,7 @@ async function groqStatus(
   const timer = setTimeout(() => controller.abort(), Math.min(settings.timeoutMs, 15_000));
   const checkedAt = at.toISOString();
 
-  let result: GeminiStatus;
+  let result: AiProbe;
   try {
     const response = await fetchImpl(`${settings.apiBase}/models`, {
       method: "GET",

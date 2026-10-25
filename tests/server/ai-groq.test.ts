@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { DomainError } from "@/domain/text";
 import {
+  aiKeysPresent,
   aiProvider,
+  declaredProvider,
   groqSettings,
   redactSecrets,
   requireGroq,
@@ -103,15 +105,27 @@ describe("proveedor activo", () => {
     expect(aiProvider({ GROQ_API_KEY: KEY })).toBe("groq");
   });
 
-  it("prefiere Gemini si están las dos claves y no se declara proveedor", () => {
-    expect(aiProvider({ GROQ_API_KEY: KEY, GEMINI_API_KEY: "AIzaTEST" })).toBe("gemini");
+  it("usa Groq si están las dos claves y no se declara proveedor", () => {
+    // Regla cambiada el 25/10/2026: en producción convivían las dos claves, el
+    // asistente seguía en Gemini y no había forma de verlo desde la interfaz.
+    // Añadir una clave de Groq es deliberado: si está, se usa.
+    expect(aiProvider({ GROQ_API_KEY: KEY, GEMINI_API_KEY: "AIzaTEST" })).toBe("groq");
+  });
+
+  it("informa de qué claves existen y de si el proveedor está forzado", () => {
+    expect(aiKeysPresent({ GROQ_API_KEY: KEY })).toEqual({ groq: true, gemini: false });
+    expect(aiKeysPresent({})).toEqual({ groq: false, gemini: false });
+    expect(declaredProvider({ AI_PROVIDER: "Gemini" })).toBe("gemini");
+    expect(declaredProvider({ AI_PROVIDER: "otra" })).toBeNull();
+    expect(declaredProvider({})).toBeNull();
   });
 
   it("obedece a AI_PROVIDER por encima de las claves", () => {
     expect(aiProvider({ AI_PROVIDER: "groq", GEMINI_API_KEY: "AIzaTEST" })).toBe("groq");
     expect(aiProvider({ AI_PROVIDER: "gemini", GROQ_API_KEY: KEY })).toBe("gemini");
+    // Un valor desconocido en `AI_PROVIDER` no se interpreta: manda la clave.
     expect(aiProvider({ AI_PROVIDER: "otra-cosa", GROQ_API_KEY: KEY, GEMINI_API_KEY: "x" })).toBe(
-      "gemini",
+      "groq",
     );
   });
 
@@ -302,7 +316,7 @@ describe("punto de entrada del proveedor", () => {
     expect(captured[0].url).toContain("api.groq.com");
   });
 
-  it("sigue mandando a Gemini cuando no hay proveedor declarado", async () => {
+  it("sigue mandando a Gemini cuando solo hay clave de Google", async () => {
     const { fetch, captured } = respondWith({
       candidates: [{ finishReason: "STOP", content: { parts: [{ text: '{"topics":["uno"]}' }] } }],
       usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5 },

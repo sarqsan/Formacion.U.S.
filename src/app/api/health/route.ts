@@ -52,6 +52,8 @@ export async function GET() {
     modelAvailable: gemini.modelAvailable,
     checkedAt: gemini.checkedAt,
     message: gemini.message,
+    // Solo booleanos: qué claves ve el servidor y si el proveedor está forzado.
+    diagnostics: gemini.diagnostics,
   };
 
   return jsonOk({

@@ -214,13 +214,20 @@ retención cero en *Data Controls*.
 | Variable | Efecto |
 | --- | --- |
 | `GROQ_API_KEY` | La clave. **Solo en el servidor**: nunca en el chat, ni en un log, ni en el código. |
-| `AI_PROVIDER` | `groq` o `gemini`. Si no está puesta: Groq cuando solo hay clave de Groq; Gemini en cualquier otro caso. |
+| `AI_PROVIDER` | `groq` o `gemini`. Si no está puesta: **Groq si existe `GROQ_API_KEY`**; Gemini si no. |
 | `GROQ_MODEL` | Por defecto `openai/gpt-oss-120b`. |
 | `GROQ_TPM` | Tokens por minuto del plan. Por defecto 8 000 (tramo gratuito). |
 | `GROQ_TIMEOUT_MS` | Tiempo máximo por llamada. Por defecto 90 000 ms. |
 
 Para volver a Gemini: `AI_PROVIDER=gemini` (y la clave de Google sigue donde
 estaba). No hay que tocar código ni desplegar otra rama.
+
+**Si la pantalla dice «Conexión con Google Gemini»**: mira la línea de
+diagnóstico que hay debajo de la tarjeta. Dice qué claves ve el servidor, sin
+mostrar su valor. Si `Groq: no`, la variable no ha llegado al entorno de
+producción: en Vercel hay que marcarla también en **Production**, no solo en
+Preview/Development, y volver a desplegar. `/api/health` publica lo mismo en
+`ai.diagnostics`.
 
 ### 6.4 Límites que hay que conocer
 

@@ -96,6 +96,34 @@ export default async function AiCoursePage({
           Modelo: <span className="mono">{status.model}</span>
           {status.checkedAt ? ` · comprobado ${new Date(status.checkedAt).toLocaleString("es-ES")}` : ""}
         </p>
+        {/*
+          Diagnóstico a la vista: el 25/10 el asistente siguió usando Gemini en
+          producción sin que se pudiera saber desde aquí si faltaba la clave de
+          Groq o si era una decisión de `AI_PROVIDER`.
+        */}
+        <p className="muted mt-1 text-xs">
+          Claves en el servidor: Groq {status.diagnostics.keys.groq ? "sí" : "no"} · Google{" "}
+          {status.diagnostics.keys.gemini ? "sí" : "no"}
+          {status.diagnostics.declared
+            ? ` · proveedor forzado: ${status.diagnostics.declared} (AI_PROVIDER)`
+            : " · proveedor forzado: no"}
+        </p>
+
+        {status.provider === "gemini" && !status.diagnostics.keys.groq ? (
+          <p className="alert alert-warn mt-3 text-xs leading-relaxed">
+            <strong>Falta GROQ_API_KEY en el servidor.</strong> Por eso el asistente sigue usando
+            Google. Añade la variable en Vercel → Settings → Environment Variables marcando el
+            entorno <strong>Production</strong> (y Preview, si quieres probarla antes) y vuelve a
+            desplegar: en cuanto esté, la aplicación la usará sin cambiar nada más.
+          </p>
+        ) : null}
+
+        {status.provider === "gemini" && status.diagnostics.keys.groq ? (
+          <p className="alert alert-info mt-3 text-xs leading-relaxed">
+            Hay claves de los dos proveedores y se está usando Google porque{" "}
+            <code>AI_PROVIDER=gemini</code>. Para usar Groq, cambia esa variable o bórrala.
+          </p>
+        ) : null}
 
         {comprobado ? <p className="alert alert-ok mt-3 text-sm">{comprobado}</p> : null}
 

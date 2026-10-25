@@ -96,19 +96,36 @@ export function requireGemini(env: GeminiEnv = process.env): GeminiSettings & { 
  * PROVEEDOR ACTIVO
  * ================
  *
- * `AI_PROVIDER` manda siempre. Si no está puesta, se elige **el que tenga
- * clave**: Groq si existe `GROQ_API_KEY` (y no hay clave de Gemini), Gemini en
- * cualquier otro caso. Así, añadir la variable de Groq en el despliegue cambia
- * de proveedor sin tocar código, y volver a Gemini es tan simple como poner
- * `AI_PROVIDER=gemini`.
+ * `AI_PROVIDER` manda siempre. Si no está puesta, manda **la clave**:
+ *
+ *   · hay `GROQ_API_KEY` -> Groq;
+ *   · si no, Gemini.
+ *
+ * La regla anterior era la contraria (Gemini ganaba cuando había dos claves) y
+ * provocó un fallo real el 25/10/2026: en producción siguieron conviviendo la
+ * clave de Google y la de Groq, el asistente siguió usando Gemini y la pantalla
+ * decía «Conexión con Google Gemini» sin explicar por qué. Añadir una clave de
+ * Groq es un acto deliberado: si está, se usa. Para volver a Google basta con
+ * `AI_PROVIDER=gemini`, que sigue teniendo prioridad sobre todo.
  */
 export type AiProviderId = "gemini" | "groq";
 
-export function aiProvider(env: GeminiEnv = process.env): AiProviderId {
+/** Proveedor pedido a mano en `AI_PROVIDER`; `null` si no se ha declarado. */
+export function declaredProvider(env: GeminiEnv = process.env): AiProviderId | null {
   const declared = clean(env.AI_PROVIDER)?.toLowerCase();
   if (declared === "groq" || declared === "gemini") return declared;
-  if (clean(env.GROQ_API_KEY) && !clean(env.GEMINI_API_KEY)) return "groq";
-  return "gemini";
+  return null;
+}
+
+export function aiProvider(env: GeminiEnv = process.env): AiProviderId {
+  const declared = declaredProvider(env);
+  if (declared) return declared;
+  return clean(env.GROQ_API_KEY) ? "groq" : "gemini";
+}
+
+/** Qué claves hay en el proceso. **Nunca** su valor: solo si existen. */
+export function aiKeysPresent(env: GeminiEnv = process.env): { groq: boolean; gemini: boolean } {
+  return { groq: clean(env.GROQ_API_KEY) !== null, gemini: clean(env.GEMINI_API_KEY) !== null };
 }
 
 export function aiProviderLabel(provider: AiProviderId): string {

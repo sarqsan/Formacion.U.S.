@@ -173,3 +173,56 @@ describe("geminiStatus", () => {
     expect(status.message).toContain("No se ha comprobado");
   });
 });
+
+/**
+ * DIAGNÓSTICO DEL PROVEEDOR
+ * ========================
+ *
+ * Incidencia real (25/10/2026): en producción convivían la clave de Google y la
+ * de Groq, el asistente seguía usando Gemini y la pantalla no daba ninguna pista
+ * de por qué. El estado ahora publica **qué claves ve el servidor** (solo
+ * booleanos) y si el proveedor está forzado, para que la pantalla pueda decir
+ * exactamente qué falta.
+ */
+describe("diagnóstico del proveedor", () => {
+  const GROQ_KEY = "gsk_TESTKEY0123456789abcdefghijklmnop";
+
+  it("con solo la clave de Google usa Gemini y lo dice", async () => {
+    const { fetch } = modelsFetch(["gemini-2.5-flash"]);
+    const status = await geminiStatus({ env: ENV, fetchImpl: fetch, now: () => NOW });
+
+    expect(status.provider).toBe("gemini");
+    expect(status.diagnostics).toEqual({ keys: { groq: false, gemini: true }, declared: null });
+  });
+
+  it("con las dos claves y sin AI_PROVIDER usa Groq", async () => {
+    const { fetch } = modelsFetch(["openai/gpt-oss-120b"]);
+    const status = await geminiStatus({
+      env: { ...ENV, GROQ_API_KEY: GROQ_KEY },
+      fetchImpl: fetch,
+      now: () => NOW,
+    });
+
+    expect(status.provider).toBe("groq");
+    expect(status.diagnostics.keys).toEqual({ groq: true, gemini: true });
+    expect(status.diagnostics.declared).toBeNull();
+  });
+
+  it("AI_PROVIDER=gemini manda aunque exista la clave de Groq", async () => {
+    const { fetch } = modelsFetch(["gemini-2.5-flash"]);
+    const status = await geminiStatus({
+      env: { ...ENV, GROQ_API_KEY: GROQ_KEY, AI_PROVIDER: "gemini" },
+      fetchImpl: fetch,
+      now: () => NOW,
+    });
+
+    expect(status.provider).toBe("gemini");
+    expect(status.diagnostics.declared).toBe("gemini");
+  });
+
+  it("nunca publica el valor de una clave", async () => {
+    const { fetch } = modelsFetch(["gemini-2.5-flash"]);
+    const status = await geminiStatus({ env: ENV, fetchImpl: fetch, now: () => NOW });
+    expect(JSON.stringify(status)).not.toContain(KEY);
+  });
+});
