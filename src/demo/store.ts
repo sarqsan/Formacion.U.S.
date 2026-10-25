@@ -1,6 +1,12 @@
 import { DomainError } from "@/domain/text";
-import { initProgress, recordTopicAttempt, type CourseProgress } from "@/domain/progress/course-progress";
+import {
+  initProgress,
+  recordFinalExamAttempt,
+  recordTopicAttempt,
+  type CourseProgress,
+} from "@/domain/progress/course-progress";
 import type { CourseVersionDefinition, TopicDefinition } from "@/domain/courses/content";
+import type { CertificateRecord } from "@/domain/certificates/certificate";
 import type { Enrollment } from "@/domain/courses/enrollment";
 import {
   toAnswerKeys,
@@ -84,6 +90,13 @@ export interface DemoState {
    * recorrido de activación sea realista.
    */
   activationTokens: Map<string, DemoActivationToken>;
+  /**
+   * Certificados emitidos (`certificates/{code}` en Firestore).
+   *
+   * La clave es el código determinista, igual que en Firestore. Se pierden al
+   * reiniciar, como todo el estado de la demostración.
+   */
+  certificates: Map<string, CertificateRecord>;
   /** Auditoría de las acciones de administración de cuentas. */
   audits: DemoAuditEntry[];
 }
@@ -97,7 +110,12 @@ export interface DemoActivationToken {
 }
 
 export interface DemoAuditEntry {
-  type: "account_disabled" | "account_enabled" | "activation_reissued";
+  type:
+    | "account_disabled"
+    | "account_enabled"
+    | "activation_reissued"
+    | "password_reset_admin"
+    | "certificate_issued";
   actorUid: string;
   targetUid: string;
   at: string;
@@ -129,6 +147,7 @@ function seedState(): DemoState {
     attempts: [],
     pdf: createPdfMemoryState(),
     activationTokens: new Map(),
+    certificates: new Map(),
     audits: [],
   };
 
@@ -259,6 +278,59 @@ function seedState(): DemoState {
         },
       );
     }
+  }
+
+  /*
+    Tercera alumna: el curso terminado.
+    Sirve para que el certificado se pueda ver sin recorrer antes un curso
+    entero. Se construye con las mismas funciones del dominio que usa la
+    aplicación real (`recordTopicAttempt`, `recordFinalExamAttempt`), así que
+    `completedAt` aparece por la misma regla que en producción y no porque el
+    dato esté escrito a mano.
+  */
+  const finishedRecord = state.courses.get("curso-prevencion-riesgos");
+  const finishedVersion = finishedRecord?.summary.publishedVersion;
+  if (finishedRecord && finishedVersion) {
+    let done: CourseProgress & { documents: StoredProgress["documents"] } = {
+      ...initProgress("curso-prevencion-riesgos", finishedVersion, ["riesgos", "emergencias"]),
+      documents: {
+        "doc-riesgos": {
+          documentId: "doc-riesgos",
+          totalPages: 3,
+          lastPageViewed: 3,
+          completedAt: "2026-01-08T10:00:00.000Z",
+        },
+        "doc-emergencias": {
+          documentId: "doc-emergencias",
+          totalPages: 2,
+          lastPageViewed: 2,
+          completedAt: "2026-01-08T10:20:00.000Z",
+        },
+      },
+    };
+    done = {
+      ...recordTopicAttempt(done, "riesgos", { passed: true, score: 100 }, "2026-01-08T10:10:00.000Z"),
+      documents: done.documents,
+    };
+    done = {
+      ...recordTopicAttempt(
+        done,
+        "emergencias",
+        { passed: true, score: 100 },
+        "2026-01-08T10:30:00.000Z",
+      ),
+      documents: done.documents,
+    };
+    done = {
+      ...recordFinalExamAttempt(done, { passed: true, score: 100 }, "2026-01-08T10:40:00.000Z"),
+      documents: done.documents,
+    };
+
+    state.progress.set(progressKey("demo-alumno-3", "curso-prevencion-riesgos"), {
+      ...done,
+      uid: "demo-alumno-3",
+      updatedAt: "2026-01-08T10:40:00.000Z",
+    });
   }
 
   return state;

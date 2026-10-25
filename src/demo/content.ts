@@ -413,6 +413,24 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
     disabledAt: null,
   },
   {
+    /*
+      Alumna con el curso ya terminado.
+      Existe para que se pueda ver el certificado sin recorrer antes un curso
+      entero: es el único caso en el que aparece el botón «Obtener
+      certificado». Su nombre es inventado, pero tiene forma de nombre real
+      para que se vea cómo se enmascara en la página pública de verificación.
+    */
+    uid: "demo-alumno-3",
+    username: "rol2.completado",
+    displayName: "Persona con curso completado (demostración)",
+    personRol: "ROL 2",
+    role: "learner",
+    status: "active",
+    claimsVersion: 1,
+    createdAt: "2026-01-06T08:07:00.000Z",
+    disabledAt: null,
+  },
+  {
     uid: "demo-pendiente",
     username: "rol2.pendiente",
     displayName: "Cuenta pendiente de activación",
@@ -429,6 +447,7 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
 export const DEMO_ENROLLMENTS: Array<{ uid: string; courseId: string; enrolledAt: string }> = [
   { uid: "demo-alumno-1", courseId: COURSE_RISKS_ID, enrolledAt: "2026-01-07T09:00:00.000Z" },
   { uid: "demo-alumno-2", courseId: COURSE_RISKS_ID, enrolledAt: "2026-01-07T09:30:00.000Z" },
+  { uid: "demo-alumno-3", courseId: COURSE_RISKS_ID, enrolledAt: "2026-01-07T10:00:00.000Z" },
 ];
 
 /** Filas de ejemplo para la demostración de importación desde Excel. */

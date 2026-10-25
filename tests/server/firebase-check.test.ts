@@ -241,9 +241,12 @@ describe("el identificador del proyecto está alineado en todo el repositorio", 
   });
 
   it("no queda ninguna referencia al identificador antiguo", () => {
+    // El dominio de producción (`formacionus.vercel.app`) sí se escribe con ese
+    // prefijo y es legítimo: se excluye para que la comprobación siga mirando lo
+    // que importa, el identificador de proyecto de Firebase.
     const offenders = [".firebaserc", ".env.example", "firebase.json", "scripts/firebase-check.ts",
       "src/server/firebase/public-config.ts", "docs/CONEXION-FIREBASE.md", "docs/INFORME-FASE-8.md"]
-      .filter((file) => /formacionus(?!-63555)/.test(read(file)));
+      .filter((file) => /formacionus(?!-63555|\.vercel\.app)/.test(read(file)));
     expect(offenders).toEqual([]);
   });
 });

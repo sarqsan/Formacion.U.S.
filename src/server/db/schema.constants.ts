@@ -36,6 +36,7 @@ export const COLLECTIONS = {
   progress: "progress",
   progressHistory: "progressHistory",
   attempts: "attempts",
+  certificates: "certificates",
   meta: "meta",
 } as const;
 
@@ -66,6 +67,7 @@ export const SERVER_ONLY_COLLECTIONS = [
   COLLECTIONS.answerKeys,
   COLLECTIONS.documents,
   COLLECTIONS.pdfChunks,
+  COLLECTIONS.certificates,
   COLLECTIONS.meta,
 ] as const;
 
@@ -83,5 +85,6 @@ export const ROOT_COLLECTIONS = [
   COLLECTIONS.progress,
   COLLECTIONS.progressHistory,
   COLLECTIONS.attempts,
+  COLLECTIONS.certificates,
   COLLECTIONS.meta,
 ] as const;

@@ -2,6 +2,7 @@ import { DomainError } from "@/domain/text";
 import { assertAdmin, type Actor } from "@/domain/auth/authorization";
 import type { CourseVersionDefinition } from "@/domain/courses/content";
 import type { ImportPreview } from "@/domain/people/import-rows";
+import { listActivity } from "@/server/audit/activity";
 import type { ImportDependencies } from "@/server/import/service";
 import type { DraftStructure, SaveAssessmentsResult } from "@/server/courses/editor";
 import type { QuizQuestionDefinition } from "@/domain/assessments/scoring";
@@ -13,6 +14,7 @@ import { parsePeopleWorkbook } from "@/server/import/excel";
 import { buildImportPreview } from "@/server/import/service";
 import { isDemoMode } from "@/demo/session";
 import * as demo from "@/demo/service";
+import * as demoCertificates from "@/demo/certificates";
 import { definitionOf as demoDefinitionOf, demoState } from "@/demo/store";
 import * as firebase from "@/server/portal/firebase";
 
@@ -248,6 +250,59 @@ export async function adminActivationSummary(actor: Actor, uid: string) {
 }
 
 /**
+ * Contraseña temporal generada por el servidor para una cuenta activa.
+ *
+ * Solo existe en modo real: en la demostración no hay Firebase Authentication,
+ * así que no hay contraseña que cambiar. La pantalla lo dice y no ofrece el
+ * botón; esto es el cinturón por si alguien llama igualmente.
+ */
+export async function adminResetPassword(actor: Actor, uid: string) {
+  if (portalMode() === "demo") {
+    throw new DomainError(
+      "DEMO_UNSUPPORTED",
+      "La demostración no tiene contraseñas reales: el restablecimiento necesita Firebase.",
+      400,
+    );
+  }
+  return firebase.adminResetPassword(actor, uid);
+}
+
+/**
+ * Alta de una persona suelta. Mismo camino que la importación (misma
+ * validación, mismo código de un solo uso) con un formulario en vez de un Excel.
+ */
+export async function adminCreatePerson(
+  actor: Actor,
+  input: { apellido: string; rol: string },
+) {
+  if (portalMode() === "demo") {
+    throw new DomainError(
+      "DEMO_UNSUPPORTED",
+      "La demostración no crea cuentas reales: usa la importación de Excel o el modo real.",
+      400,
+    );
+  }
+  return firebase.adminCreatePerson(actor, input);
+}
+
+/**
+ * Registro de actividad. El servicio es el mismo en las dos persistencias; solo
+ * cambia de dónde lee los eventos (Firestore o memoria).
+ */
+export async function adminActivity(actor: Actor, limit?: number) {
+  return portalMode() === "demo"
+    ? listActivity(actor, { audit: demo.demoAuditReader() }, limit ? { limit } : {})
+    : firebase.adminActivity(actor, limit);
+}
+
+/** Matriculación en bloque: mismo servicio en las dos persistencias. */
+export async function adminEnrollMany(actor: Actor, courseId: string, uids: readonly string[]) {
+  return portalMode() === "demo"
+    ? demo.adminEnrollMany(actor, courseId, uids)
+    : firebase.adminEnrollMany(actor, courseId, uids);
+}
+
+/**
  * Historial de formación superada (bloque 10): el archivo de versiones
  * anteriores, que hasta ahora se escribía y no se leía.
  */
@@ -261,6 +316,43 @@ export async function accountCourseHistory(actor: Actor, uid: string) {
   return portalMode() === "demo"
     ? demo.accountCourseHistory(actor, uid)
     : firebase.accountCourseHistory(actor, uid);
+}
+
+// ---------------------------------------------------------------------------
+// Certificados
+// ---------------------------------------------------------------------------
+
+/**
+ * Emite (o recupera) el certificado de un curso completado.
+ *
+ * Mismo servicio en las dos persistencias; solo cambia el almacén. Pedirlo dos
+ * veces devuelve el mismo documento porque el código se deriva de
+ * persona + curso + versión.
+ */
+export async function issueCertificateFor(actor: Actor, input: { uid: string; courseId: string }) {
+  return portalMode() === "demo"
+    ? demoCertificates.issueCertificateFor(actor, input)
+    : firebase.issueCertificateFor(actor, input);
+}
+
+/** Certificado para verlo o descargar: el titular o administración. */
+export async function certificateRecordFor(actor: Actor, code: string) {
+  return portalMode() === "demo"
+    ? demoCertificates.certificateRecordFor(actor, code)
+    : firebase.certificateRecordFor(actor, code);
+}
+
+/**
+ * Verificación pública por código (sin sesión).
+ *
+ * No recibe actor a propósito: no hay nada que autorizar más allá de conocer el
+ * código, y lo que devuelve (curso, versión, fecha y nombre enmascarado) no
+ * identifica a nadie.
+ */
+export async function certificateVerification(code: unknown) {
+  return portalMode() === "demo"
+    ? demoCertificates.certificateVerification(code)
+    : firebase.certificateVerification(code);
 }
 
 export async function adminProgress(actor: Actor) {

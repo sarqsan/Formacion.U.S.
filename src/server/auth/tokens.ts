@@ -53,6 +53,55 @@ export function generateUnusablePassword(): string {
   return randomBytes(48).toString("base64url");
 }
 
+/**
+ * Contraseña temporal legible para entregar en mano.
+ *
+ * Se usa cuando administración restablece la contraseña de otra persona: la
+ * genera el servidor (no se teclea) para que cumpla la política por
+ * construcción y no acabe siendo «1234». Se escribe en grupos de 4 caracteres
+ * para poder dictarla sin errores; el guion no forma parte de la política y no
+ * aparece en la contraseña real.
+ *
+ * Garantías: 16 caracteres, al menos una minúscula, una mayúscula y un dígito;
+ * sin caracteres que se confunden al leerlos (0/O, 1/l/I).
+ */
+export function generateTemporaryPassword(): string {
+  const lower = "abcdefghijkmnopqrstuvwxyz";
+  const upper = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+  const digits = "23456789";
+  const all = lower + upper + digits;
+
+  const pick = (alphabet: string): string => {
+    // Rechazo de muestras fuera del rango para no sesgar el resultado.
+    const limit = 256 - (256 % alphabet.length);
+    for (;;) {
+      const byte = randomBytes(1)[0];
+      if (byte < limit) return alphabet[byte % alphabet.length];
+    }
+  };
+
+  const chars = [pick(lower), pick(upper), pick(digits)];
+  while (chars.length < 16) chars.push(pick(all));
+
+  // Mezcla de Fisher-Yates con bytes aleatorios: las tres obligatorias no
+  // quedan siempre en las mismas posiciones.
+  for (let i = chars.length - 1; i > 0; i -= 1) {
+    const j = randomBytes(1)[0] % (i + 1);
+    [chars[i], chars[j]] = [chars[j], chars[i]];
+  }
+
+  return chars.join("");
+}
+
+/** La misma contraseña, agrupada para dictarla: `abcd-efgh-…`. */
+export function groupPasswordForReading(password: string, size = 4): string {
+  const groups: string[] = [];
+  for (let i = 0; i < password.length; i += size) {
+    groups.push(password.slice(i, i + size));
+  }
+  return groups.join("-");
+}
+
 /** Huella no reversible para comparar tokens de idempotencia en logs. */
 export function shortFingerprint(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex").slice(0, 12);

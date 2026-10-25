@@ -172,7 +172,7 @@ describe("1. denegar por defecto", () => {
     expect(RULES).toMatch(/match \/\{document=\*\*\}\s*\{\s*allow read, write: if false;\s*\}/);
   });
 
-  it("declara las catorce colecciones del esquema", () => {
+  it("declara las quince colecciones del esquema", () => {
     const missing = Object.values(COLLECTIONS).filter(
       (name) => !RULES.includes(`match /${name}/`),
     );

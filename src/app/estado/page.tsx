@@ -194,6 +194,14 @@ export default async function StatusPage() {
           Consulta <Link href="/login" className="underline">acceso</Link> y la documentación del
           repositorio (<code className="mono">docs/ENTREGA-DEMO.md</code>).
         </p>
+        <p className="alert alert-info mt-3 text-xs leading-relaxed">
+          <strong>La demostración no puede estar abierta en un servidor.</strong> Con{" "}
+          <code className="mono">NODE_ENV=production</code>,{" "}
+          <code className="mono">DEMO_MODE=1</code> se ignora: la aplicación usa Firebase y no hay
+          acceso sin contraseña. No existe variable para saltarse el candado. Se puede comprobar en{" "}
+          <code className="mono">/api/health</code>: <code className="mono">&quot;demo&quot;</code>{" "}
+          siempre es <code className="mono">false</code> en producción.
+        </p>
       </div>
     </div>
   );

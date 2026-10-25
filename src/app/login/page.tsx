@@ -10,9 +10,9 @@ export const dynamic = "force-dynamic";
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ demo?: string }>;
+  searchParams: Promise<{ demo?: string; password?: string }>;
 }) {
-  const { demo } = await searchParams;
+  const { demo, password } = await searchParams;
   const demoMode = isDemoMode();
   // El formulario real necesita **las dos** partes: credenciales del servidor
   // (Admin SDK) y configuración pública de la app web (SDK del navegador).
@@ -35,6 +35,13 @@ export default async function LoginPage({
             Usa el usuario que te entregó administración y la contraseña que elegiste al activar la
             cuenta.
           </p>
+
+          {password === "cambiada" ? (
+            <p className="alert alert-info mt-4 text-sm">
+              Contraseña cambiada. Por seguridad se han cerrado las sesiones abiertas: entra con la
+              contraseña nueva.
+            </p>
+          ) : null}
 
           <div className="mt-5">
             {firebaseReady ? (

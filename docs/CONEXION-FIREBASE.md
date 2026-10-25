@@ -48,7 +48,7 @@ valores que genera Firebase.
 | `SESSION_COOKIE_NAME` | `formacion_session` | `__Host-formacion_session` | cookie de sesión. **En producción debe empezar por `__Host-`** |
 | `SESSION_TTL_HOURS` | `12` | `12` | duración de la cookie (1–336 h) |
 | `PDF_STORAGE_BUDGET_MB` | `512` | `512` | presupuesto de PDF en Firestore |
-| `DEMO_MODE` | vacío | vacío | `1` = demostración en memoria, **nunca** junto con credenciales reales |
+| `DEMO_MODE` | vacío | vacío | `1` = demostración en memoria, **nunca** junto con credenciales reales. Con `NODE_ENV=production` se ignora: el candado de `src/server/config/demo-gate.ts` la niega y `/api/health` responde `"demo": false` |
 
 Regla de oro: `AUTH_EMAIL_DOMAIN` y `NEXT_PUBLIC_AUTH_EMAIL_DOMAIN` deben
 coincidir. Si no coinciden, las cuentas se crean con un correo y se intenta
@@ -229,9 +229,13 @@ No existe registro público y una fila de Excel nunca produce un administrador
 (por diseño). El alta se hace con:
 
 ```bash
-BOOTSTRAP_ADMIN_USERNAMES="rol1.apellido" \
-BOOTSTRAP_CONFIRM=yes \
-node scripts/bootstrap-admins.mjs
+# Credenciales: el JSON de la cuenta de servicio (recomendado)…
+export FIREBASE_SERVICE_ACCOUNT_FILE="$HOME/claves/formacionus-63555.json"
+# …o las tres variables FIREBASE_PROJECT_ID / FIREBASE_CLIENT_EMAIL / FIREBASE_PRIVATE_KEY.
+
+export BOOTSTRAP_ADMIN_USERNAMES="rol1.apellido"
+npm run bootstrap:dry                    # plan, sin escribir
+BOOTSTRAP_CONFIRM=yes npm run bootstrap  # crea la cuenta e imprime el código
 ```
 
 Crea la cuenta como `pending_activation` y **muestra una sola vez** un código de
@@ -259,13 +263,123 @@ Qué hace si algo sale mal:
 - **Concurrencia**: una reserva ya tomada (otra ejecución, o la cuenta ya
   existe) se informa como «omitido» y no aborta el resto del lote.
 
-Recomendación operativa: **un solo nombre por ejecución** la primera vez. Si el
-proceso muriera después de crear la cuenta, no hay todavía ningún administrador
-que pueda reemitir el código desde el panel; habría que limpiar a mano en la
-consola (`activationTokens`, `accounts`, usuario de Auth y `usernames`).
+Recomendación operativa: **un solo nombre por ejecución** la primera vez.
+
+Si el proceso muriera después de crear la cuenta, o si el código se pierde antes
+de que la persona lo canjee, **no hay que limpiar nada a mano**: se emite otro.
+
+```bash
+BOOTSTRAP_ADMIN_USERNAMES="rol1.apellido" npm run bootstrap -- --reissue
+```
+
+La reemisión revoca los códigos vivos de esa cuenta y crea uno nuevo (los
+anteriores dejan de servir en el acto), imprime el código una vez y registra
+`audits/activation_reissued`. Solo funciona con cuentas en `pending_activation`:
+una cuenta activa no necesita código y una deshabilitada debe reactivarse
+primero desde el panel. Es el único camino cuando todavía no existe ningún
+administrador activo que pueda entrar a `/admin/personas` a reemitirlo.
 
 Las pruebas de estos caminos de fallo están en
 `tests/server/bootstrap-admins.test.ts` (sin red ni credenciales).
+
+### Estado del alta inicial
+
+**Hecho el 2026-10-24:** la cuenta `admin1` existe en `formacionus-63555` y está
+**activa** (código de activación canjeado y contraseña elegida por su titular en
+`/activar`), y el acceso real funciona en `https://formacionus.vercel.app`.
+
+Lo que esto confirma, por haber ocurrido de verdad y no por inferencia:
+
+- el alta crea la cuenta en `pending_activation` y emite un código de un solo uso;
+- la activación lo canjea, fija la contraseña y pasa la cuenta a `active`;
+- el login contra Firebase Auth emite cookie y deja entrar;
+- sin sesión, `/admin/personas` redirige a `/login` y `/api/me` responde
+  `authenticated:false`.
+
+Lo que **no** está demostrado y sigue pendiente:
+
+- ~~No hay recuperación de contraseña.~~ **Resuelto** con
+  `--reset-password` (ver abajo).
+- Las reglas de Firestore siguen sin ejecutarse en el emulador (ver paso 7).
+
+Nota de seguridad operativa: el código de activación se mostró una vez en la
+terminal del Codespace y se revocó (`--reissue`) antes de usarlo, por haber
+quedado expuesto en un canal de texto. Con el código revocado no quedó ningún
+secreto utilizable fuera de su sitio.
+
+### Paso 6 bis — Contraseña olvidada de una cuenta ya activa
+
+**Desde el panel (recomendado).** En `/admin/personas/<usuario>` hay un botón
+«Restablecer contraseña». La genera el servidor cumpliendo la política, se
+muestra **una sola vez** para entregarla en mano, cierra las sesiones abiertas de
+esa cuenta y deja constancia en `audits/password_reset_admin` sin guardar la
+contraseña. No hace falta terminal, ni clave de servicio, ni conocer la anterior.
+
+**Desde la terminal (si no hay acceso al panel).** Los correos son sintéticos
+(`usuario@formacion.invalid`): no hay buzón que reciba un enlace de
+restablecimiento y `--reissue` solo actúa sobre cuentas pendientes. Para una
+cuenta activa:
+
+```bash
+export FIREBASE_SERVICE_ACCOUNT_FILE="$HOME/claves/cuenta.json"
+npm run bootstrap -- --reset-password nombre.apellido
+```
+
+Pide la contraseña **dos veces y sin mostrarla en pantalla** (si no hay terminal
+interactiva lee la primera línea de la entrada estándar, que sí queda en el
+historial: el prompt existe para evitarlo).
+
+Qué hace, en este orden, y qué garantiza:
+
+1. comprueba que la cuenta existe y está `active` (una pendiente se activa con su
+   código; una deshabilitada se reactiva antes desde el panel);
+2. aplica **la misma política que `/activar`**: 12–128 caracteres, minúscula,
+   mayúscula, número, sin espacios en los extremos y sin contener el nombre de
+   usuario. Si no la cumple, no cambia nada;
+3. fija la contraseña, sube `claimsVersion` en las claims **y** en la ficha, y
+   revoca los refresh tokens: las sesiones abiertas dejan de valer en el acto;
+4. registra `audits/password_reset`, sin la contraseña.
+
+Si algo falla a mitad, informa de **qué pasos se aplicaron**: cuando «contraseña»
+está en esa lista, la nueva ya funciona aunque el resto fallara y la anterior ya
+no sirve. Nada se presenta como correcto por suposición.
+
+La política está duplicada entre `src/domain/auth/activation.ts` (TypeScript) y
+`scripts/lib/bootstrap-admin-core.mjs` (el script corre con `node`, sin compilar).
+Una prueba lee ambas y falla si dejan de coincidir.
+
+### Paso 6 ter — Cambiar la contraseña estando dentro
+
+Esto **no es el paso 6 bis**: no requiere terminal, ni clave de servicio, ni que
+intervenga administración. Cualquier cuenta activa puede hacerlo sola.
+
+1. Entra en la aplicación y abre **Mi cuenta** (`/cuenta`).
+2. Escribe la contraseña actual y la nueva dos veces.
+
+Qué ocurre, y qué se ha decidido a propósito:
+
+- La contraseña actual se comprueba **en el servidor** contra Firebase
+  Authentication (Identity Toolkit), no en el navegador. El SDK de Admin sabe
+  fijar contraseñas, pero no verificarlas.
+- Se aplica **la misma política que `/activar`** y la misma función de dominio:
+  una sola definición, no dos que se desvíen.
+- La contraseña nueva no puede ser la actual.
+- Al terminar se **revocan los refresh tokens** y se borra la cookie: se cierran
+  las sesiones abiertas, incluidas las de otros dispositivos. El usuario vuelve
+  a entrar con la nueva. Si alguien más estaba dentro con esa cuenta, deja de
+  estarlo en la siguiente petición.
+- Se registra `audits/password_changed` **sin la contraseña**.
+- Hay un límite de 5 intentos por hora y usuario (`passwordLimiter`): si alguien
+  tiene una sesión robada, no puede probar contraseñas actuales sin fin.
+- El identificador de cuenta **sale de la sesión**, nunca del cuerpo de la
+  petición: esta ruta no permite cambiar la contraseña de otra persona ni con
+  una sesión de administración.
+- En modo demostración la ruta responde con un aviso: las cuentas ficticias no
+  tienen contraseña.
+
+Falta por hacer, y está anotado en `docs/ESTADO-Y-PENDIENTES.md`: la misma
+operación **desde el panel**, para que administración pueda restablecer la de
+otra persona sin usar el script.
 
 ### Paso 7 — Reglas e índices **[MANUAL, y solo cuando toque]**
 
@@ -273,7 +387,12 @@ Las pruebas de estos caminos de fallo están en
   emulador oficial en el entorno de desarrollo). Publicar `firestore.rules` sin
   validarlas está prohibido en este proyecto.
 - Cuando el emulador esté disponible: `npm run test:rules` (57 casos) y, con
-  todo en verde, publicar con `firebase deploy --only firestore:rules`.
+  todo en verde, publicar con `npm run rules:deploy -- --yes`.
+  Ese script ejecuta las pruebas otra vez y **se niega a publicar** si están
+  BLOCKED (no se ha probado nada) o FAILED, o si el proyecto configurado no es
+  `formacionus-63555`. `npm run rules:deploy -- --dry-run` enseña el plan sin
+  tocar nada. Publish a mano con `firebase deploy` sigue siendo posible, pero ya
+  no es el camino documentado.
 - Índices: `npm run test:firestore` y `firebase deploy --only firestore:indexes`
   (el fichero ya contiene solo los índices que el código usa).
 - `.firebaserc` ya apunta a `formacionus-63555`; ningún despliegue se hace desde aquí.
@@ -605,8 +724,9 @@ las del fichero.
    las consultas reales. **No añadir índices** salvo que `db:check` señale una
    consulta que el código ejecuta de verdad.
 5. Publicar reglas e índices **solo después** de que el emulador pase:
-   `firebase deploy --only firestore:rules,firestore:indexes` (acción reservada;
-   no ejecutada desde aquí).
+   `npm run rules:deploy -- --yes` para las reglas (se niega si las pruebas no
+   están en verde) y `firebase deploy --only firestore:indexes` para los índices
+   (acción reservada; no ejecutada desde aquí).
 6. Repetir la batería negativa contra el proyecto real con una cuenta de prueba
    (lectura anónima, lectura de otro alumno, cuenta deshabilitada) y borrarla al
    terminar.

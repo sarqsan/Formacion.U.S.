@@ -75,6 +75,7 @@ describe("inventario de endpoints", () => {
   it("encuentra las rutas esperadas", () => {
     const paths = routes.map((route) => route.relativePath).sort();
     expect(paths).toEqual([
+      "account/password/route.ts",
       "activate/route.ts",
       "admin/documents/[documentId]/attach/route.ts",
       "admin/documents/route.ts",
@@ -83,9 +84,12 @@ describe("inventario de endpoints", () => {
       "admin/documents/uploads/[documentId]/parts/[index]/route.ts",
       "admin/documents/uploads/route.ts",
       "admin/enrollments/route.ts",
+      "admin/exports/activity/route.ts",
+      "admin/exports/progress/route.ts",
       "admin/import/confirm/route.ts",
       "admin/import/preview/route.ts",
       "auth/session/route.ts",
+      "certificates/[code]/file/route.ts",
       "documents/[documentId]/file/route.ts",
       "documents/[documentId]/pages/route.ts",
       "health/route.ts",
@@ -244,6 +248,31 @@ describe("endpoints de lectura", () => {
     expect(me).toBeTruthy();
     expect(me?.source).toContain("actor.uid");
     expect(me?.source).not.toContain("collection(\"accounts\").get()");
+  });
+});
+
+describe("certificados", () => {
+  it("la descarga exige sesión y la comprobación vive en el servicio", () => {
+    const route = routes.find((item) => item.relativePath === "certificates/[code]/file/route.ts");
+    expect(route).toBeTruthy();
+    expect(route?.methods).toEqual(["GET"]);
+    // La sesión se resuelve en la ruta…
+    expect(route?.source).toContain("requirePortalActor(");
+    // …y quién puede ver el documento lo decide `certificateForDownload`, no
+    // la ruta: el código del certificado no es una contraseña.
+    expect(route?.source).toContain("certificateRecordFor(");
+    expect(route?.source).toContain('"Cache-Control": "no-store, max-age=0, private"');
+  });
+
+  it("la verificación pública no resuelve actor ni devuelve el nombre completo", () => {
+    const page = readFileSync(
+      join(process.cwd(), "src", "app", "verificar", "[code]", "page.tsx"),
+      "utf8",
+    );
+    expect(page).toContain("certificateVerification(");
+    expect(page).not.toContain("getUiSession(");
+    expect(page).toContain("holderMasked");
+    expect(page).not.toContain("displayName");
   });
 });
 

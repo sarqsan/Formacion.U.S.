@@ -11,6 +11,7 @@ import {
 import { DataUnavailable, isUnavailable } from "@/app/components/data-unavailable";
 import { disableAccountAction, enableAccountAction } from "@/app/actions/demo";
 import { ReissueActivation } from "./account-actions";
+import { ResetPassword } from "./reset-password";
 
 export const dynamic = "force-dynamic";
 
@@ -219,6 +220,26 @@ export default async function PersonPage({
             sesión se cerrará al instante.
           </p>
         ) : null}
+
+        <div className="border-t border-[var(--border)] pt-3">
+          <h3 className="text-sm font-semibold">Contraseña</h3>
+          <p className="muted mt-1 text-xs leading-relaxed">
+            {account.status === "active"
+              ? "Si la persona ha olvidado su contraseña, genera una temporal aquí. Sustituye a la anterior, cierra sus sesiones abiertas y caduca cuando la cambie en «Mi cuenta»."
+              : "Solo las cuentas activas tienen contraseña que restablecer: una pendiente se activa con su código y una deshabilitada se reactiva antes."}
+          </p>
+          {account.status === "active" && session.mode === "firebase" ? (
+            <div className="mt-2">
+              <ResetPassword uid={account.uid} username={account.username} />
+            </div>
+          ) : null}
+          {account.status === "active" && session.mode === "demo" ? (
+            <p className="alert alert-info mt-2 text-xs">
+              En la demostración no hay Firebase Authentication: no se puede restablecer una
+              contraseña real. La operación existe y está probada en modo real.
+            </p>
+          ) : null}
+        </div>
       </section>
 
       <section className="card space-y-3 p-5">
@@ -335,8 +356,8 @@ export default async function PersonPage({
       </section>
 
       <p className="muted text-xs leading-relaxed">
-        Ficha de solo lectura salvo las tres operaciones indicadas: no se puede cambiar el rol, ni
-        el nombre de usuario, ni la contraseña desde aquí.
+        Ficha de solo lectura salvo las operaciones indicadas (deshabilitar o reactivar, reemitir
+        código y restablecer contraseña): no se puede cambiar el rol ni el nombre de usuario.
       </p>
     </div>
   );

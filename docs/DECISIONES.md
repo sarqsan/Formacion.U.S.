@@ -378,6 +378,10 @@ matrícula, publicación de versiones).
 - Enseñar la aplicación no exige tocar Firebase ni cargar datos personales.
 - El modo está apagado por defecto y **no puede activarse solo**: sin
   `DEMO_MODE=1` la aplicación pide Firebase y no hay datos de ejemplo.
+- **En producción está cerrado con llave** (24-10): con `NODE_ENV=production`,
+  `DEMO_MODE=1` se ignora aunque esté definido, y no hay variable de escape. La
+  decisión se toma en un único sitio (`src/server/config/demo-gate.ts`) y
+  `/api/health` publica `"demo": false` para poder comprobarlo desde fuera.
 - Las pruebas de la demostración verifican reglas de verdad (14 casos), pero **no
   sustituyen** a las pruebas de reglas ni a las transacciones contra el emulador.
 - Todo lo que se simula está dicho en pantalla; nada se presenta como conectado.

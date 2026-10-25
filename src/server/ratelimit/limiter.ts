@@ -58,6 +58,19 @@ export const ACTIVATION_LIMITS: LimitConfig = {
   windowMs: 60 * 60 * 1000,
 };
 
+/**
+ * Cambio de contraseña: 5 intentos por hora y usuario.
+ *
+ * Aquí el límite protege dos cosas a la vez: que una sesión robada no pueda
+ * probar contraseñas actuales sin fin, y que el endpoint no se convierta en un
+ * oráculo contra Firebase Auth.
+ */
+export const PASSWORD_CHANGE_LIMITS: LimitConfig = {
+  perUser: 5,
+  global: 100,
+  windowMs: 60 * 60 * 1000,
+};
+
 export const PDF_UPLOAD_LIMITS: LimitConfig = {
   perUser: 20,
   global: 120,
@@ -163,6 +176,7 @@ export class SlidingWindowLimiter {
 let pdfInstance: SlidingWindowLimiter | null = null;
 let uploadInstance: SlidingWindowLimiter | null = null;
 let activationInstance: SlidingWindowLimiter | null = null;
+let passwordInstance: SlidingWindowLimiter | null = null;
 
 export function pdfLimiter(): SlidingWindowLimiter {
   pdfInstance ??= new SlidingWindowLimiter(PDF_WINDOW_LIMITS);
@@ -172,6 +186,11 @@ export function pdfLimiter(): SlidingWindowLimiter {
 export function activationLimiter(): SlidingWindowLimiter {
   activationInstance ??= new SlidingWindowLimiter(ACTIVATION_LIMITS);
   return activationInstance;
+}
+
+export function passwordLimiter(): SlidingWindowLimiter {
+  passwordInstance ??= new SlidingWindowLimiter(PASSWORD_CHANGE_LIMITS);
+  return passwordInstance;
 }
 
 export function uploadLimiter(): SlidingWindowLimiter {
@@ -184,4 +203,5 @@ export function resetLimiters(): void {
   pdfInstance = null;
   uploadInstance = null;
   activationInstance = null;
+  passwordInstance = null;
 }

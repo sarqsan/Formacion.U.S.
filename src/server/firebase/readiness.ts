@@ -1,5 +1,6 @@
 import { createPrivateKey, type KeyObject } from "node:crypto";
 import { checkPublicFirebaseConfig } from "@/server/firebase/public-config";
+import { decideDemoMode } from "@/server/config/demo-gate";
 
 /**
  * ¿ESTÁ ESTA INSTALACIÓN LISTA PARA HABLAR CON FIREBASE?
@@ -75,7 +76,10 @@ export interface FirebaseReadiness {
   webReady: boolean;
   /** Ambas partes listas. No implica que la red ni los permisos funcionen. */
   ready: boolean;
-  /** `DEMO_MODE=1`: la aplicación no usará Firebase aunque esté configurado. */
+  /**
+   * La demostración se está usando de verdad: `DEMO_MODE=1` y fuera de
+   * producción. En producción siempre es `false`, aunque la variable esté puesta.
+   */
   demoMode: boolean;
   serverFindings: ReadinessFinding[];
   webFindings: ReadinessFinding[];
@@ -277,6 +281,22 @@ function serverFindings(env: Env, expectedProject: string): ReadinessFinding[] {
       fix: cookieOk ? null : "Usa SESSION_COOKIE_NAME=__Host-formacion_session en producción.",
     });
 
+    const demo = decideDemoMode(env);
+    if (demo.reason === "production") {
+      // No es un fallo de funcionamiento —la aplicación sigue con Firebase— pero
+      // sí una configuración que hay que quitar: en producción la demostración
+      // entra sin contraseña y está cerrada por el candado.
+      findings.push({
+        id: "DEMO_MODE_IN_PRODUCTION",
+        title: "Demostración fuera de producción",
+        level: "FAILED",
+        kind: "configuracion",
+        detail:
+          "Hay DEMO_MODE=1 con NODE_ENV=production. La demostración NO se está usando (no hay acceso sin contraseña), porque el candado la ignora fuera de desarrollo.",
+        fix: "Quita DEMO_MODE de las variables del despliegue: la aplicación funciona sin ella.",
+      });
+    }
+
     if (usingEmulator) {
       findings.push({
         id: "EMULATOR_IN_PRODUCTION",
@@ -344,7 +364,9 @@ export function assessFirebaseReadiness(
 
   const serverReady = server.every((finding) => finding.level === "PASSED");
   const webReady = publicCheck.ok;
-  const demoMode = value(env, "DEMO_MODE") === "1";
+  // `demoMode` significa «la demostración se está usando», no «está pedida»:
+  // en producción el candado la niega aunque la variable esté puesta.
+  const demoMode = decideDemoMode(env).enabled;
 
   // Orden en el que conviene hacer las cosas la primera vez: el servidor puede
   // validarse sin la app web, pero el login necesita las dos partes.
@@ -355,6 +377,7 @@ export function assessFirebaseReadiness(
     "FIREBASE_PRIVATE_KEY",
     "APP_ORIGIN",
     "SESSION_COOKIE_NAME",
+    "DEMO_MODE_IN_PRODUCTION",
     "EMULATOR_IN_PRODUCTION",
     "NEXT_PUBLIC_FIREBASE_API_KEY",
     "NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN",

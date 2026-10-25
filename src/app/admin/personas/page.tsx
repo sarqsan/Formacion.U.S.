@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { getUiSession } from "@/demo/session";
 import { accounts as listAccounts } from "@/server/portal";
 import { DataUnavailable, isUnavailable } from "@/app/components/data-unavailable";
+import { NewPerson } from "./new-person";
 
 export const dynamic = "force-dynamic";
 
@@ -118,6 +119,25 @@ export default async function PeoplePage({
           Importar personas
         </Link>
       </div>
+
+      <section className="card p-5">
+        <h2 className="text-sm font-semibold">Dar de alta a una persona</h2>
+        <p className="muted mt-1 text-xs leading-relaxed">
+          Para una incorporación suelta, sin preparar un Excel. La cuenta nace pendiente de
+          activación con un código de un solo uso: no puede entrar hasta que lo use, y nunca se crea
+          una cuenta de administración desde aquí.
+        </p>
+        {session.mode === "demo" ? (
+          <p className="alert alert-info mt-3 text-xs">
+            En la demostración no se crean cuentas reales. El alta funciona con Firebase
+            configurado; aquí puedes ver la importación de Excel en modo de vista previa.
+          </p>
+        ) : (
+          <div className="mt-3">
+            <NewPerson />
+          </div>
+        )}
+      </section>
 
       <div className="grid-stats">
         <div className="stat">

@@ -131,6 +131,14 @@ export default async function AdminPage() {
             Qué temas ha superado cada alumno, qué le queda pendiente y qué ha contestado.
           </span>
         </Link>
+        <Link href="/admin/actividad" className="tile">
+          <span className="pill pill-info">Auditoría</span>
+          <span className="font-semibold">Registro de actividad</span>
+          <span className="muted text-sm leading-relaxed">
+            Qué se hizo, quién y cuándo: altas, bajas, códigos reemitidos y contraseñas
+            restablecidas. Solo lectura.
+          </span>
+        </Link>
         <Link href="/admin/importar" className="tile">
           <span className="pill pill-warn">Parcial</span>
           <span className="font-semibold">Importar desde Excel</span>

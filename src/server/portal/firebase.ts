@@ -10,22 +10,31 @@ import { mandatoryTopicsOf } from "@/server/courses/catalog";
 import { accountHistory, learnerHistory } from "@/server/learning/history";
 import { definitionFromDocuments } from "@/server/courses/definition";
 import { publishCourseVersion } from "@/server/courses/catalog";
-import { enrollStudent, revokeEnrollment } from "@/server/enrollments/service";
+import { enrollMany, enrollStudent, revokeEnrollment } from "@/server/enrollments/service";
 import { submitAssessment } from "@/server/assessments/service";
 import { parsePeopleWorkbook } from "@/server/import/excel";
-import { buildImportPreview } from "@/server/import/service";
+import { buildImportPreview, createPerson } from "@/server/import/service";
 import {
   accountAdminDependencies,
+  activityDependencies,
+  certificateDependencies,
   courseEditorDependencies,
   documentDependencies,
   documentFileDependencies,
   importDependencies,
 } from "@/server/deps";
 import {
+  certificateForDownload,
+  issueCertificate,
+  verifyCertificate,
+} from "@/server/certificates/service";
+import { listActivity } from "@/server/audit/activity";
+import {
   activationSummary,
   disableAccount,
   enableAccount,
   reissueActivationCode,
+  resetPasswordByAdmin,
 } from "@/server/accounts/service";
 import {
   documentFileSummary as documentFileSummaryFor,
@@ -631,6 +640,30 @@ export async function adminRevokeEnrollment(actor: Actor, uid: string, courseId:
 }
 
 /**
+ * Matricula a varias personas en un curso.
+ *
+ * El servicio vuelve a comprobar el rol y es idempotente: quien ya estaba no
+ * cambia de fecha. La lista de personas la decide el panel a partir de las
+ * cuentas reales, no el navegador.
+ */
+export async function adminEnrollMany(actor: Actor, courseId: string, uids: readonly string[]) {
+  return guard(() => enrollMany({ actor, courseId, uids }, firestoreDeps()));
+}
+
+/**
+ * Alta de una persona suelta desde el panel: misma validación y mismo código de
+ * activación que la importación de Excel.
+ */
+export async function adminCreatePerson(
+  actor: Actor,
+  input: { apellido: string; rol: string },
+) {
+  return guard(() =>
+    createPerson({ actor, apellido: input.apellido, rol: input.rol }, importDependencies()),
+  );
+}
+
+/**
  * Crea un curso vacío (sin versiones) a partir de la plantilla vacía.
  *
  * Escribe una sola ficha y no crea ninguna versión: el curso queda con
@@ -838,6 +871,46 @@ export async function adminReissueActivationCode(actor: Actor, uid: string) {
 /** Resumen de códigos (pendiente, usado, revocado) para la ficha. */
 export async function adminActivationSummary(actor: Actor, uid: string) {
   return activationSummary({ actor, uid }, accountAdminDependencies());
+}
+
+/**
+ * Contraseña temporal para una cuenta activa, generada por el servidor.
+ * Se devuelve una sola vez y no se guarda en claro.
+ */
+/** Últimos eventos de auditoría, ya filtrados y sin campos sensibles. */
+export async function adminActivity(actor: Actor, limit?: number) {
+  return guard(() => listActivity(actor, activityDependencies(), limit ? { limit } : {}));
+}
+
+// ---------------------------------------------------------------------------
+// Certificados
+// ---------------------------------------------------------------------------
+
+/**
+ * Emite (o recupera) el certificado de una persona en un curso completado.
+ *
+ * El servicio comprueba la sesión, que se pide lo propio —o que quien pide es
+ * administración— y que el progreso tenga `completedAt`. Devolver el existente
+ * es el caso normal: el código es determinista, así que el mismo curso y la
+ * misma versión dan siempre el mismo documento.
+ */
+export async function issueCertificateFor(actor: Actor, input: { uid: string; courseId: string }) {
+  return issueCertificate({ actor, uid: input.uid, courseId: input.courseId }, certificateDependencies());
+}
+
+/** Certificado por código para verlo o descargarlo; exige ser el titular o admin. */
+export async function certificateRecordFor(actor: Actor, code: string) {
+  return certificateForDownload({ actor, code }, certificateDependencies());
+}
+
+/** Verificación pública por código: sin sesión y con el nombre enmascarado. */
+export async function certificateVerification(code: unknown) {
+  return verifyCertificate(code, certificateDependencies());
+}
+
+export async function adminResetPassword(actor: Actor, uid: string) {
+  const result = await guard(() => resetPasswordByAdmin({ actor, uid }, accountAdminDependencies()));
+  return result;
 }
 
 // ---------------------------------------------------------------------------

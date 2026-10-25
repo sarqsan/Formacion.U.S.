@@ -33,6 +33,7 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 // ---------------------------------------------------------------------------
 // Constantes
@@ -170,6 +171,64 @@ export function planAdminUsernames(requested) {
  * `formacion.invalid`. No se inventa nada: es el mismo que aplicaría el
  * navegador.
  */
+/**
+ * CREDENCIALES DE FIREBASE ADMIN
+ * ==============================
+ *
+ * Dos formas de cargarlas, siempre fuera del repositorio:
+ *
+ *   a) el JSON de la cuenta de servicio que descarga la consola de Firebase:
+ *        FIREBASE_SERVICE_ACCOUNT_FILE=/ruta/cuenta.json
+ *
+ *   b) las tres variables sueltas:
+ *        FIREBASE_PROJECT_ID / FIREBASE_CLIENT_EMAIL / FIREBASE_PRIVATE_KEY
+ *
+ * La opción (a) evita pegar una clave PEM en la terminal (donde los saltos de
+ * línea se rompen con facilidad). Devuelve `null` si no hay nada, para que el
+ * script pueda decirlo en vez de fallar dentro de firebase-admin.
+ */
+export function resolveAdminCredentials(env = {}, readFile = readFileSync) {
+  const fileRaw = env.FIREBASE_SERVICE_ACCOUNT_FILE;
+  const file = typeof fileRaw === "string" ? fileRaw.trim() : "";
+
+  if (file) {
+    let parsed;
+    try {
+      parsed = JSON.parse(readFile(file, "utf8"));
+    } catch {
+      throw new Error(
+        "No se pudo leer el fichero de FIREBASE_SERVICE_ACCOUNT_FILE (¿existe y es JSON?).",
+      );
+    }
+    const projectId = typeof parsed.project_id === "string" ? parsed.project_id.trim() : "";
+    const clientEmail = typeof parsed.client_email === "string" ? parsed.client_email.trim() : "";
+    const privateKey = typeof parsed.private_key === "string" ? parsed.private_key.trim() : "";
+    if (!projectId || !clientEmail || !privateKey) {
+      throw new Error(
+        "El fichero de cuenta de servicio no tiene project_id, client_email y private_key.",
+      );
+    }
+    return { projectId, clientEmail, privateKey, source: "file" };
+  }
+
+  const pick = (value) => (typeof value === "string" ? value.trim() : "");
+  const projectId = pick(env.FIREBASE_PROJECT_ID);
+  const clientEmail = pick(env.FIREBASE_CLIENT_EMAIL);
+  const privateKey = pick(env.FIREBASE_PRIVATE_KEY);
+  if (!projectId || !clientEmail || !privateKey) return null;
+  return { projectId, clientEmail, privateKey, source: "env" };
+}
+
+/** La clave PEM llega escapada (\\n) desde las variables de entorno. */
+const ESCAPED_NEWLINE = String.raw`\n`;
+
+export function normalizePrivateKey(key) {
+  const value = typeof key === "string" ? key : "";
+  return value.includes(ESCAPED_NEWLINE)
+    ? value.split(ESCAPED_NEWLINE).join("\n")
+    : value;
+}
+
 export function checkEmailDomains(env = {}) {
   const serverRaw = env.AUTH_EMAIL_DOMAIN;
   const clientRaw = env.NEXT_PUBLIC_AUTH_EMAIL_DOMAIN;
@@ -515,6 +574,260 @@ export async function provisionAdmin({
       cleanup,
     };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Reemisión de un código
+// ---------------------------------------------------------------------------
+
+/**
+ * Emite un código nuevo para una cuenta que sigue pendiente de activación.
+ *
+ * Existe por un caso muy concreto: el alta se ejecutó, la persona perdió el
+ * código (o el proceso murió antes de que se copiara) y no hay ningún
+ * administrador activo que pueda entrar al panel a reemitirlo. Sin esto, el
+ * sistema se queda sin puerta de entrada.
+ *
+ * Orden deliberado: primero se revocan los códigos vivos y después se crea el
+ * nuevo. Si el segundo paso falla, la cuenta se queda sin código utilizable
+ * (se puede repetir la operación), nunca con dos válidos a la vez.
+ */
+export async function reissueActivationCode({
+  username,
+  deps,
+  now = new Date(),
+  ttlHours = TOKEN_TTL_HOURS,
+  tokenFactory = generateActivationToken,
+}) {
+  if (!username) {
+    throw new BootstrapError("USERNAME_REQUIRED", "Falta el nombre de usuario.");
+  }
+
+  const found = await deps.db.collection("accounts").where("username", "==", username).limit(1).get();
+  const accountDoc = (found.docs ?? [])[0];
+  if (!accountDoc) {
+    return { status: "not_found", username };
+  }
+
+  const account = accountDoc.data() ?? {};
+  if (account.status === "active") {
+    return { status: "not_applicable", username, reason: "la cuenta ya está activa: no necesita código" };
+  }
+  if (account.status === "disabled") {
+    return {
+      status: "not_applicable",
+      username,
+      reason: "la cuenta está deshabilitada: reactívala antes de emitir un código",
+    };
+  }
+
+  const at = now.toISOString();
+  const expiresAt = new Date(now.getTime() + ttlHours * 3600 * 1000).toISOString();
+
+  const liveSnapshot = await deps.db.collection("activationTokens").where("uid", "==", accountDoc.id).get();
+  const live = (liveSnapshot.docs ?? []).filter((doc) => {
+    const data = doc.data() ?? {};
+    return !data.usedAt && !data.revokedAt;
+  });
+
+  if (live.length > 0) {
+    const revoke = deps.db.batch();
+    for (const doc of live) {
+      revoke.update(safeDoc(deps.db, "activationTokens", doc.id), {
+        revokedAt: at,
+        revokedReason: "reissued",
+      });
+    }
+    await revoke.commit();
+  }
+
+  const token = tokenFactory();
+  const tokenHash = hashActivationToken(token);
+  await safeDoc(deps.db, "activationTokens", tokenHash).create(
+    buildActivationDocument({ uid: accountDoc.id, createdAt: at, expiresAt }),
+  );
+
+  return {
+    status: "reissued",
+    username,
+    uid: accountDoc.id,
+    token,
+    tokenHash,
+    expiresAt,
+    revoked: live.length,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Restablecimiento de contraseña
+// ---------------------------------------------------------------------------
+
+/**
+ * Espejo de `PASSWORD_POLICY` en `src/domain/auth/activation.ts`. Este script
+ * corre con `node` a secas y no puede importar TypeScript, así que la política
+ * está duplicada A PROPÓSITO y hay una prueba que compara ambas copias
+ * (`tests/server/bootstrap-admins.test.ts`): si alguien cambia una y no la otra,
+ * la suite falla.
+ */
+export const PASSWORD_POLICY = {
+  minLength: 12,
+  maxLength: 128,
+  requireLowercase: true,
+  requireUppercase: true,
+  requireDigit: true,
+};
+
+/** Mismos mensajes que la validación de la aplicación, en el mismo orden. */
+export function passwordIssues(password, { username } = {}) {
+  if (typeof password !== "string") {
+    return [{ code: "PASSWORD_TYPE", message: "La contraseña no es válida." }];
+  }
+
+  const issues = [];
+  const length = [...password].length;
+
+  if (length < PASSWORD_POLICY.minLength) {
+    issues.push({
+      code: "PASSWORD_TOO_SHORT",
+      message: `La contraseña debe tener al menos ${PASSWORD_POLICY.minLength} caracteres.`,
+    });
+  }
+  if (length > PASSWORD_POLICY.maxLength) {
+    issues.push({
+      code: "PASSWORD_TOO_LONG",
+      message: `La contraseña no puede superar ${PASSWORD_POLICY.maxLength} caracteres.`,
+    });
+  }
+  if (PASSWORD_POLICY.requireLowercase && !/\p{Ll}/u.test(password)) {
+    issues.push({ code: "PASSWORD_NO_LOWERCASE", message: "Falta una letra minúscula." });
+  }
+  if (PASSWORD_POLICY.requireUppercase && !/\p{Lu}/u.test(password)) {
+    issues.push({ code: "PASSWORD_NO_UPPERCASE", message: "Falta una letra mayúscula." });
+  }
+  if (PASSWORD_POLICY.requireDigit && !/\d/.test(password)) {
+    issues.push({ code: "PASSWORD_NO_DIGIT", message: "Falta un número." });
+  }
+  if (/^\s|\s$/.test(password)) {
+    issues.push({
+      code: "PASSWORD_WHITESPACE",
+      message: "La contraseña no puede empezar ni terminar con espacios.",
+    });
+  }
+
+  const clean = typeof username === "string" ? username.trim().toLowerCase() : "";
+  if (clean.length >= 4 && password.toLowerCase().includes(clean)) {
+    issues.push({
+      code: "PASSWORD_CONTAINS_USERNAME",
+      message: "La contraseña no puede contener el nombre de usuario.",
+    });
+  }
+
+  return issues;
+}
+
+/**
+ * Fija una contraseña nueva para una cuenta YA ACTIVA cuyo titular la ha
+ * olvidado.
+ *
+ * Por qué hace falta algo así: los correos son sintéticos
+ * (`usuario@formacion.invalid`), no hay buzón donde enviar un enlace de
+ * restablecimiento, y `--reissue` solo actúa sobre cuentas pendientes. Sin esta
+ * operación, un administrador que olvida su contraseña deja el sistema sin
+ * administradores.
+ *
+ * Garantías:
+ *   · la contraseña no se imprime, no se registra y no se guarda: viaja una vez
+ *     al SDK de Admin, que guarda su hash;
+ *   · se aplica la misma política que en `/activar` (incluido «no puede contener
+ *     el nombre de usuario»);
+ *   · se sube `claimsVersion` y se revocan los refresh tokens, así que las
+ *     sesiones abiertas dejan de valer y la persona tiene que entrar de nuevo;
+ *   · si algo falla a mitad se informa de QUÉ se aplicó, para no dar por hecho
+ *     que la contraseña sigue siendo la antigua cuando ya no lo es.
+ */
+export async function resetAccountPassword({ username, newPassword, deps, now = new Date() }) {
+  if (!username) throw new BootstrapError("USERNAME_REQUIRED", "Falta el nombre de usuario.");
+
+  const found = await deps.db.collection("accounts").where("username", "==", username).limit(1).get();
+  const accountDoc = (found.docs ?? [])[0];
+  if (!accountDoc) return { status: "not_found", username };
+
+  const account = accountDoc.data() ?? {};
+  if (account.status !== "active") {
+    // Una cuenta pendiente se activa con su código; una deshabilitada debe
+    // reactivarse desde el panel antes de tocar sus credenciales.
+    return {
+      status: "not_applicable",
+      username,
+      reason:
+        account.status === "disabled"
+          ? "la cuenta está deshabilitada: reactívala antes de cambiar la contraseña"
+          : "la cuenta no está activa: usa el código de activación o reemítelo con --reissue",
+    };
+  }
+
+  const issues = passwordIssues(newPassword, { username });
+  if (issues.length > 0) {
+    return { status: "invalid_password", username, issues };
+  }
+
+  const at = now.toISOString();
+  const nextClaimsVersion = Number(account.claimsVersion ?? 1) + 1;
+  const applied = [];
+
+  try {
+    await deps.auth.updateUser(accountDoc.id, { password: newPassword });
+    applied.push("contraseña");
+
+    await deps.auth.setCustomUserClaims(accountDoc.id, {
+      role: account.role,
+      status: "active",
+      claimsVersion: nextClaimsVersion,
+    });
+    applied.push("claims");
+
+    await deps.db.collection("accounts").doc(accountDoc.id).update({
+      claimsVersion: nextClaimsVersion,
+      passwordResetAt: at,
+      updatedAt: at,
+    });
+    applied.push("ficha");
+
+    await deps.auth.revokeRefreshTokens(accountDoc.id);
+    applied.push("sesiones revocadas");
+  } catch (error) {
+    return {
+      status: "failed",
+      username,
+      error: describeError(error),
+      applied,
+      // Lo importante para quien opera: si «contraseña» está en `applied`, la
+      // anterior ya NO funciona aunque el resto haya fallado.
+      passwordChanged: applied.includes("contraseña"),
+    };
+  }
+
+  let auditWarning = null;
+  try {
+    await deps.db.collection("audits").add({
+      type: "password_reset",
+      at,
+      actorUid: AUDIT_ACTOR,
+      username,
+      uid: accountDoc.id,
+      severity: "warning",
+    });
+  } catch (error) {
+    auditWarning = describeError(error);
+  }
+
+  return {
+    status: "reset",
+    username,
+    uid: accountDoc.id,
+    claimsVersion: nextClaimsVersion,
+    auditWarning,
+  };
 }
 
 // ---------------------------------------------------------------------------

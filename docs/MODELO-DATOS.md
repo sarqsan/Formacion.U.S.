@@ -315,6 +315,31 @@ servidor (`src/server/learning/history.ts`) lo resume con
   (`validateProgressHistoryDocument`) y la lectura sigue aceptando los
   documentos antiguos con `Timestamp` (`toIsoString`).
 
+### `certificates/{code}` — certificados emitidos
+
+`{ code, uid, username, displayName, courseId, courseTitle, version, completedAt, issuedAt, issuedBy }`
+
+Solo servidor (`allow read, write: if false`): el documento lleva el nombre
+completo y el recorrido de la colección daría el listado de personas
+certificadas.
+
+- **El id es el código.** `code = sha256("formacion-us/cert/v1|uid|courseId|version")`
+  recortado a 20 hexadecimales. Al derivarse del contenido, la emisión es
+  **idempotente sin buscar ni usar transacciones**: pedir dos veces el mismo
+  certificado escribe (o encuentra) el mismo documento, y la escritura usa
+  `create()`, que falla si ya existe en vez de sobrescribirlo.
+- **Es un hecho, no una plantilla.** `courseTitle` y `version` se copian al
+  emitir: republicar el curso no cambia lo que dice un certificado ya emitido.
+- **`completedAt`** viene del progreso (`progress/{uid}_{courseId}`), no de la
+  fecha de emisión; `issuedAt` es cuándo se generó el documento.
+- **No guarda el PDF.** Se compone al pedirlo (`src/server/certificates/pdf.ts`,
+  sin dependencias): un binario por persona en Firestore gastaría cuota sin
+  aportar nada. Si el formato cambia, el texto se regenera con los datos del
+  documento.
+- **Verificación pública sin identificación**: `/verificar/<code>` muestra curso,
+  versión, fecha y el nombre **enmascarado**; el nombre completo y el PDF exigen
+  sesión y ser el titular (o administración).
+
 ### `meta/storage` — contadores de cuota de PDF
 
 `{ usedBytes, reservedBytes, updatedAt }`

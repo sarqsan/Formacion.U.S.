@@ -180,6 +180,17 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Certificados emitidos: SOLO SERVIDOR.
+    //
+    // Contienen el nombre completo de la persona y el curso cursado. Aunque no
+    // hay secreto, publicarlos permitiría recorrer la colección y obtener el
+    // listado de personas certificadas. El PDF y la ficha completa se piden a
+    // la API con sesión; la verificación pública (`/verificar/<codigo>`) la
+    // sirve el servidor con el nombre enmascarado y solo para un código exacto.
+    match /certificates/{code} {
+      allow read, write: if false;
+    }
+
     // Metadatos del esquema (versión, colecciones previstas) y contador de
     // cuota de PDF: solo servidor.
     // Los scripts `db:init` y `db:check` los leen con Admin SDK.

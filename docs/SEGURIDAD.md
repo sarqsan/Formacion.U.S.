@@ -344,6 +344,7 @@ reglas. Por tanto:
 | `progressHistory` | la propia, o todas si administración | solo servidor | `assertCanReadProgress` (B10); se lee con Admin SDK |
 | `attempts` | administración | solo servidor | registro inmutable de qué se contestó y cómo se corrigió |
 | `documents`, `pdfChunks` | **nadie** | solo servidor | el binario se sirve por `/api/documents/{id}/file` tras comprobar cuenta, matrícula, publicación y SHA-256 |
+| `certificates` | **nadie** | solo servidor | el PDF y el nombre completo se sirven por `/api/certificates/{code}/file` con sesión del titular (o administración); la verificación pública de `/verificar` solo devuelve el nombre enmascarado |
 | `meta` | nadie | solo servidor | contador de cuota y versión de esquema |
 | cualquier otra ruta | **nadie** | — | comodín final `allow read, write: if false` |
 
@@ -395,7 +396,7 @@ de correo y revisar quién puede crear cuentas. Nada de esto se ha tocado.
 | --- | --- | --- |
 | Ninguna regla permite escritura de cliente | 22 comprobaciones estáticas sobre el texto de `firestore.rules`, en `npm test` | **verificado** |
 | Toda colección legible exige cuenta activa o administración | ídem | **verificado** |
-| `answerKeys`, `documents`, `pdfChunks`, `meta`, `usernames` y `activationTokens` están cerradas | ídem | **verificado** |
+| `answerKeys`, `documents`, `pdfChunks`, `certificates`, `meta`, `usernames` y `activationTokens` están cerradas | ídem | **verificado** |
 | El histórico y el progreso comparan `resource.data.uid` | ídem | **verificado** |
 | Las reglas **compilan** y el motor permite/deniega lo previsto | `npm run test:rules` (57 casos) | **BLOQUEADO**: el jar del emulador no se puede descargar (Java ya se resuelve con `jdk4py`; ver `ENTORNO-PRUEBAS.md` §2 bis) |
 | Las consultas reales no exigen índices nuevos | `npm run db:check` contra el proyecto real | **BLOQUEADO**: sin credenciales y con TLS a Google cortado |

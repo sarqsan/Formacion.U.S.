@@ -13,13 +13,19 @@ import { parseDraftQuizForm, quizSavedRedirect } from "@/server/courses/quiz-for
 import type { ImportPreview } from "@/domain/people/import-rows";
 import { DEMO_COOKIE, getUiSession } from "@/demo/session";
 import { demoAccountByUid, resetDemoState } from "@/demo/store";
+import { groupPasswordForReading } from "@/server/auth/tokens";
 import {
+  accounts as listAllAccounts,
   adminCreateCourse,
+  adminCreatePerson,
   adminDisableAccount,
   adminDraftEditor,
   adminEnableAccount,
   adminEnroll,
+  adminEnrollMany,
+  adminEnrollments,
   adminPublish,
+  adminResetPassword,
   adminReissueActivationCode,
   adminRevokeEnrollment,
   adminSaveDraftAssessments,
@@ -601,4 +607,145 @@ export async function reissueActivationAction(
   } catch (error) {
     return { status: "error", message: errorMessage(error) };
   }
+}
+
+// ---------------------------------------------------------------------------
+// P1: operaciones de administración sin terminal
+// ---------------------------------------------------------------------------
+
+export interface ResetPasswordState extends ActionResult {
+  username?: string;
+  /** La contraseña temporal, UNA vez. No viaja en la URL ni se guarda. */
+  password?: string;
+  /** La misma, agrupada para dictarla: `abcd-efgh-ijkl-mnop`. */
+  passwordGrouped?: string;
+  changedAt?: string;
+}
+
+/**
+ * Restablece la contraseña de otra persona, generada por el servidor.
+ *
+ * Devuelve la contraseña en el estado de la acción (como el código de
+ * activación), no en la URL: así no queda en el historial del navegador ni en
+ * los registros del servidor. Quien administra la entrega en mano y la persona
+ * la cambia en «Mi cuenta» la primera vez que entre.
+ */
+export async function resetPasswordAction(
+  _previous: ResetPasswordState,
+  formData: FormData,
+): Promise<ResetPasswordState> {
+  const actor = await actorOrNull();
+  if (!actor) {
+    return { status: "error", message: "La sesión ha caducado. Vuelve a entrar." };
+  }
+
+  const uid = String(formData.get("uid") ?? "").trim();
+  try {
+    const result = await adminResetPassword(actor, uid);
+    revalidatePath(`/admin/personas/${uid}`);
+    return {
+      status: "ok",
+      username: result.username,
+      password: result.password,
+      passwordGrouped: groupPasswordForReading(result.password),
+      changedAt: result.changedAt,
+      message: "Contraseña restablecida. Las sesiones abiertas de esa cuenta se han cerrado.",
+    };
+  } catch (error) {
+    return { status: "error", message: errorMessage(error) };
+  }
+}
+
+export interface CreatePersonState extends ActionResult {
+  username?: string;
+  /** El código de activación, UNA vez. No se guarda en claro. */
+  token?: string;
+  expiresAt?: string;
+}
+
+/**
+ * Da de alta a una persona suelta.
+ *
+ * El usuario lo calcula el servidor a partir del apellido y el rol, igual que
+ * en la importación. La cuenta nace `pending_activation` y con rol `learner`:
+ * este formulario no puede crear administradores.
+ */
+export async function createPersonAction(
+  _previous: CreatePersonState,
+  formData: FormData,
+): Promise<CreatePersonState> {
+  const actor = await actorOrNull();
+  if (!actor) {
+    return { status: "error", message: "La sesión ha caducado. Vuelve a entrar." };
+  }
+
+  const apellido = String(formData.get("apellido") ?? "").trim();
+  const rol = String(formData.get("rol") ?? "").trim();
+
+  try {
+    const created = await adminCreatePerson(actor, { apellido, rol });
+    revalidatePath("/admin/personas");
+    return {
+      status: "ok",
+      username: created.username,
+      token: created.activationToken,
+      expiresAt: created.activationExpiresAt,
+      message: "Cuenta creada. Todavía no puede entrar hasta que use el código.",
+    };
+  } catch (error) {
+    return { status: "error", message: errorMessage(error) };
+  }
+}
+
+/**
+ * Matricula en un curso a todo el alumnado activo que aún no lo esté.
+ *
+ * La lista **no se recibe del navegador**: se recalcula aquí a partir de las
+ * cuentas y las matrículas reales. Un formulario manipulado no puede matricular
+ * a quien no debe ni a una cuenta deshabilitada.
+ */
+export async function bulkEnrollAction(formData: FormData): Promise<void> {
+  const actor = await actorOrNull();
+  if (!actor) redirect("/login");
+
+  const courseId = String(formData.get("courseId") ?? "").trim();
+  if (!courseId) redirect("/admin/matriculas?error=Indica%20el%20curso.");
+
+  let failure: string | null = null;
+  let summary = "";
+  try {
+    const [accounts, enrollments] = await Promise.all([
+      listAllAccounts(actor),
+      adminEnrollments(actor),
+    ]);
+
+    const already = new Set(
+      enrollments
+        .filter((row) => row.courseId === courseId && row.status === "active")
+        .map((row) => row.uid),
+    );
+    const targetUids = accounts
+      .filter((account) => account.role === "learner" && account.status === "active")
+      .map((account) => account.uid)
+      .filter((uid) => !already.has(uid));
+
+    if (targetUids.length === 0) {
+      summary = "No había nadie pendiente: todo el alumnado activo ya estaba matriculado.";
+    } else {
+      const result = await adminEnrollMany(actor, courseId, targetUids);
+      summary =
+        `${result.enrolled.length} matrícula(s) nueva(s)` +
+        (result.failed.length > 0
+          ? ` · ${result.failed.length} con error: ${result.failed[0]?.message ?? ""}`
+          : "");
+    }
+  } catch (error) {
+    failure = errorMessage(error);
+  }
+
+  revalidatePath("/admin/matriculas");
+  revalidatePath("/admin");
+
+  const message = failure ?? summary;
+  redirect(`/admin/matriculas?${failure ? "error" : "ok"}=${encodeURIComponent(message)}`);
 }
