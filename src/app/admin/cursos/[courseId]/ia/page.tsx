@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { getUiSession } from "@/demo/session";
 import { adminDraftEditor, aiConnectionStatus } from "@/server/portal";
 import { MAX_AI_UPLOAD_BYTES } from "@/server/ai/config";
+import { TopicsBatchRunner } from "./topics-batch-runner";
 import {
   checkAiConnectionAction,
   generateFinalExamAction,
@@ -262,19 +263,33 @@ export default async function AiCourseWizardPage({
           </p>
         ) : null}
 
-        <div className="flex flex-wrap gap-2">
-          <form action={proposeTopicsAction}>
-            <input type="hidden" name="courseId" value={courseId} />
-            <input type="hidden" name="version" value={view.version} />
-            <input type="hidden" name="revision" value={view.revision} />
-            <button
-              type="submit"
-              className="btn btn-primary btn-sm"
+        <div className="flex flex-wrap items-start gap-2">
+          {status.provider === "groq" ? (
+            /*
+             * Con Groq la propuesta va por tandas: el navegador pide una parte
+             * del temario cada vez y ve el avance. Así cabe un PDF de cualquier
+             * tamaño sin acercarse al corte de 300 s de la plataforma.
+             */
+            <TopicsBatchRunner
+              courseId={courseId}
+              version={view.version}
+              revision={view.revision}
               disabled={readOnly || !status.configured || !hasPdf}
-            >
-              {view.topics.length > 1 ? "Volver a proponer temas" : "Proponer temas con IA"}
-            </button>
-          </form>
+            />
+          ) : (
+            <form action={proposeTopicsAction}>
+              <input type="hidden" name="courseId" value={courseId} />
+              <input type="hidden" name="version" value={view.version} />
+              <input type="hidden" name="revision" value={view.revision} />
+              <button
+                type="submit"
+                className="btn btn-primary btn-sm"
+                disabled={readOnly || !status.configured || !hasPdf}
+              >
+                {view.topics.length > 1 ? "Volver a proponer temas" : "Proponer temas con IA"}
+              </button>
+            </form>
+          )}
           <Link href={editorHref} className="btn btn-secondary btn-sm">
             Editar temas a mano
           </Link>

@@ -232,23 +232,31 @@ Preview/Development, y volver a desplegar. `/api/health` publica lo mismo en
 ### 6.4 Límites que hay que conocer
 
 - **8 000 tokens por minuto.** Es el límite que manda de verdad, mucho antes que
-  el tamaño del fichero. Medido con el ajuste actual (páginas de ~2 500
-  caracteres):
+  el tamaño del fichero.
 
-  | Páginas | Tandas | Tiempo estimado | Resultado |
-  | --- | --- | --- | --- |
-  | 10 | 1 | ~60 s | entra |
-  | 20 | 2 | ~114 s | entra |
-  | 30 | 3 | ~171 s | entra |
-  | 40 | 4 | ~228 s | entra (justo) |
-  | 50 | 5 | ~285 s | se niega |
-  | 120 | 12 | ~11 min | se niega |
+  **Ya no limita el tamaño del temario.** La propuesta de temas trabaja **por
+  tandas**: el servidor parte el texto y el navegador pide una tanda cada vez
+  (una petición = una llamada al modelo), de modo que ninguna función se acerca
+  al corte de 300 s de Vercel. Para el administrador es un botón con una barra
+  de avance.
 
-  Por encima de **260 s** estimados la aplicación se niega **antes de empezar**
-  (`AI_DOCUMENT_TOO_LONG`) y pide dividir el PDF: una función de Vercel corta a
-  los 300 s y el resto del margen es para la subida y el guardado.
-- **200 000 tokens al día.** Salen unos **6-8 cursos diarios**. Si se agota, la
-  pantalla lo dice y el borrador queda intacto.
+  | Páginas (texto de ~2 500 car.) | Tandas | Tiempo aproximado |
+  | --- | --- | --- |
+  | 20 | 2 | ~1 min |
+  | 40 | 4 | ~2 min |
+  | 120 | 12 | ~6 min |
+  | 300 | 30 | ~15 min |
+
+  El tiempo es el único coste: cada tanda ocupa un minuto de cuota. La pantalla
+  enseña por dónde va y se puede **detener**; el avance se guarda en la sesión
+  del navegador, así que se puede continuar sin repetir lo ya gastado.
+
+  Nada se escribe en el borrador hasta que están todas las tandas: si se corta,
+  el borrador queda como estaba (`AI_DOCUMENT_TOO_LONG` ya solo aparece en el
+  camino de una sola llamada, el de Gemini, que no usa tandas).
+- **200 000 tokens al día.** Con temarios de 40 páginas salen unos **6-8 cursos
+  diarios**; uno de 120 páginas consume él solo la quinta parte del día. Si se
+  agota, la pantalla lo dice y el borrador queda intacto.
 - **PDF escaneado: no vale.** No hay OCR gratuito; haría falta otro servicio.
 - **Tamaño del fichero, por sitio:** el asistente admite **4 MiB** en una sola
   petición (el despliegue corta los cuerpos a 4,5 MB y el formulario va entero);
@@ -265,3 +273,30 @@ Preview/Development, y volver a desplegar. `/api/health` publica lo mismo en
 llamada al catálogo de modelos, sin tokens). La pantalla del asistente tiene el
 botón «Comprobar conexión» con el mismo resultado. Eso confirma la clave, **no**
 que la generación funcione: eso exige generar un curso de verdad.
+
+### 6.6 Temas por tandas: cómo funciona por dentro
+
+```
+navegador                         servidor                         Groq
+   │  POST …/topics/plan  ────────►  extrae el texto del PDF
+   │  ◄──── tandas y estimación       (sin IA, sin gastar cuota)
+   │
+   │  POST …/topics/batch [1-12] ──►  una llamada  ───────────────►  temas del tramo
+   │  ◄──── temas + espera necesaria
+   │        (espera lo que marca la cuota, en el navegador)
+   │  … se repite por cada tanda …
+   │
+   │  POST …/topics/save  ────────►  une, valida y **escribe el borrador**
+```
+
+- **`plan`** no llama a la IA: extrae el texto, lo parte por páginas enteras y
+  calcula cuánto se va a tardar (`src/server/ai/batches.ts`).
+- **`batch`** hace **una** llamada y **no guarda nada**. Devuelve los temas del
+  tramo y cuántos milisegundos hay que esperar antes del siguiente.
+- **`save`** es el único punto que cambia el borrador: sanea lo que llega, une
+  los temas repetidos entre tramos y aplica las reglas de siempre (páginas que
+  existen, sin títulos repetidos, máximo de temas).
+
+Las tres rutas exigen sesión de administración, comprueban el origen de la
+petición y rechazan cuerpos fuera de rango. La espera entre tandas la hace el
+navegador: ninguna función de Vercel se queda dormida.
