@@ -157,7 +157,7 @@ export default async function AiCourseWizardPage({
           </Link>
         ))}
         <span className={`pill ${status.configured ? "pill-ok" : "pill-warn"}`}>
-          Gemini: {status.configured ? status.model : "sin clave"}
+          {status.providerLabel}: {status.configured ? status.model : "sin clave"}
         </span>
       </div>
 
@@ -178,8 +178,17 @@ export default async function AiCourseWizardPage({
 
       {!status.configured ? (
         <p className="alert alert-warn text-sm">
-          Sin <span className="mono">GEMINI_API_KEY</span> no se puede generar contenido con IA.
+          Sin <span className="mono">{status.provider === "groq" ? "GROQ_API_KEY" : "GEMINI_API_KEY"}</span> no se
+          puede generar contenido con IA.
           Puedes seguir trabajando a mano en el editor completo: nada de lo ya hecho se pierde.
+        </p>
+      ) : null}
+
+      {status.provider === "groq" ? (
+        <p className="alert alert-warn text-sm">
+          Con Groq y su plan gratuito la generación va por tandas, para no chocar con el límite de
+          8 000 tokens por minuto: <strong>cada paso puede tardar entre uno y tres minutos</strong>.
+          No cierres la pestaña; el borrador no cambia hasta que la respuesta llega entera.
         </p>
       ) : null}
 
@@ -197,7 +206,7 @@ export default async function AiCourseWizardPage({
       <form action={checkAiConnectionAction} className="flex flex-wrap items-center gap-2">
         <input type="hidden" name="returnTo" value={`${base}?v=${view.version}&paso=${currentStep}`} />
         <button type="submit" className="btn btn-secondary btn-sm">
-          Comprobar conexión con Gemini
+          Comprobar conexión con {status.providerLabel}
         </button>
         <span className="muted text-xs">{status.message}</span>
       </form>

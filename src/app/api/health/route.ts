@@ -43,6 +43,17 @@ export async function GET() {
   // API externa en cada visita.
   const gemini = await geminiStatus();
 
+  const ai = {
+    provider: gemini.provider,
+    providerLabel: gemini.providerLabel,
+    configured: gemini.configured,
+    model: gemini.model,
+    reachable: gemini.reachable,
+    modelAvailable: gemini.modelAvailable,
+    checkedAt: gemini.checkedAt,
+    message: gemini.message,
+  };
+
   return jsonOk({
     ok: true,
     app: "formacion-us",
@@ -50,14 +61,10 @@ export async function GET() {
     ready,
     mode,
     demo: demo.enabled,
-    gemini: {
-      configured: gemini.configured,
-      model: gemini.model,
-      reachable: gemini.reachable,
-      modelAvailable: gemini.modelAvailable,
-      checkedAt: gemini.checkedAt,
-      message: gemini.message,
-    },
+    ai,
+    // Mismo contenido con el nombre histórico: alguna herramienta externa ya
+    // lee `gemini` y no cuesta nada mantenerlo.
+    gemini: ai,
     time: new Date().toISOString(),
   });
 }

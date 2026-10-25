@@ -1,5 +1,11 @@
 # Qué pasa con el temario cuando se usa «Crear con IA»
 
+> **Actualizado el 25-10-2026.** La aplicación ya no manda el temario a Google:
+> desde el cambio de proveedor (apartado 6) lo manda a **Groq**, cuyo acuerdo de
+> servicio **prohíbe** usar lo enviado para entrenar modelos, en el tramo
+> gratuito y en el de pago. Lo que sigue se conserva porque explica por qué se
+> cambió y qué habría que asumir al volver a Gemini.
+
 Respuesta corta: **Google no lo publica en ningún sitio**, pero **sí puede
 usarlo para mejorar sus productos y sí puede leerlo una persona** si el proyecto
 de Gemini está en la cuota **gratuita**. Con **facturación activa** (cuota de
@@ -161,3 +167,76 @@ Dos matices que conviene saber aunque no afecten al temario:
   revisado.
 - El asistente no se ejecuta solo ni en segundo plano: siempre es una acción de
   administración.
+
+---
+
+## 6. Cambio de proveedor: Groq (25-10-2026)
+
+### 6.1 Por qué
+
+Se descartó activar facturación en Google. La alternativa elegida es Groq, que
+tiene tramo gratuito y, a diferencia de Gemini, **no tiene la cláusula europea**
+(«solo servicios de pago para usuarios del EEE»). Lo que se gana y lo que se
+pierde:
+
+| | Gemini (antes) | Groq (ahora) |
+| --- | --- | --- |
+| Coste | Cuota gratuita | Cuota gratuita |
+| ¿Entrena con lo enviado? | **Sí** en la cuota gratuita | **No**: lo prohíbe el acuerdo de servicio |
+| ¿Puede leerlo una persona? | Sí, revisores | Solo investigación de abusos (30 días); se puede apagar con retención cero |
+| ¿Lee el PDF? | **Sí** | **No**: hay que extraer el texto |
+| Dónde se procesa | EE. UU. | EE. UU. |
+| Cuota | Diaria por modelo | 8 000 tokens/minuto y 200 000/día |
+| Calidad de redacción | Mejor | Algo menor: más revisión manual |
+
+Fuente del compromiso de Groq: *Groq Services Agreement* §4.2 — «Groq is not
+permitted to use Inputs or Outputs for training or fine-tuning any AI Model
+Services or other models» — y `console.groq.com/docs/your-data`, que añade que
+por defecto no retiene las peticiones y que **cualquier** cuenta puede activar
+retención cero en *Data Controls*.
+
+### 6.2 Cómo funciona ahora, por dentro
+
+1. **Extracción de texto.** El servidor abre el PDF y saca el texto de cada
+   página con su número (`src/server/ai/text.ts`). Un escaneo sin letras se
+   rechaza con un mensaje claro: no hay nada que leer.
+2. **Troceado y espera.** El temario se manda por tandas de unas 6 páginas,
+   esperando lo necesario para no pasar de 8 000 tokens por minuto
+   (`src/server/ai/pacing.ts`). Un curso tarda **minutos**, no segundos.
+3. **Menos documento por llamada.** Las pantallas y los cuestionarios de un
+   tema envían **solo las páginas de ese tema**, y el examen final envía el
+   resumen ya generado. Gasta menos y cita mejor.
+4. **Validación intacta.** El JSON que devuelve Groq pasa por los mismos
+   controles que el de Gemini: si no cumple, no se escribe nada.
+
+### 6.3 Cómo se enciende y cómo se apaga
+
+| Variable | Efecto |
+| --- | --- |
+| `GROQ_API_KEY` | La clave. **Solo en el servidor**: nunca en el chat, ni en un log, ni en el código. |
+| `AI_PROVIDER` | `groq` o `gemini`. Si no está puesta: Groq cuando solo hay clave de Groq; Gemini en cualquier otro caso. |
+| `GROQ_MODEL` | Por defecto `openai/gpt-oss-120b`. |
+| `GROQ_TPM` | Tokens por minuto del plan. Por defecto 8 000 (tramo gratuito). |
+| `GROQ_TIMEOUT_MS` | Tiempo máximo por llamada. Por defecto 90 000 ms. |
+
+Para volver a Gemini: `AI_PROVIDER=gemini` (y la clave de Google sigue donde
+estaba). No hay que tocar código ni desplegar otra rama.
+
+### 6.4 Límites que hay que conocer
+
+- **8 000 tokens por minuto.** Un temario de 40 páginas tarda unos **3 minutos**
+  solo en proponer los temas. Por encima de ~200 s estimados, la aplicación se
+  niega antes de empezar y pide dividir el PDF (mensaje `AI_DOCUMENT_TOO_LONG`).
+- **200 000 tokens al día.** Salen unos **6-8 cursos diarios**. Si se agota, la
+  pantalla lo dice y el borrador queda intacto.
+- **PDF escaneado: no vale.** No hay OCR gratuito; haría falta otro servicio.
+- **Todo se procesa en EE. UU.** Para temarios sin datos personales no hay
+  problema; con datos de alumnos habría que firmar el acuerdo de tratamiento y
+  valorar la transferencia internacional.
+
+### 6.5 Comprobarlo sin gastar cuota
+
+`/api/health` publica `ai.provider`, el modelo y si la cuenta responde (una
+llamada al catálogo de modelos, sin tokens). La pantalla del asistente tiene el
+botón «Comprobar conexión» con el mismo resultado. Eso confirma la clave, **no**
+que la generación funcione: eso exige generar un curso de verdad.

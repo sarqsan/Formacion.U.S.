@@ -8,10 +8,13 @@ import type { NextConfig } from "next";
  *   (progreso, intentos) y no queremos caché implícita de contenido privado.
  * - `firebase-admin` se mantiene como paquete externo del servidor: usa APIs
  *   de Node (gRPC) que no deben empaquetarse con el bundle de Next.
+ * - `unpdf` (lectura de PDF página a página, para los proveedores de IA que no
+ *   leen documentos) también queda fuera del bundle: incluye su propia copia de
+ *   pdf.js y empaquetarla rompe el worker.
  */
 const nextConfig: NextConfig = {
   cacheComponents: false,
-  serverExternalPackages: ["firebase-admin", "read-excel-file"],
+  serverExternalPackages: ["firebase-admin", "read-excel-file", "unpdf"],
   // Tailwind 4 en Next 16 con Turbopack: sin esta regla, `@import "tailwindcss"`
   // y `@theme` no se procesan y la interfaz queda sin estilos (detectado en
   // la verificación visual de la fase 1).
